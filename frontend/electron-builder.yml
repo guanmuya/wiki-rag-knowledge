@@ -1,0 +1,83 @@
+# electron-builder 配置：企业知识库（桌面版）
+#
+# 目标：Windows x64，NSIS 安装包 / --dir 免安装目录。
+# 后端是 PyInstaller 单文件 exe，通过 extraResources 放到 resources/backend/，
+# electron/main.js 里用 process.resourcesPath/backend/wrk-backend.exe 查找。
+appId: com.wikiraq.knowledge
+productName: 企业知识库
+copyright: Copyright © 2026 企业知识库
+
+directories:
+  # buildResources 指向 build/：build/icon.ico 存在就自动用作应用/安装包图标，
+  # 不存在时 electron-builder 回退到 Electron 默认图标，**不会报错**（已实测）。
+  # 想换图标：放一个 256x256 的 .ico 到 frontend/build/icon.ico 即可，无需改本文件。
+  buildResources: build
+  output: release              # 安装包/解包产物输出到 release/，避免与 vite 的 dist/ 互相污染
+
+# 压缩级别是顶层选项（不是 nsis 的子项）。
+# normal：打包快；maximum：体积小但慢很多。后端 exe 已 ~57MB，用 normal 平衡。
+compression: normal
+
+# ---- 打进 asar 的文件 ----
+# 只放运行时真正需要的：前端静态资源 + Electron 主进程/preload。
+# 源码（src/、scripts/、tsconfig*）一律不进包，减小体积也避免泄露源码。
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+  - '!**/*.map'
+  - '!**/*.{ts,tsx}'
+  - '!**/node_modules/**/{test,tests,__tests__,example,examples,docs,doc}/**'
+  - '!**/node_modules/**/*.{md,markdown,map,ts,tsx}'
+  # 显式排除构建产物，防止 output 目录被递归打包
+  - '!release/**'
+  - '!build/**'
+  - '!scripts/**'
+  - '!src/**'
+
+# ---- 打包后的后端 sidecar ----
+# frontend/build/backend/wrk-backend.exe → resources/backend/wrk-backend.exe
+extraResources:
+  - from: build/backend
+    to: backend
+    filter:
+      - '**/*'
+      - '!*.pdb'
+
+asar: true
+asarUnpack:
+  - '**/*.node'
+
+# 内网部署：无签名证书、不自动发布
+publish: null
+forceCodeSigning: false
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
+  executableName: 企业知识库
+  # 无签名证书：让 electron-builder 跳过 signtool
+  signAndEditExecutable: true
+  requestedExecutionLevel: asInvoker
+
+nsis:
+  oneClick: false                          # 走向导，允许用户改安装目录
+  perMachine: false                        # 默认装到当前用户，无需管理员（不弹 UAC）
+  allowToChangeInstallationDirectory: true # 允许改安装目录
+  allowElevation: true                     # 用户主动选 Program Files 时才提权
+  createDesktopShortcut: true              # 创建桌面快捷方式
+  createStartMenuShortcut: true
+  shortcutName: 企业知识库
+  # 卸载保留 %APPDATA%\wiki-rag-desktop 里的知识库数据与日志。
+  # 这是刻意的产品决策：重装后能直接继续用，不会因为卸载丢库。
+  # 用户要彻底清理时自己删该目录（关于页给了路径且可一键打开）。
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+  # 中文安装界面（2052 = zh-CN）
+  installerLanguages:
+    - zh_CN
+  multiLanguageInstaller: false
+  differentialPackage: false

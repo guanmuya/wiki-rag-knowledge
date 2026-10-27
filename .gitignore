@@ -1,0 +1,46 @@
+# 数据与密钥
+data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# 环境与本地配置
+.env
+.env.local
+
+# 编辑器/系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 上传的原始资料副本（演示资料在 demo_data/ 下，不忽略）
+backend/uploads/
+
+# 构建产物（体积大，不入库；需要时本地重建）
+frontend/release/
+frontend/build/backend/
+frontend/build/pyinstaller/
+frontend/build/.verify-data/
+frontend/dist/
+
+# 最终交付目录（安装包 131MB，单独存放）
+毕业最终交付空间/
+
+# 本地临时验证产物
+.tmp-verify/
