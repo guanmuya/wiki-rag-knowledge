@@ -1,10 +1,23 @@
 # API 契约 v1（前后端共同遵守）
 
 - 前缀：`/api`
-- 认证：`Authorization: Bearer <token>`，除 `POST /api/auth/login` 与 `GET /api/meta` 外全部必需。
+- 认证：`Authorization: Bearer <token>`。免登录的只有 `POST /api/auth/login`、`GET /api/meta`、`GET /api/health` 与 `/api/setup/*`（首次初始化必须在无账号时可用）。
 - 错误：`{"detail": "中文错误信息"}`，HTTP 400/401/403/404/409/422。
 - 时间：ISO 8601 字符串。分页统一 `?page=1&page_size=20`，返回 `{"items":[],"total":0,"page":1,"page_size":20}`。
 - 角色：`admin` | `employee`。知识库授权等级：`read` | `manage`（admin 隐式拥有全部知识库 manage）。
+
+## 0. 首次初始化（免登录）
+
+桌面版没有运维人员，空库首次启动不自动建号，而是由用户在引导页（前端 `#/setup`）自己设账号密码。
+后端只在「库里没有任何管理员」时接受 `POST /setup/admin`，之后该接口返回 409。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/setup/status` | `{initialized, org_name, app_name, version}` |
+| POST | `/api/setup/admin` | `{username, password, display_name?, org_name?}` → `{ok, user_id, username}`；空库才可调用 |
+| GET | `/api/setup/org` | `{org_name}`，侧边栏标题用 |
+
+> 企业名只在创建管理员时写入 `app_settings.org_name` 一次；当前没有单独的修改接口。
 
 ## 1. 认证
 
@@ -21,7 +34,7 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/meta` | 无需登录。`{app_name, initialized, version, offline_models:bool}` |
+| GET | `/api/meta` | 无需登录。`{app_name, version, initialized, needs_setup, org_name, offline_models, capabilities:{llm_configured, embedding_configured, worker_enabled}}`；`needs_setup=true` 时前端跳引导页 |
 
 ## 3. 用户管理（admin）
 
@@ -107,12 +120,13 @@
 | GET | `/api/conversations/{id}` | 含 `messages:[{id,role,content,kb_ids,evidence,route,latency_ms,created_at}]` |
 | PATCH | `/api/conversations/{id}` | 改标题 / 换知识库选择 |
 | DELETE | `/api/conversations/{id}` | 删除 |
-| POST | `/api/conversations/{id}/ask` | `{question,kb_ids?,top_k?}` → `{message, evidence, route, usage}` |
+| POST | `/api/conversations/{id}/ask` | `{question,kb_ids?,top_k?}` → `{content, message, evidence, route, usage, insufficient, citations, suggestions, refusal_reason, denied}` |
 | POST | `/api/search/preview` | `{kb_ids,query}` → `{evidence, routes, stats, usage}`（不生成回答，用于调参/实验） |
 
 `ask` 返回：
 ```json
 {
+  "content": "一线城市住宿上限 600 元每晚[1]。",
   "message": {"id": 88, "role": "assistant", "content": "...", "created_at": "..."},
   "evidence": [{"evidence_id":"chunk:12","kb_id":1,"kb_name":"员工手册","source_type":"chunk",
                 "text":"...","score":0.03,"rank":1,"doc_name":"手册.pdf","version_no":1,
@@ -129,9 +143,19 @@
             "embed_tokens":48,"embed_texts":2,"total_tokens":1548,
             "latency_ms":2400,"latency_chat_ms":2200,"latency_embed_ms":200,
             "mode":"live","embed_mode":"live","degraded":false,"notes":[]},
-  "insufficient": false
+  "insufficient": false,
+  "citations": {"cited": [1], "invalid": [], "citation_ok": true},
+  "suggestions": [],
+  "refusal_reason": "",
+  "denied": []
 }
 ```
+
+拒答时（`insufficient=true`）：`content` 以固定前置句 `现有资料不足以回答这个问题。` 开头，
+正文带「本次检索到这些资料」与「你可以试试这样问」；`suggestions` 是结构化建议，
+每项 `{kb_name, kind, title, question?}`，`kind` ∈ `resource`（本次命中资料）| `question`（可点击填入输入框）；
+`refusal_reason` 给出判定原因（如「回答开头即声明资料不足」）。
+历史消息只持久化 `route.insufficient` 与 `route.usage`，`suggestions`/`refusal_reason` 不落库。
 
 `usage` 字段说明（**只加字段，不删字段**，老前端按 `calls`/`prompt_tokens` 读仍然正确）：
 

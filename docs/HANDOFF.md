@@ -1,6 +1,62 @@
 # 交接说明
 
-> 最后更新：2026-10-27 17:45 · 用户关机，任务暂停
+> **最新快照：2026-10-28 19:00**（本节的结论优先；下面的「总览」是 10-27 的历史快照，保留作对比）
+>
+> ## 当前状态：可交付（安装包已按最新代码重打）
+>
+> | 项 | 结果 |
+> |---|---|
+> | 后端测试 | **157 passed, 1 skipped**（`cd backend && PYTHONIOENCODING=utf-8 ../.venv/Scripts/python.exe -m pytest tests/ -q`，158 collected / 16 个文件） |
+> | 前端构建 | `tsc -b` 0 错误；`vite build` 58 modules，JS 398 kB / CSS 37.7 kB |
+> | 后端 sidecar | `frontend/build/backend/wrk-backend.exe`（54.1 MB），`build-backend.mjs` 自带实测通过（/api/health、/api/meta） |
+> | 桌面目录版 | `frontend/release/win-unpacked/企业知识库.exe` |
+> | **NSIS 安装包** | **`frontend/release/企业知识库-1.0.0-x64-setup.exe`（131 MB，2026-10-28 18:51 重打）** |
+> | 首次启动引导 | 打包产物 Playwright 端到端验证：空数据目录 → `#/setup` → 建号 → 登录 → 企业名生效（`scripts/verify/e2e-setup.mjs`） |
+>
+> ### 本轮（10-28）改了什么
+>
+> 1. **Wiki 生成改为 Map-Reduce 分片归纳**（`backend/app/services/wiki.py`）
+>    - 全库每个分块都进入某一分片，片内用**全库 1-based 全局编号**，绝不片内重编号；
+>    - 片数超 `WIKI_MAX_MAP_CALLS(40)` 先压缩单块摘录（900 → 下限 120），压到下限仍超就如实多调用；
+>    - Reduce 合并规则见 `_should_merge`（归一化相同 / 短标题被包含 / 数字序列相同才允许相似度合并）；
+>    - 合并后主题数超 `WIKI_MAX_PAGES(60)` 时按证据数量保留并在 `notes` 说明；
+>    - 新增 `backend/tests/test_wiki_scale.py`（4 条：切片不重不漏、压缩摘录、压到下限不丢块、1000 块整库可生成）。
+>    - **旧行为（只取前 60 块、库尾永不进 Wiki）已彻底移除**；`TOPIC_SAMPLE_SIZE` 现在只是单片块数上限。
+> 2. **成本统计补齐**：查询向量化 / Wiki 章节向量化 / 人工校对重建三处 `llm.embed()` 都传 `stats`；
+>    `cost_records` 流水 + `/api/kbs/{id}/cost`；失败任务已消耗调用记 `failed_attempt`（`tests/test_cost_metrics.py` 20 条）。
+> 3. **拒答机制**（k55 决策 B）：固定前置句「现有资料不足以回答这个问题。」+「本次检索到这些资料」+「你可以试试这样问」，
+>    结构化 `suggestions`（`kind=resource|question`）；判定只看开头 80 字（带引用也拦）。
+>    新增 `backend/tests/test_refusal.py`（6 条）。
+> 4. **首次启动引导**（k63 方案 A）：`GET /api/setup/status`、`POST /api/setup/admin`（仅无管理员时可调）、`GET /api/setup/org`；
+>    前端 `#/setup`；`WRK_ADMIN_PASSWORD` 保留给开发/测试自动建号。`tests/test_setup_flow.py`。
+> 5. **多供应商 / 三协议**：`openai` / `openai-responses` / `anthropic`，供应商模型探测 `POST /api/settings/providers/{id}/discover`；
+>    responses/anthropic 无 Embedding 端点时显式报错，不静默降级（`tests/test_model_protocols.py`）。
+> 6. **文档补齐**：`README.md`（352 行）、`docs/THESIS.md`（455 行）、`docs/DESIGN.md` / `docs/EXPERIMENT.md` 已按新机制重写；
+>    `docs/API.md` 补 `/api/setup/*`、`/api/meta` 新字段、`ask` 的 `suggestions/refusal_reason`。
+> 7. **构建脚本修复**：`build-backend.mjs` 在 Windows + PyInstaller onefile 下只杀引导器会留下孤儿进程并持有 stdout 管道，
+>    导致 `node scripts/build.mjs` 永远不退出；已改为 `taskkill /F /T` 杀进程树 + 销毁管道（实测全流程 146.6s 正常结束）。
+> 8. **实验脚本**：`backend/scripts/seed_expanded.py` 去掉「总量 ≤60 块」硬约束（与分片归纳矛盾），只保留下限 55 块。
+> 9. **前端视觉重做**（2026-10-28 晚）：`frontend/src/styles.css` 全量重写为令牌化设计系统，**淡蓝主调（#3b82f6）+ 纯色、全站零渐变**（登录页也改为淡蓝纯色面板）；浅色侧边栏 + 面包屑顶栏 + 卡片/表格/Tabs/弹窗/Markdown 统一样式；侧边栏图标改内联 SVG 并分「工作台/管理/系统」；知识库详情标题与 Tabs 收进同一张卡；问答页空会话加示例问题、用户消息右对齐；登录/初始化改为卡片化表单。
+>    顺带修两个内容缺陷：离线 Wiki 正文重复摘要、离线抽取式回答把 Markdown 表格行贴进列表。
+>    截图见 `docs/screenshots/`（12 张，1440×900，无 console error）。
+>
+> ### 下次第一件事
+>
+> ```bash
+> cd F:/GItHub_Code/Wiki-Rag-Knowledge/backend
+> PYTHONIOENCODING=utf-8 ../.venv/Scripts/python.exe -m pytest tests/ -q     # 157 passed, 1 skipped
+>
+> cd ../frontend
+> node scripts/build.mjs            # 全量：前端 → 后端 exe → NSIS 安装包（约 5 分钟）
+> node scripts/build.mjs --pack     # 只要免安装目录，快速验证
+> ```
+>
+> 已知遗留（不影响交付）：`wiki_ready` 三处口径不完全一致（以 `plan_route` 为准）；历史消息不落 `suggestions/refusal_reason`；
+> `frontend/build/pyinstaller/**` 与 `release/**` 被 git 跟踪（构建产物入库，体积大）。
+>
+> ---
+>
+> 上一次快照：2026-10-27 17:45 · 用户关机，任务暂停
 
 ## 总览（先读这一节，再按需查下面的分工细节）
 
