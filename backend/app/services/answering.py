@@ -370,6 +370,17 @@ def _suggestion_block(db: Session, kbs: list[models.KnowledgeBase],
 
 
 # ------------------------------------------------------------------ 抽取式降级
+def _looks_like_table_row(text: str) -> bool:
+    """判断一句话是不是 Markdown 表格行。
+
+    离线抽取式回答会把整段原文按句切分后挑一句贴进列表项。表格行贴进去
+    只会得到一长串 `| 假期类型 | 天数 |` 的竖线噪音（实测截图里就是这样），
+    既不可读也不像回答，所以候选句里先把表格行排掉。
+    """
+    s = (text or "").strip()
+    return s.count("|") >= 3 or bool(re.match(r"^\|?[\s:\-]*\|", s))
+
+
 def _extractive_answer(question: str, evidence: list[retrieval.Evidence]) -> str:
     """离线降级：从证据中抽取最相关句子拼装，不做生成。"""
     if not evidence:
@@ -387,7 +398,14 @@ def _extractive_answer(question: str, evidence: list[retrieval.Evidence]) -> str
             if hit:
                 scored.append((hit, s))
         scored.sort(key=lambda x: -x[0])
-        body = scored[0][1] if scored else ev.text.strip()[:200]
+        readable = [(hit, s) for hit, s in scored if not _looks_like_table_row(s)]
+        if readable:
+            body = readable[0][1]
+        elif scored:
+            # 整段都是表格：把竖线压成空格，至少读得懂，不丢内容
+            body = re.sub(r"\s*\|\s*", " · ", ev.text.strip())[:220]
+        else:
+            body = ev.text.strip()[:200]
         parts.append(f"- {body} [{idx}]")
     parts.append("")
     parts.append("以上内容来自检索到的资料片段，可在右侧来源面板核对原文。")
