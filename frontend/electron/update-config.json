@@ -1,0 +1,9 @@
+{
+  "provider": "github",
+  "owner": "guanmuya",
+  "repo": "wiki-rag-knowledge",
+  "checkOnStart": true,
+  "checkIntervalHours": 4,
+  "allowPrerelease": false,
+  "_note": "GitHub 仓库必须公开，私有仓库的 Release 资产需要鉴权，终端用户下载不到。改用自建源时：provider 改成 generic，url 填放 latest.yml 的 HTTPS 目录。"
+}

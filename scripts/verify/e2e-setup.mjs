@@ -37,6 +37,8 @@ console.log(`userData  : ${UD}\n`)
 
 const env = { ...process.env }
 delete env.ELECTRON_RUN_AS_NODE
+// 测试环境不访问更新源：私有仓库会 404，既拖慢用例也污染日志
+env.WRK_UPDATE_DISABLE = '1'
 
 const app = await electron.launch({
   executablePath: EXE,
@@ -128,7 +130,12 @@ try {
 
   // ---- 6. 关于页：新增的安装位置 / 版本 / 许可证 ----
   await win.evaluate(() => { location.hash = '#/about' })
-  await win.waitForTimeout(2500)
+  // 等页面真正渲染出「安装位置」，而不是拍脑袋等 2.5 秒：
+  // 上一步刚从 #/setup 被重定向回 #/kbs，hash 赋值存在竞态。
+  await win
+    .waitForFunction(() => document.body.innerText.includes('安装位置'), { timeout: 15000 })
+    .catch(() => {})
+  await win.waitForTimeout(300)
   const aboutText = await win.evaluate(() => document.body.innerText)
   const hasInstall = aboutText.includes('安装位置')
   const hasElectron = /Electron 版本/.test(aboutText) && /v3[0-9]\./.test(aboutText)

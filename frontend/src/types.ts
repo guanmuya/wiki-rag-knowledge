@@ -623,3 +623,24 @@ export interface ModelPayload {
   enabled: boolean
   embed_dim: number
 }
+
+/** 自动更新状态（主进程 updater.cjs 推送） */
+export type UpdateStatus =
+  | 'idle'
+  | 'disabled'
+  | 'checking'
+  | 'available'
+  | 'none'
+  | 'downloading'
+  | 'ready'
+  | 'error'
+
+export interface UpdateState {
+  status: UpdateStatus
+  currentVersion: string
+  latestVersion?: string
+  percent?: number
+  message?: string
+  feed?: string
+  checkedAt?: number
+}

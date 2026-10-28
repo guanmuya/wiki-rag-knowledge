@@ -1,0 +1,4 @@
+# 仅开发模式使用（electron-updater 的 forceDevUpdateConfig）。
+# 打包版读 resources/app-update.yml；这里给本地联调一个默认源。
+provider: generic
+url: http://127.0.0.1:8899

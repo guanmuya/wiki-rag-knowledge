@@ -3,8 +3,9 @@
  * 一键构建：tsc -b && vite build → build-backend → electron-builder
  *
  * 用法：
- *   node scripts/build.mjs              # 生成 Windows NSIS 安装包
+ *   node scripts/build.mjs              # 生成 Windows NSIS 安装包 + 更新文件（latest.yml）
  *   node scripts/build.mjs --pack       # 只出 release/win-unpacked/（快速验证，不生成安装包）
+ *   node scripts/build.mjs --publish    # 额外把 Release 发到 GitHub（需 GH_TOKEN，仓库需公开）
  *   node scripts/build.mjs --skip-backend  # 复用已有 build/backend/wrk-backend.exe
  *   node scripts/build.mjs --skip-web      # 复用已有 dist/
  *
@@ -20,8 +21,9 @@
  *    PyInstaller 清理时报 EPERM → 失败提示里要给出「先结束进程」的动作。
  */
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -39,6 +41,8 @@ const argv = process.argv.slice(2)
 const PACK = argv.includes('--pack')
 const SKIP_BACKEND = argv.includes('--skip-backend')
 const SKIP_WEB = argv.includes('--skip-web')
+const PUBLISH = argv.includes('--publish')
+const VERSION = JSON.parse(readFileSync(join(FRONTEND, 'package.json'), 'utf8')).version
 
 const t0 = Date.now()
 const log = (...a) => console.log(`[build] ${a.join(' ')}`)
@@ -265,7 +269,7 @@ mkdirSync(OUT_DIR, { recursive: true })
 // 后者会把 x64 当成 target 名，报 "Unknown target: x64"。
 const builderArgs = ['--win', '--x64', '--config', join(FRONTEND, 'electron-builder.yml')]
 if (PACK) builderArgs.push('--dir')
-else builderArgs.push('--publish', 'never')
+else builderArgs.push('--publish', PUBLISH ? 'always' : 'never')
 
 await step(
   PACK ? 'electron-builder 打包目录（--dir）' : 'electron-builder 生成 NSIS 安装包',
@@ -307,6 +311,30 @@ if (existsSync(UNPACKED)) {
       const p = join(OUT_DIR, f)
       log(`  ✓ 安装包: ${p}（${mb(p)}）`)
     }
+  }
+}
+
+// 自动更新文件：latest.yml + 安装包 + blockmap 一起放进 release/updates/，
+// 方便直接丢到任意静态源（generic provider）。
+if (!PACK && ok) {
+  const updatesDir = join(OUT_DIR, 'updates')
+  try {
+    rmSync(updatesDir, { recursive: true, force: true })
+    mkdirSync(updatesDir, { recursive: true })
+    let copied = 0
+    for (const f of readdirSync(OUT_DIR)) {
+      // 只收当前版本：latest.yml + wiki-rag-knowledge-<version>-*.exe/.blockmap
+      const current = f === 'latest.yml' || f.startsWith(`wiki-rag-knowledge-${VERSION}`)
+      if (!current) continue
+      if (!/\.(yml|blockmap|exe)$/.test(f)) continue
+      copyFileSync(join(OUT_DIR, f), join(updatesDir, f))
+      copied += 1
+    }
+    log(`更新文件已收集：${updatesDir}（${copied} 个）`)
+    log(`  自建源：把该目录上传到 HTTPS 静态目录，update-config.json 里 provider=generic + url 指向它`)
+    log(`  GitHub：node scripts/build.mjs --publish（仓库需公开，GH_TOKEN 由 gh auth token 提供）`)
+  } catch (e) {
+    warn(`更新文件收集失败（不影响安装包）：${e.message}`)
   }
 }
 

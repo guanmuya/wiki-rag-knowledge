@@ -10,4 +10,14 @@ contextBridge.exposeInMainWorld('wrkDesktop', {
   /** kind: 'data' | 'logs' | 'install' */
   openPath: (kind) => ipcRenderer.invoke('wrk:openPath', kind),
   restartBackend: () => ipcRenderer.invoke('wrk:restartBackend'),
+  // ---- 自动更新 ----
+  updateState: () => ipcRenderer.invoke('wrk:update-state'),
+  checkUpdate: () => ipcRenderer.invoke('wrk:update-check'),
+  installUpdate: () => ipcRenderer.invoke('wrk:update-install'),
+  /** 订阅更新状态推送，返回取消订阅函数 */
+  onUpdate: (cb) => {
+    const handler = (_e, state) => cb(state)
+    ipcRenderer.on('wrk:update', handler)
+    return () => ipcRenderer.removeListener('wrk:update', handler)
+  },
 })

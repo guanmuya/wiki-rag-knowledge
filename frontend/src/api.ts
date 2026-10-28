@@ -63,6 +63,10 @@ declare global {
       getLogs: () => Promise<string>
       openPath: (kind: 'data' | 'logs') => Promise<string>
       restartBackend: () => Promise<{ ok: boolean; port?: number; error?: string }>
+      updateState?: () => Promise<import('./types').UpdateState>
+      checkUpdate?: () => Promise<{ ok: boolean; message?: string }>
+      installUpdate?: () => Promise<{ ok: boolean; message?: string }>
+      onUpdate?: (cb: (state: import('./types').UpdateState) => void) => () => void
     }
   }
 }

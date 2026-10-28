@@ -123,6 +123,15 @@ WRK_ADMIN_PASSWORD='<你的初始密码>' bash scripts/start_backend.sh
 
 此时启动即建号，并打印横幅提示「首次登录后必须修改密码」。**已有管理员时永不覆盖。**
 
+### 3.6 自动更新
+
+桌面版内置 `electron-updater`，安装版会在启动后与每 4 小时检查一次更新，下载完成提示重启安装（不动知识库数据）。完整说明见 [docs/UPDATE.md](docs/UPDATE.md)。
+
+- 默认更新源：GitHub Releases（`electron/update-config.json`，**仓库必须公开**）
+- 自建源：`node scripts/build.mjs` 会把 `latest.yml` + 安装包 + `.blockmap` 收集到 `release/updates/`，传到任意 HTTPS 静态目录，配置 `provider: generic` + `url`
+- 本地联调：`WRK_UPDATE_URL=http://127.0.0.1:8899 ./release/win-unpacked/企业知识库.exe`
+- 发版：改 `frontend/package.json` 的 `version` → `node scripts/build.mjs --publish`（GitHub）或手动上传 `release/updates/`
+
 ### 3.5 打包成 Windows 安装包
 
 ```bash

@@ -43,13 +43,22 @@ extraResources:
     filter:
       - '**/*'
       - '!*.pdb'
+  # 自动更新源配置：安装后位于 resources/update-config.json，
+  # 主进程 updater.cjs 读取它决定 provider / owner / repo 或 generic url。
+  - from: electron/update-config.json
+    to: update-config.json
 
 asar: true
 asarUnpack:
   - '**/*.node'
 
-# 内网部署：无签名证书、不自动发布
-publish: null
+# 自动更新源。electron-builder 会据此生成 resources/app-update.yml 与 latest.yml。
+# 注意：GitHub 仓库必须公开，私有仓库的 Release 资产需要鉴权，终端用户下载不到；
+# 要放自建静态源就把 provider 改成 generic 并填 url。
+publish:
+  provider: github
+  owner: guanmuya
+  repo: wiki-rag-knowledge
 forceCodeSigning: false
 
 win:
@@ -57,7 +66,8 @@ win:
     - target: nsis
       arch:
         - x64
-  artifactName: ${productName}-${version}-${arch}-setup.${ext}
+  # 用 ASCII 文件名：latest.yml 里的下载地址直接引用它，中文名在部分静态源/URL 编码下会 404
+  artifactName: wiki-rag-knowledge-${version}-${arch}-setup.${ext}
   executableName: 企业知识库
   # 无签名证书：让 electron-builder 跳过 signtool
   signAndEditExecutable: true
@@ -85,4 +95,6 @@ nsis:
   installerLanguages:
     - zh_CN
   multiLanguageInstaller: true
-  differentialPackage: false
+  # 生成 .blockmap，客户端可走差量下载；关掉会让每次更新都下全量 130MB
+  differentialPackage: true
+  artifactName: wiki-rag-knowledge-${version}-${arch}-setup.${ext}

@@ -39,6 +39,7 @@
 > 9. **前端视觉重做**（2026-10-28 晚）：`frontend/src/styles.css` 全量重写为令牌化设计系统，**淡蓝主调（#3b82f6）+ 纯色、全站零渐变**（登录页也改为淡蓝纯色面板）；浅色侧边栏 + 面包屑顶栏 + 卡片/表格/Tabs/弹窗/Markdown 统一样式；侧边栏图标改内联 SVG 并分「工作台/管理/系统」；知识库详情标题与 Tabs 收进同一张卡；问答页空会话加示例问题、用户消息右对齐；登录/初始化改为卡片化表单。
 >    顺带修两个内容缺陷：离线 Wiki 正文重复摘要、离线抽取式回答把 Markdown 表格行贴进列表。
 >    截图见 `docs/screenshots/`（12 张，1440×900，无 console error）。
+> 10. **自动更新**（v1.0.1）：`electron-updater` + NSIS 差量包（`.blockmap`）。主进程 `electron/updater.cjs` 启动 8 秒后检查、之后每 4 小时一次；关于页新增「软件更新」卡片；更新源在 `electron/update-config.json`（默认 GitHub，仓库需公开；也可 `provider: generic` 指向自建静态目录）。构建会生成 `latest.yml` 并收集到 `release/updates/`；`node scripts/build.mjs --publish` 可直接发 GitHub Release。详见 `docs/UPDATE.md`。
 >
 > ### 下次第一件事
 >

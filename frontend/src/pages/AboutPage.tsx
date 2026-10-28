@@ -4,6 +4,7 @@ import { useAuth } from '../auth'
 import { resetOfflineBannerDismiss } from '../components/OfflineBanner'
 import type { DesktopInfo, MetaInfo } from '../types'
 import { Badge, Button, ErrorState, SkeletonLines, Spinner } from '../components/ui'
+import UpdateCard from '../components/UpdateCard'
 import { formatMs } from '../utils'
 import { PROJECT_LICENSE, THIRD_PARTY_NOTICES } from './aboutInfo'
 
@@ -222,6 +223,8 @@ export default function AboutPage() {
             )}
           </div>
         </div>
+
+        <UpdateCard />
 
         <div className="col" style={{ gap: 16 }}>
           <div className="card">

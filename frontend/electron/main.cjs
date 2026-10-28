@@ -9,6 +9,7 @@ const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require('electron')
 const { spawn } = require('node:child_process')
 const { existsSync, mkdirSync, appendFileSync } = require('node:fs')
 const { join, dirname } = require('node:path')
+const updater = require('./updater.cjs')
 
 const HERE = __dirname
 const ROOT = join(HERE, '..')
@@ -371,6 +372,11 @@ function buildMenu() {
       label: '帮助',
       submenu: [
         {
+          label: '检查更新',
+          click: () => void updater.check(true),
+        },
+        { type: 'separator' },
+        {
           label: '关于',
           click: () => dialog.showMessageBox({
             type: 'info', title: '关于',
@@ -449,6 +455,8 @@ app.whenReady().then(async () => {
     log('后端就绪：', JSON.stringify(backendInfo))
     createWindow()
     log('窗口已创建')
+    // 更新检查放在窗口创建之后：状态变化要推给渲染进程，且失败不能影响启动
+    updater.init({ log })
     if (startupError) {
       dialog.showMessageBox(mainWindow, {
         type: 'info', title: '首次部署',
@@ -474,6 +482,10 @@ app.whenReady().then(async () => {
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0 && backendInfo) createWindow()
+})
+
+app.on('before-quit', () => {
+  updater.dispose()
 })
 
 app.on('window-all-closed', () => {
