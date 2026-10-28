@@ -76,8 +76,13 @@ nsis:
   # 用户要彻底清理时自己删该目录（关于页给了路径且可一键打开）。
   deleteAppDataOnUninstall: false
   runAfterFinish: true
-  # 中文安装界面（2052 = zh-CN）
+  # 中文安装界面。两个开关必须配合，否则编译出来仍是英文（已实测两次）：
+  # - `installerLanguages` 只有在 `multiLanguageInstaller: true` 时才参与编译；
+  #   设成 false 时 LangConfigurator 会强制 langs = ["en_US"]。
+  # - `language` 是版本资源（VIProductVersion 等）的 locale id，2052 = 简体中文。
+  # 只给一种语言（zh_CN）时 NSIS 不会弹语言选择框，界面直接是中文。
+  language: "2052"
   installerLanguages:
     - zh_CN
-  multiLanguageInstaller: false
+  multiLanguageInstaller: true
   differentialPackage: false
