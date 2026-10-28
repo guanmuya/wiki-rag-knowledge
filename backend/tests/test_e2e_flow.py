@@ -177,6 +177,12 @@ def test_wiki_rebuild_is_idempotent(app_client, admin_headers, wiki_kb, db_sessi
     slugs2 = {p["slug"] for p in tree2["items"]}
     assert slugs1 == slugs2
 
+    # 重建排队时写的是「重建任务已排队」，任务成功后必须刷新成真实状态，
+    # 否则界面上会永远停在「已排队」（实测缺陷）。
+    kb_after = app_client.get(f"/api/kbs/{wiki_kb['id']}", headers=admin_headers).json()
+    assert "排队" not in kb_after["status_detail"], kb_after["status_detail"]
+    assert "索引单元" in kb_after["status_detail"], kb_after["status_detail"]
+
 
 def test_human_edit_protects_page_from_silent_overwrite(app_client, admin_headers, wiki_kb):
     tree = app_client.get(f"/api/kbs/{wiki_kb['id']}/wiki/tree", headers=admin_headers).json()

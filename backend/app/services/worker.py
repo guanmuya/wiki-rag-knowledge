@@ -63,6 +63,9 @@ def run_once(worker_id: str = "inline") -> bool:
                           "notes": wres.notes or []}
                 # build_wiki 的阶段统计就是任务本身，不需要再拆
                 result["usage_by_phase"] = {task.kind: stats.as_dict()}
+                # 重建成功后必须刷新 status_detail：排队时写的是「重建任务已排队」，
+                # 不刷新就会永远停在那一句（真实缺陷，实测重建完仍显示「已排队」）。
+                ingest._refresh_kb_status(db, kb, commit=False)
             elif task.kind == models.TaskKind.reindex_kb.value:
                 result = ingest.reindex_kb(db, task, stats=stats)
             elif task.kind == models.TaskKind.embedding_rebuild.value:

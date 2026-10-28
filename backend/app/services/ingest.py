@@ -181,7 +181,13 @@ def ingest_version(db: Session, task: models.Task, *, stats: llm.CallStats) -> d
     return result
 
 
-def _refresh_kb_status(db: Session, kb: models.KnowledgeBase) -> None:
+def _refresh_kb_status(db: Session, kb: models.KnowledgeBase, *,
+                       commit: bool = True) -> None:
+    """重算知识库状态与说明。
+
+    `commit=False` 给 Worker 用：任务成功时调用方还要写 task.result / 成本流水，
+    这里提前 commit 会把未完成的事务切开，失败时留下「状态已就绪但任务失败」的假象。
+    """
     total = db.execute(
         select(func.count(models.Document.id)).where(
             models.Document.kb_id == kb.id, models.Document.deleted.is_(False))
@@ -196,7 +202,8 @@ def _refresh_kb_status(db: Session, kb: models.KnowledgeBase) -> None:
         kb.status = models.KbStatus.ready.value if chunk_total else models.KbStatus.partial.value
         kb.status_detail = f"{total} 个文档 / {chunk_total} 个索引单元"
     db.add(kb)
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def reindex_kb(db: Session, task: models.Task, *, stats: llm.CallStats) -> dict:
