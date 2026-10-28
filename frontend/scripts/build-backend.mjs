@@ -292,7 +292,7 @@ async function verify() {
       throw new Error(`后端进程提前退出 code=${e.code} sig=${e.sig}`)
     })])
   } catch (e) {
-    child.kill()
+    killTree(child)
     fail(`${e.message}\n--- 后端输出末尾 ---\n${tail.join('\n')}`)
   }
 
@@ -314,7 +314,7 @@ async function verify() {
   }
 
   if (!health) {
-    child.kill()
+    killTree(child)
     fail(`/api/health 未通过：${lastErr}\n--- 后端输出末尾 ---\n${tail.join('\n')}`)
   }
   log(`/api/health → ${JSON.stringify(health)}`)
@@ -328,12 +328,36 @@ async function verify() {
     warn(`/api/meta 未通过（非致命）：${e.message}`)
   }
 
-  child.kill('SIGTERM')
-  const killer = setTimeout(() => { try { child.kill('SIGKILL') } catch { /* 已退出 */ } }, 5000)
-  const ex = await exited
+  // Windows + PyInstaller onefile：exe 是「引导器 + 真实进程」两层。
+  // 只 kill 引导器会留下孤儿 Python 进程，它继续持有 stdout 管道 →
+  // 父进程的 data 监听不解除 → 整个构建脚本永远不退出（实测卡死）。
+  // 所以按进程树杀，并在结束后显式销毁管道。
+  killTree(child)
+  const killer = setTimeout(() => { killTree(child, true) }, 5000)
+  const ex = await Promise.race([
+    exited,
+    new Promise((r) => setTimeout(() => r({ code: 'timeout', sig: null }), 8000)),
+  ])
   clearTimeout(killer)
+  child.stdout?.destroy()
+  child.stderr?.destroy()
   log(`后端已退出 code=${ex.code}`)
   log(`--- 实测通过（${elapsed()}）---`)
+}
+
+/** 结束子进程（含 PyInstaller onefile 的真实子进程）。 */
+function killTree(child, force = false) {
+  try {
+    if (process.platform === 'win32' && child.pid) {
+      spawn('taskkill', ['/F', '/T', '/PID', String(child.pid)], {
+        stdio: 'ignore', windowsHide: true,
+      })
+      return
+    }
+    child.kill(force ? 'SIGKILL' : 'SIGTERM')
+  } catch {
+    /* 进程已退出 */
+  }
 }
 
 await checkPython()
