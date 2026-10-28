@@ -85,11 +85,12 @@ export default function KbDetailPage() {
 
   return (
     <>
+      <section className="card detail-hero">
       <div className="detail-head">
+        <button type="button" className="back-link" onClick={() => navigate('/kbs')}>
+          ← 知识库
+        </button>
         <div className="detail-title">
-          <button type="button" className="btn-link" onClick={() => navigate('/kbs')}>
-            ← 知识库
-          </button>
           <h1>{kb.name}</h1>
           <Badge tone={taskStatusClass(kb.status)}>
             {kbStatusLabel(kb.status, kb.status_label)}
@@ -134,7 +135,6 @@ export default function KbDetailPage() {
         </div>
       </div>
 
-      <div className="detail-tabs">
         <Tabs<TabKey>
           value={tab}
           onChange={setTab}
@@ -144,7 +144,7 @@ export default function KbDetailPage() {
             { key: 'settings', label: '设置' },
           ]}
         />
-      </div>
+      </section>
 
       <div className="detail-body">
         {tab === 'documents' ? (

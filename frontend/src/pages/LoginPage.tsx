@@ -144,6 +144,7 @@ export default function LoginPage() {
       </aside>
 
       <section className="login-panel">
+        <div className="login-card">
         <h2>登录</h2>
         <div className="sub">使用管理员分配的账号进入系统</div>
         {error ? <div className="login-error">{error}</div> : null}
@@ -171,6 +172,7 @@ export default function LoginPage() {
             {busy ? '登录中…' : '登录'}
           </button>
         </form>
+        </div>
         <div className="login-foot">
           {meta ? `${meta.app_name} · v${meta.version}` : '企业知识库文档整理与智能问答系统'}
           {meta?.offline_models ? ' · 离线模型模式' : ''}

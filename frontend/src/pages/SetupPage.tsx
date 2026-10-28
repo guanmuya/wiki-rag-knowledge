@@ -129,6 +129,7 @@ export default function SetupPage() {
       </aside>
 
       <section className="login-panel">
+        <div className="login-card">
         <h2>初始化系统</h2>
         <div className="sub">创建第一个管理员账号</div>
         {error ? <div className="login-error">{error}</div> : null}
@@ -193,6 +194,7 @@ export default function SetupPage() {
             {busy ? '创建中…' : '创建管理员并进入系统'}
           </button>
         </form>
+        </div>
 
         <div className="login-foot">
           初始化完成后此页面将不可再用，如需新增管理员请登录后在「用户管理」中操作

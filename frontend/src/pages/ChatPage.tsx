@@ -414,14 +414,29 @@ export default function ChatPage() {
               ) : detailError ? (
                 <ErrorState error={detailError} onRetry={() => activeId && void loadDetail(activeId)} />
               ) : messages.length === 0 && !pending ? (
-                <div className="state-block" style={{ paddingTop: 60 }}>
-                  <div style={{ fontSize: 26, color: 'var(--c-border-strong)' }}>✦</div>
-                  <div className="state-title">向知识库提问</div>
-                  <div className="state-hint">
+                <div className="chat-empty">
+                  <div className="chat-empty-icon">✦</div>
+                  <div className="chat-empty-title">向知识库提问</div>
+                  <div className="chat-empty-hint">
                     {selectedKbs.length === 0
                       ? '先在上方选择要检索的知识库，然后输入问题。'
-                      : `已选择 ${selectedKbs.length} 个知识库。回答会附带证据原文、文档版本与页码。`}
+                      : `已选择 ${selectedKbs.length} 个知识库。回答会附带证据原文、文档版本与页码，可点开核对。`}
                   </div>
+                  {selectedKbs.length > 0 ? (
+                    <div className="chat-samples">
+                      {SAMPLE_QUESTIONS.map((q) => (
+                        <button
+                          key={q}
+                          type="button"
+                          className="sample-chip"
+                          onClick={() => setQuestion(q)}
+                        >
+                          {q}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="chat-empty-tip">Enter 发送 · Shift+Enter 换行 · 回答基于检索到的证据</div>
                 </div>
               ) : (
                 <>
@@ -563,6 +578,13 @@ export default function ChatPage() {
     </>
   )
 }
+
+/** 空会话时的示例问题：只填进输入框，不直接发送，用户可以改。 */
+const SAMPLE_QUESTIONS = [
+  '出差住宿标准是多少？',
+  '这个流程需要谁审批？',
+  '产品的定价是怎么定的？',
+]
 
 function MessageBubble({
   message,
