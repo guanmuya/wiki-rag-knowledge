@@ -27,7 +27,7 @@
     ... --token "$WRK_TOKEN"
 
     # 给每条结果打上实验标签，便于多轮对比合并
-    ... --label wiki-chunk700 --label-note "wiki 库 / 块大小 700"
+    ... --label wiki-chunk700
 
     # 每个问题重复 3 次，用于观察波动（CSV 里 repeat 列区分）
     ... --repeat 3

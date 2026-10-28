@@ -17,7 +17,9 @@ fi
 export PYTHONPATH="$ROOT/backend${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONIOENCODING=utf-8
 
-# 首次部署可在这里设置管理员初始密码；不设置则随机生成并在日志中打印一次
+# 管理员初始化策略（与 app/main.py 的 bootstrap_admin 一致）：
+# - 设置了 WRK_ADMIN_PASSWORD → 首次启动自动建管理员（开发/测试用）；
+# - 留空 → 不建号，空库启动后前端会跳 #/setup 引导页，由用户自己设账号密码。
 : "${WRK_ADMIN_PASSWORD:=}"
 
 HOST="${WRK_HOST:-127.0.0.1}"

@@ -21,8 +21,8 @@ echo "==> 安装后端依赖"
 echo "==> 安装前端依赖"
 (cd frontend && \
   if command -v pnpm >/dev/null 2>&1; then pnpm install
-  else
-    node "C:/Users/Administrator/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/pnpm/bin/pnpm.mjs" install
+  elif command -v corepack >/dev/null 2>&1; then corepack pnpm install
+  else npx --yes pnpm@9 install
   fi)
 
 if [ "${SKIP_SEED:-0}" != "1" ]; then
