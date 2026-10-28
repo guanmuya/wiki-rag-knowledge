@@ -55,6 +55,10 @@ WIKI_TOPIC_EXCERPT_MIN = int(os.getenv("WRK_WIKI_TOPIC_EXCERPT_MIN", "120"))
 # Map 调用数上限（0 = 不限制）。超过上限先自动压缩单块摘录以覆盖全库；
 # 压到下限仍然超，就如实多调用——宁可多花几次请求，也不把库尾内容丢掉。
 WIKI_MAX_MAP_CALLS = int(os.getenv("WRK_WIKI_MAX_MAP_CALLS", "40"))
+# 合并后的页面数上限。Map 阶段每片最多 12 个主题，大库合并后仍可能有上百个，
+# 页面数不设上限会让「生成 Wiki」变成几百次调用。超限时按证据数量保留，
+# 并在 notes 里说明被略过的主题——不静默截断。
+WIKI_MAX_PAGES = int(os.getenv("WRK_WIKI_MAX_PAGES", "60"))
 
 ACCESS_TOKEN_TTL_MINUTES = int(os.getenv("WRK_TOKEN_TTL_MINUTES", "720"))
 BOOTSTRAP_ADMIN_USERNAME = os.getenv("WRK_ADMIN_USERNAME", "admin")

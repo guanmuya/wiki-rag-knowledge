@@ -1,9 +1,13 @@
-"""导入扩充后的实验语料（三库共 55-60 块），供对比实验使用。
+"""导入扩充后的实验语料（三库共 55 块左右），供对比实验使用。
 
 与 seed_demo.py 的区别：seed_demo 只导入三个原始文档（25 块），本脚本导入
-demo_data 下全部语料（59 块），并校验总量不超过 Wiki 主题归纳的采样窗口
-（TOPIC_SAMPLE_SIZE = 60）。超过 60 块时 Wiki 只覆盖前 60 块，对比实验不再公平，
-因此这里把上限做成硬断言。
+demo_data 下全部语料（10 份 md，约 55 块），保证问题集有足够覆盖面。
+
+**不再有「总量必须 ≤60 块」的约束**：Wiki 生成已改为 Map-Reduce 分片归纳，
+全库每个分块都会进入某一分片（见 app/services/wiki.py 的 _plan_shards），
+块数超过 60 时按字符预算切片，不再只取前 60 块。因此本脚本只校验下限
+（语料太薄撑不起问题集），不设上限；要做更大规模的实验，直接往 demo_data
+加文件并扩充 KBS 的 files 列表即可。
 
 用法（在 backend 目录）：
     python -m scripts.seed_expanded              # 幂等，已导入的文档跳过
@@ -23,7 +27,6 @@ from sqlalchemy import delete, func, select  # noqa: E402
 from app import config, models, security  # noqa: E402
 from app.db import SessionLocal, init_db  # noqa: E402
 from app.services import chunking, parser, worker  # noqa: E402
-from app.services.wiki import TOPIC_SAMPLE_SIZE  # noqa: E402
 
 DEMO_DIR = Path(__file__).resolve().parent.parent.parent / "demo_data"
 
@@ -75,9 +78,9 @@ USERS = [
     {"username": "ops", "display_name": "运维管理员", "role": "admin", "grants": []},
 ]
 
-# 目标区间：低于下限说明语料太薄撑不起 40-50 题，高于上限则 Wiki 覆盖不全。
+# 只保留下限：低于它说明语料太薄撑不起 44 题的问题集。
+# 不设上限——Wiki 已能分片覆盖全库，块数多不再是「对比不公平」的理由。
 MIN_TOTAL_CHUNKS = 55
-MAX_TOTAL_CHUNKS = 60
 
 
 def reset(db) -> None:
@@ -274,18 +277,14 @@ def report(db) -> tuple[int, bool]:
         total += kb_total
         print(f"  {kb.name}: {kb_total} 块 / 状态 {kb.status} / {kb.status_detail}")
 
-    ok = MIN_TOTAL_CHUNKS <= total <= MAX_TOTAL_CHUNKS
-    print(f"\n总正文分块数：{total}（目标 {MIN_TOTAL_CHUNKS}-{MAX_TOTAL_CHUNKS}）")
-    if total > TOPIC_SAMPLE_SIZE:
-        print(f"⚠ 警告：总块数 {total} 超过 Wiki 采样窗口 {TOPIC_SAMPLE_SIZE}，"
-              f"Wiki 只会覆盖前 {TOPIC_SAMPLE_SIZE} 块，对比实验不再公平")
-        ok = False
-    elif total < MIN_TOTAL_CHUNKS:
+    ok = total >= MIN_TOTAL_CHUNKS
+    print(f"\n总正文分块数：{total}（下限 {MIN_TOTAL_CHUNKS}）")
+    if total < MIN_TOTAL_CHUNKS:
         print(f"⚠ 警告：总块数 {total} 低于 {MIN_TOTAL_CHUNKS}，语料偏薄，"
               f"问题集规模难以支撑")
         ok = False
     else:
-        print("✓ 总块数在目标区间内，Wiki 采样可覆盖全库")
+        print("✓ 语料规模达标；Wiki 生成会按字符预算分片归纳，覆盖全库每个分块")
     return total, ok
 
 
@@ -336,9 +335,9 @@ def main() -> int:
                 planned += n
                 print(f"  {fname}: {n} 块")
         print(f"  合计：{planned} 块")
-        if planned > TOPIC_SAMPLE_SIZE:
-            print(f"⚠ 警告：预检总量 {planned} 超过 {TOPIC_SAMPLE_SIZE}，"
-                  f"Wiki 采样将无法覆盖全库")
+        if planned > 60:
+            print(f"  提示：{planned} 块会由 Wiki 分片归纳处理"
+                  f"（WIKI_MAX_MAP_CALLS 内自动压缩摘录，不会丢块）")
 
         if args.reset:
             reset(db)
