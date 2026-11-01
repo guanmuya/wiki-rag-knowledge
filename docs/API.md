@@ -3,7 +3,7 @@
 - 前缀：`/api`
 - 认证：`Authorization: Bearer <token>`。免登录的只有 `POST /api/auth/login`、`GET /api/meta`、`GET /api/health` 与 `/api/setup/*`（首次初始化必须在无账号时可用）。
 - 错误：`{"detail": "中文错误信息"}`，HTTP 400/401/403/404/409/422。
-- 时间：ISO 8601 字符串。分页统一 `?page=1&page_size=20`，返回 `{"items":[],"total":0,"page":1,"page_size":20}`。
+- 时间：ISO 8601 字符串。**真正分页的只有两个接口**：`GET /api/documents/{id}/chunks`（`?page=1&page_size=20`）与 `GET /api/settings/audit`（`?page=1&page_size=50`），返回 `{"items":[],"total":0,"page":1,"page_size":20}`；其余列表接口只返回 `{"items":[],"total":N}`，没有 `page`/`page_size` 字段（前端一次拿全量）。
 - 角色：`admin` | `employee`。知识库授权等级：`read` | `manage`（admin 隐式拥有全部知识库 manage）。
 
 ## 0. 首次初始化（免登录）
@@ -51,27 +51,42 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/kbs` | 当前用户可见的知识库（admin 全部）。元素含 `my_level` |
+| GET | `/api/kbs` | 当前用户可见的知识库（admin 全部）。元素 = `serializers.kb_out()`（`serializers.py:85`），含 `my_level`；**列表不带 `index`** |
 | POST | `/api/kbs` | admin。`{name,description,mode}` mode=`basic`\|`wiki` |
-| GET | `/api/kbs/{id}` | 详情 + 统计 `{doc_count,chunk_count,wiki_page_count,index:{chunk_ready,wiki_ready,embed_signature}}` |
+| GET | `/api/kbs/{id}` | 详情 = `kb_out()` + `index`（`kbs.py:67` 单独追加 `_index_status()`，`kbs.py:122`） |
 | PATCH | `/api/kbs/{id}` | admin。改名/描述/切换 mode（切到 wiki 不自动生成，需手动重建） |
 | DELETE | `/api/kbs/{id}` | admin |
 | POST | `/api/kbs/{id}/rebuild` | manage。`{kind:"chunk"\|"wiki"}` → `{task_id}` |
 | GET | `/api/kbs/{id}/grants` | admin。`[{user_id,username,display_name,level}]` |
 | GET | `/api/kbs/{id}/cost` | 累计整理成本（模型调用/token/耗时，按阶段分组）。需 `read` 权限，详见 7.1 |
 
-知识库结构：
+知识库结构（`serializers.py:85` 的 `kb_out()`，列表与详情共用同一份）：
 ```json
 {
   "id": 1, "name": "员工手册", "description": "", "mode": "basic",
-  "status": "ready", "status_detail": "3 个文档 / 42 个索引单元",
-  "mode_label": "基础分块", "status_label": "可用",
+  "mode_label": "基础分块", "status": "ready", "status_label": "可用",
+  "status_detail": "3 个文档 / 42 个索引单元",
   "embed_signature": "openai:text-embedding-3-small:1536", "embed_dim": 1536,
   "wiki_ready": false, "my_level": "manage",
-  "created_at": "...", "stats": {"doc_count": 3, "chunk_count": 42, "wiki_page_count": 0}
+  "created_at": "...", "wiki_ready_at": null,
+  "stats": {"doc_count": 3, "chunk_count": 42, "wiki_page_count": 0, "wiki_published_count": 0}
 }
 ```
 `status` ∈ `empty|indexing|ready|partial|failed`。
+
+> **`index` 只有详情有**。`GET /api/kbs` 的每个元素就是上面这份结构；`GET /api/kbs/{id}` 在此基础上由 `kbs.py:67` 追加 `index`。前端在列表页读 `index` 只会拿到 `undefined`。
+
+`GET /api/kbs/{id}` 额外的 `index`（`_index_status()`，`kbs.py:122-151`）：
+```json
+{
+  "chunk_ready": true, "chunk_units": 42,
+  "wiki_ready": false, "wiki_units": 0,
+  "embed_signature": "openai:text-embedding-3-small:1536", "embed_dim": 1536,
+  "active_embed_signature": "openai:text-embedding-3-small:1536", "active_embed_dim": 1536,
+  "signature_mismatch": false, "pending_tasks": 0
+}
+```
+`index.wiki_ready` 与顶层 `wiki_ready` 同源（`serializers.wiki_ready()`，`serializers.py:58`）；`signature_mismatch` / `active_embed_*` 用于判断「换 Embedding 后该库是否需要重建」，`pending_tasks` 是该库排队中与进行中的任务数。
 
 ## 5. 文档与任务
 
@@ -117,11 +132,11 @@
 |---|---|---|
 | GET | `/api/conversations` | 我的会话列表 |
 | POST | `/api/conversations` | `{title,kb_ids}` |
-| GET | `/api/conversations/{id}` | 含 `messages:[{id,role,content,kb_ids,evidence,route,latency_ms,created_at}]` |
+| GET | `/api/conversations/{id}` | 含 `messages:[{id,role,content,kb_ids,evidence,route,latency_ms,created_at,insufficient,usage,suggestions,refusal_reason}]`（`serializers.message_out()`，`serializers.py:212-243`） |
 | PATCH | `/api/conversations/{id}` | 改标题 / 换知识库选择 |
 | DELETE | `/api/conversations/{id}` | 删除 |
 | POST | `/api/conversations/{id}/ask` | `{question,kb_ids?,top_k?}` → `{content, message, evidence, route, usage, insufficient, citations, suggestions, refusal_reason, denied}` |
-| POST | `/api/search/preview` | `{kb_ids,query}` → `{evidence, routes, stats, usage}`（不生成回答，用于调参/实验） |
+| POST | `/api/search/preview` | `{kb_ids,query}` → `{evidence, routes, stats, denied, context_preview, usage}`（不生成回答，用于调参/实验） |
 
 `ask` 返回：
 ```json
@@ -155,7 +170,24 @@
 正文带「本次检索到这些资料」与「你可以试试这样问」；`suggestions` 是结构化建议，
 每项 `{kb_name, kind, title, question?}`，`kind` ∈ `resource`（本次命中资料）| `question`（可点击填入输入框）；
 `refusal_reason` 给出判定原因（如「回答开头即声明资料不足」）。
-历史消息只持久化 `route.insufficient` 与 `route.usage`，`suggestions`/`refusal_reason` 不落库。
+历史消息与当次回答同口径：`chat.ask()` 把 `insufficient` / `usage` / `suggestions` / `refusal_reason` 一并写进 `route` 快照（`chat.py:154-161`），`serializers.message_out()` 再从 `route` 读回并展开成顶层字段（`serializers.py:237-242`）；老消息没有这两个键、或数据损坏时退回 `[]` / `""`（`serializers.py:225-230`），不会让一条脏消息把整个会话接口打挂。
+
+#### `top_k` 的两个语义（同一个参数）
+
+`top_k` 同时被当作**每库候选数**和**最终条数上限**，两处口径不同（`retrieval.py:596`、`retrieval.py:665`）：
+
+| 位置 | 表达式 | 不传时 | 传 `top_k=1` 时 |
+|---|---|---|---|
+| 每库候选数 | `per_kb = top_k or PER_KB_CANDIDATES` | 8 | 1 |
+| 最终条数上限 | `total = MAX_EVIDENCE if top_k is None else max(top_k, 3)` | 10 | 3 |
+
+所以 **`top_k=1` 不会只返回 1 条**——最终名额被 `max(top_k, 3)` 抬到 3。但实际条数还受候选池限制：
+单个知识库、每库只取 1 条候选时，候选池里就只有 1 条，最终也只返回 1 条。要真的凑满 3 条，
+候选池至少要有 3 条：要么 `top_k >= 3`（单库也能凑满），要么有多个库、每库各出 1 条以上。
+
+`top_k` 在 `schemas.AskIn` 里没有下限校验（`schemas.py:125`），传 `0` 会因 `or` 短路回落到每库默认 8 条、
+最终名额仍是 3；负数不要传。`POST /api/search/preview` 的请求体里**没有** `top_k`
+（`schemas.SearchPreviewIn`），固定按 `MAX_EVIDENCE = 10` 走，要算 Hit@1 只能从返回结果里自己截第一条。
 
 `usage` 字段说明（**只加字段，不删字段**，老前端按 `calls`/`prompt_tokens` 读仍然正确）：
 
@@ -177,7 +209,27 @@
 > `routers/wiki.py` 人工校对后重建索引，这三处曾漏传 `stats`，导致成本被系统性低估
 > （尤其是 Wiki 库，其成本大头正是章节向量化）。现已全部计入。
 
-`search/preview` 返回同上 `usage`（只有检索、无生成，因此 `chat_calls == 0`）。
+`search/preview` 的响应（`chat.py:182-199`，只有检索、无生成）：
+
+```json
+{
+  "evidence": [{"evidence_id":"chunk:12","...":"与 ask 的 evidence[] 同一结构，另含 coverage"}],
+  "routes": [{"kb_id":1,"kb_name":"员工手册","mode":"wiki","status":"ready","used":"wiki",
+              "reason":"Wiki 已就绪，检索 Wiki 章节","keyword_hits":4,"vector_hits":6,
+              "wiki_hits":6,"fallback":false}],
+  "stats": {"query_terms":["差旅","报销"],"embedding_ok":true,"embedding_error":"",
+            "per_kb_limit":8,"candidate_total":14,"final_total":8,"rrf_k":60,
+            "kb_coverage":{"员工手册":8}},
+  "denied": [],
+  "context_preview": "[1] 知识库《员工手册》 文档《手册.pdf》· 版本 v1 · 位置：第 3 页 · 小节：请假\n…",
+  "usage": {"calls":2,"chat_calls":0,"embed_calls":2,"...":"同 ask 的 usage"}
+}
+```
+
+- `routes` 是**扁平数组**（`KbRoute.to_dict()`，`retrieval.py:371`），不是 `ask` 的 `route.kb_routes`；`stats` 也没有 `ask` 那层 `route` 包装。
+- `denied` 与 `ask` 同构：`[{kb_id, kb_name, reason}]`，列出本次请求里被权限拦下的库（`chat.py:184` 计算、`chat.py:195` 返回）。
+- `context_preview` 是 `retrieval.build_context(evidence)` 的原文（`chat.py:196`），即真正拼进提示词的那段文字，受 `CONTEXT_CHAR_BUDGET = 9000` 字符预算约束（`retrieval.py:701`）。
+- `usage` 与 `ask` 同结构：`chat_calls == 0`，查询向量化仍会记 `embed_calls` / `embed_tokens`。
 
 ## 7.1 知识库累计成本
 

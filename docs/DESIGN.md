@@ -72,9 +72,9 @@ erDiagram
 
 **`Chunk.kind` + `meta`**。让表格证据能定位到「表格 1 第 685-700 行」而不只是「某个表格」。这两列是后期新增的，因此需要第 4 节的补列机制。
 
-**`Message.evidence` / `route` 是快照不是引用**。回答当时命中哪些块、走 wiki 还是 chunk、是否 fallback，全部序列化进消息行。文档更新、索引重建、权限变更后，历史会话仍能还原「当时看到了什么」。`chat.ask()` 额外把 `insufficient` 与 `usage` 塞进 `route` 快照（`chat.py:153-155`），刷新页面后不必重跑即可显示「当时是否证据不足」「花了多少调用」；`suggestions` 与 `refusal_reason` 只出现在当次响应里，不落库。
+**`Message.evidence` / `route` 是快照不是引用**。回答当时命中哪些块、走 wiki 还是 chunk、是否 fallback，全部序列化进消息行。文档更新、索引重建、权限变更后，历史会话仍能还原「当时看到了什么」。`chat.ask()` 把 `insufficient` / `usage` / `suggestions` / `refusal_reason` 一并塞进 `route` 快照（`chat.py:154-161`），刷新页面后不必重跑即可还原「当时是否证据不足」「花了多少调用」「当时建议问什么」；`serializers.message_out()` 再从 `route` 里读回并展开成顶层字段（`serializers.py:237-242`），老消息缺这两个键或数据损坏时退回 `[]` / `""`（`serializers.py:225-230`）。
 
-**`IndexVersion` 目前只写不读**。`ingest.py:138`、`ingest.py:242`、`wiki.py:611` 三处 `db.add(IndexVersion(...))`，但全项目无任何查询使用它。它记录 `kind / embed_signature / unit_count`，当前仅作留痕，不参与检索决策，也不支持回滚。论文中宜写「索引构建留痕」而非「索引版本管理」。
+**`IndexVersion` 目前只写不读**。`ingest.py:138`、`ingest.py:249`、`wiki.py:602` 三处 `db.add(IndexVersion(...))`，全项目没有任何查询读它（只有 `scripts/seed_demo.py` / `seed_expanded.py` 的 `--reset` 清库把它列入待删表）。它记录 `kind / embed_signature / status / unit_count / built_at`（`models.py:266`），当前仅作留痕，不参与检索决策，也不支持回滚。论文中宜写「索引构建留痕」而非「索引版本管理」。
 
 ---
 
@@ -193,6 +193,33 @@ Map 调用本身是 `TOPIC_PROMPT`：`max_topics = MAX_TOPICS = 12`、`temperatu
 
 实现上三处保守取舍：只处理「加列」，改类型、加约束、删列等破坏性变更不自动做（宁可启动报错让人工迁移，也不静默改坏数据）；按 SQLite 的 `ADD COLUMN` 限制生成 DDL（不能 UNIQUE、不能非空无默认值、默认值不能是表达式），`callable` 默认值如 `default=utcnow` 直接丢弃交给运行时；单列失败只 `log.warning` 不中断，返回实际补上的 `"表.列"` 列表供测试断言。
 
+### 4.5 写事务边界与事件循环（任务处理时为什么不能卡住整个应用）
+
+这条流水线跑在 **API 进程内部**的 worker 线程里，所以它做的任何「慢事」都可能被用户看见。
+两条硬约束（v1.0.10 的根因修复，`backend/tests/test_freeze_during_task.py` 守着）：
+
+**约束一：写事务里只能有数据库写入。**
+SQLite 同时只有一个写者，写事务开多久，所有交互写请求就要等多久（`busy_timeout` 3s 后变 503）。
+因此流水线里所有「慢操作」——解析、embedding 网络调用、`pack_vector`、关键词抽取——都必须在
+`db.execute(delete(...))` **之前**完成；`ingest_version()` 的顺序固定为
+「算向量 → 在内存里构造全部 Chunk 行 → 开事务 → DELETE 旧块 + INSERT 新块 → 一次提交」
+（`ingest.py:103-132`）。v1.0.9 曾把 `delete(Chunk)` 放在构造行之前，`pack_vector` 首次
+`import numpy` 的 155 秒就全落在写锁里。
+
+**约束二：事件循环里不能创建线程。**
+FastAPI 的同步端点/同步依赖本来会被 anyio 派到线程池执行，而 anyio 的池是**懒加载**的：
+空闲线程不够时，它在事件循环线程里同步 `Thread.start()`。新线程启动要等 Windows 的 loader
+lock——任何线程首次加载原生 DLL（numpy / lxml / pypdf / docx / openpyxl / pptx）都会握着它。
+两者一撞，事件循环就停摆，**所有接口（包括纯读接口）一起无响应**，用户看到的就是「整个软件卡住」。
+所以进程启动时先建好常驻池（`services/threadpool.py`），并把
+`anyio.to_thread.run_sync`、`starlette/fastapi` 各引用点的 `run_in_threadpool` 全换成常驻池版本；
+池满时排队，**绝不临时扩线程**。`install()` 必须在导入 routers 之前调用——FastAPI 注册同步端点时
+就把 `run_in_threadpool` 抓成了 `functools.partial`（`main.py:14-22`）。
+
+配套的两件事：`pack_vector`/`unpack_vector` 不再依赖 numpy（stdlib `array`，与历史 float32 小端
+逐字节兼容）；启动后用 daemon 线程预热解析库与 numpy（`services/warmup.py`），把「首次加载 DLL」
+的成本从用户任务里挪到应用启动后台。新增重依赖时记得加进 `warmup.WARM_MODULES`。
+
 ---
 
 ## 5. 分块策略
@@ -252,7 +279,7 @@ Map 调用本身是 `TOPIC_PROMPT`：`max_topics = MAX_TOPICS = 12`、`temperatu
 
 **为什么不比较原始分数**。关键词分是 BM25 变体的加权和，量纲随 `idf`、`tf`、文档长度浮动，可到几十分；余弦相似度是 −1 到 1 的有界量。直接相加或加权平均没有意义——权重会随语料规模漂移，换个库就得重调。RRF 只用**名次**，天然消除量纲差异，代价是丢失「差多少」的信息。
 
-**关键词通道的真实行为**（不要引用 `bm25_score()`，它是死代码，全项目零调用）。`keyword_rank()` 内联了一套 tf/idf：`idf = log(1 + (n_docs - df + 0.5) / (df + 0.5))`，`df` 与 `avg_len` 均按当前候选语料实时计算；`k1 = 1.4`、`b = 0.72` 硬编码；命中 `keywords` 字段 ×1.8（该字段是 `extract_keywords()` 抽过的主题词）；命中 `heading` +0.9；覆盖率加成 `× (1 + 0.18 × (hits - 1))`；入选门槛 `hits >= 2` 或存在长度 ≥ 3 的查询词命中，门槛过严导致零结果时回退到「原始命中 + `log1p(tf)`」的宽松打分。
+**关键词通道的真实行为**（`bm25_score()` 已删除——它曾是零调用的死代码，别按它写论文）。`keyword_rank()` 内联了一套 tf/idf：`idf = log(1 + (n_docs - df + 0.5) / (df + 0.5))`，`df` 与 `avg_len` 均按当前候选语料实时计算；`k1 = 1.4`、`b = 0.72` 硬编码；命中 `keywords` 字段 ×1.8（该字段是 `extract_keywords()` 抽过的主题词）；命中 `heading` +0.9；覆盖率加成 `× (1 + 0.18 × (hits - 1))`；入选门槛 `hits >= 2` 或存在长度 ≥ 3 的查询词命中，门槛过严导致零结果时回退到「原始命中 + `log1p(tf)`」的宽松打分。
 
 **向量通道的词汇闸门**。`vector_rank()` 的 `lexical_ids` 参数要求向量结果与关键词结果有交集才保留，交集为空则放行全部（当作同义改写）。注释写明理由是「纯语义召回在没有真实 embedding 时噪声极大，会把无关条目顶上首位」。阈值也不固定：`cutoff = max(min_sim, best * rel_ratio)`，`rel_ratio = 0.55`、`min_sim = 0.05`。用相对最高分的比例做主判据，因为不同模型的相似度分布差异很大，固定绝对阈值必然在某一类模型上失效。相似度只算一次：`vector_rank(..., scores_out=...)` 顺手把分数写回，供证据卡片显示 `vector_sim`。
 
@@ -271,13 +298,13 @@ score     = (0.25 + coverage) * rank_term * balance
 
 **必须记住的副作用**：`coverage` 与最终 `rank` 不是单调关系。实测查询「P0 工单首次响应时限」，rank 1 是 coverage 0.38 的正文段落，rank 2 是 coverage 0.62 的工单分级表格——两者同属客户支持库，`rank_term` 的 1.0 vs 0.690 压过了 `(0.25+coverage)` 的 0.63 vs 0.87。做实验时「证据覆盖率」与「检索名次」必须作为两个层次分别统计。
 
-**`coverage` 已对外输出**。`Evidence.to_dict()` 含 `"coverage": round(self.coverage, 4)`，`/api/search/preview` 的 `evidence[]` 能直接读到；`stats["query_terms"]` 给出本次使用的查询词（截前 16 个）。**`top_k` 有下限**：`total = MAX_EVIDENCE if top_k is None else max(top_k, 3)`，传 `top_k=1` 实际返回 3 条；`top_k` 同时被用作每库候选数，两个语义复用一个参数。`/api/search/preview` 的请求体没有 `top_k` 字段（`schemas.SearchPreviewIn`），固定按 `MAX_EVIDENCE = 10` 返回；只有 `POST /api/conversations/{id}/ask`（`schemas.AskIn.top_k`）能改。
+**`coverage` 已对外输出**。`Evidence.to_dict()` 含 `"coverage": round(self.coverage, 4)`，`/api/search/preview` 的 `evidence[]` 能直接读到；`stats["query_terms"]` 给出本次使用的查询词（截前 16 个）。**`top_k` 有下限**：`total = MAX_EVIDENCE if top_k is None else max(top_k, 3)`（`retrieval.py:665`），传 `top_k=1` 时最终名额被抬到 3 条——但实际条数还受候选池限制，`top_k` 同时被当作每库候选数（`per_kb = top_k or PER_KB_CANDIDATES`，`retrieval.py:596`），单库传 1 时每库只出 1 条候选，最终就只有 1 条；两个语义复用一个参数。`/api/search/preview` 的请求体没有 `top_k` 字段（`schemas.SearchPreviewIn`），固定按 `MAX_EVIDENCE = 10` 返回；只有 `POST /api/conversations/{id}/ask`（`schemas.AskIn.top_k`）能改。
 
 ### 6.3 检索侧成本：查询向量化必须计入
 
-`retrieve()` 接受外部传入的 `CallStats`（`retrieval.py:588`），并把 `llm.embed(db, [query], stats=cost)` 的调用记进去（`retrieval.py:609`）。这里不新建 `CallStats` 而是接收调用方的对象，因为一次问答的成本 = 查询向量化 + 回答生成，两份统计必须累加到同一个对象。
+`retrieve()` 接受外部传入的 `CallStats`（`retrieval.py:583`），并把 `llm.embed(db, [query], stats=cost)` 的调用记进去（`retrieval.py:604`）。这里不新建 `CallStats` 而是接收调用方的对象，因为一次问答的成本 = 查询向量化 + 回答生成，两份统计必须累加到同一个对象。
 
-`/api/search/preview` 也自建 `CallStats` 并返回 `usage`（`chat.py:183-192`）——不传的话这个接口的成本恒为 0，用它做「分块 vs Wiki」对比会得出「检索不花钱」的错误结论。注意 `retrieve()` 返回的 `stats` 字典里**刻意不含 usage**：它会被原样持久化进 `message.route`，带上生成前的旧数字就会和真正的总账对不上。成本只走一条出口：调用方显式返回 `usage`。
+`/api/search/preview` 也自建 `CallStats` 并返回 `usage`（`chat.py:189-199`）——不传的话这个接口的成本恒为 0，用它做「分块 vs Wiki」对比会得出「检索不花钱」的错误结论。注意 `retrieve()` 返回的 `stats` 字典里**刻意不含 usage**：它会被原样持久化进 `message.route`，带上生成前的旧数字就会和真正的总账对不上。成本只走一条出口：调用方显式返回 `usage`。
 
 ---
 
@@ -301,7 +328,7 @@ return "none", "知识库还没有可检索的文档", False
 
 **Wiki 未就绪回退分块并标 fallback**。回退不静默：`route.used` 改成 `"chunk"`，`reason` 追加说明，`fallback = True`。前端路由面板显示标记，`answering._route_notes()` 在证据不足时也会列出「以下知识库发生了检索方式回退」。还有一条二次回退：`used == "wiki"` 但 `search_wiki()` 返回空时再试 `search_chunks()`，命中则改用分块并置 `fallback = True`，覆盖「Wiki 已就绪但与本次查询无关」。
 
-**`wiki_ready` 有三个口径，当前不一致**。`serializers.kb_out()` 按「已发布且 `current_version_id` 非空的 WikiPage 数 > 0」（`serializers.py:81`）；`routers/kbs.py:_index_status()` 按「`WikiSection` 数 > 0」（`kbs.py:140`）；`plan_route()` 用第一种。页面已发布但章节切不出来（正文不足 8 字符）时前两者结论相反。当前以 `plan_route()` 为准，另两处只影响展示。
+**`wiki_ready` 只有一个口径**。判定集中在 `serializers.wiki_published_count()` / `wiki_ready()`（`serializers.py:36`、`serializers.py:58`）：`status != draft` **且** `current_version_id` 非空 的 WikiPage 数 > 0。三处展示全部调它——`kb_out()`（`serializers.py:103`）、`kbs._index_status()` 的 `index.wiki_ready`（`kbs.py:143`）、`wiki.wiki_tree()`（`wiki.py:40`）；`_index_status()` 里的 `wiki_units` 退化为纯信息字段（`WikiSection` 计数），不再参与判定。检索侧 `retrieval.plan_route()` 用的是**同一个谓词但独立实现了一份**（`retrieval.py:560-566`）：services 层不反向依赖 serializers，合并需要单独设计，目前靠 `backend/tests/test_wiki_ready.py` 的 6 条测试把「三处展示」与「`plan_route().used == "wiki"`」锁在一起防漂移。
 
 ---
 

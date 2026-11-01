@@ -85,7 +85,7 @@ Electron 33（外壳）  →  Python 3.13 + FastAPI（sidecar）  →  SQLite + 
 | 生成成本 | 一次解析 + 一次向量化 | 主题归纳 + 每页生成 + 全部章节向量化 |
 | 更新代价 | 单文档增量 | 全库重建 |
 
-**路由判定 `plan_route()`**（`backend/app/services/retrieval.py:562-585`）解决「配置了 wiki ≠ Wiki 现在能用」：
+**路由判定 `plan_route()`**（`backend/app/services/retrieval.py:557-580`）解决「配置了 wiki ≠ Wiki 现在能用」：
 
 ```python
 mode == "wiki":
@@ -96,7 +96,7 @@ mode == "basic":
     存在任意 Chunk → ("chunk", …, False)；否则 ("none", …, False)
 ```
 
-两点必须写清：**逐库独立判定**（多库混合时 A 库走 wiki、B 库走 chunk、C 库不可用，`KbRoute` 逐条记录）；**回退不静默**（`fallback=True` 会在前端路由面板与拒答文案里显式列出）。另有一条二次回退：`used == "wiki"` 但 `search_wiki()` 返回空时再试 `search_chunks()`，命中则改用分块并置 `fallback=True`（`backend/app/services/retrieval.py:619-632`），覆盖「Wiki 已就绪但与本次查询无关」。
+两点必须写清：**逐库独立判定**（多库混合时 A 库走 wiki、B 库走 chunk、C 库不可用，`KbRoute` 逐条记录）；**回退不静默**（`fallback=True` 会在前端路由面板与拒答文案里显式列出）。另有一条二次回退：`used == "wiki"` 但 `search_wiki()` 返回空时再试 `search_chunks()`，命中则改用分块并置 `fallback=True`（`backend/app/services/retrieval.py:614-627`），覆盖「Wiki 已就绪但与本次查询无关」。
 
 ### 2.4 任务队列、幂等与失败语义
 
@@ -205,7 +205,7 @@ topics = _merge_topics(topics)               # Reduce：合并相近主题
 
 #### 第一层：库内 —— 加权 RRF
 
-`search_chunks()` / `search_wiki()` 各跑两个通道：`keyword_rank()` 产出 `kw_ids`，`vector_rank()` 产出 `vec_ids`，再由 `rrf_fuse([kw_ids, vec_ids], weights=channel_weights(...))` 融合（`backend/app/services/retrieval.py:269-289`）：
+`search_chunks()` / `search_wiki()` 各跑两个通道：`keyword_rank()` 产出 `kw_ids`，`vector_rank()` 产出 `vec_ids`，再由 `rrf_fuse([kw_ids, vec_ids], weights=channel_weights(...))` 融合（`backend/app/services/retrieval.py:264-284`）：
 
 ```
 score(d) = Σ_c  w_c / (k + rank_c(d)),     k = RRF_K = 60
@@ -217,15 +217,15 @@ w = channel_weights(db, qvec_ok):
 
 **为什么不比较原始分数**：关键词分是 BM25 变体的加权和，量纲随 `idf`、`tf`、文档长度浮动，可到几十分；余弦相似度是有界量。直接相加或加权平均没有意义——权重会随语料规模漂移，换个库就得重调。RRF 只用**名次**，天然消除量纲差异，代价是丢失「差多少」的信息。
 
-关键词通道的真实行为（`keyword_rank`，`backend/app/services/retrieval.py:76-147`）：`idf = log(1 + (n_docs - df + 0.5)/(df + 0.5))`，`df` 与 `avg_len` 按当前候选语料实时计算；`k1 = 1.4`、`b = 0.72`；命中 `keywords` 字段 ×1.8；命中 `heading` +0.9；覆盖率加成 `×(1 + 0.18 × (hits-1))`；入选门槛 `hits >= 2` 或存在长度 ≥ 3 的查询词命中；门槛过严导致零结果时回退到「原始命中 + `log1p(tf)`」的宽松打分。
+关键词通道的真实行为（`keyword_rank`，`backend/app/services/retrieval.py:71-142`）：`idf = log(1 + (n_docs - df + 0.5)/(df + 0.5))`，`df` 与 `avg_len` 按当前候选语料实时计算；`k1 = 1.4`、`b = 0.72`；命中 `keywords` 字段 ×1.8；命中 `heading` +0.9；覆盖率加成 `×(1 + 0.18 × (hits-1))`；入选门槛 `hits >= 2` 或存在长度 ≥ 3 的查询词命中；门槛过严导致零结果时回退到「原始命中 + `log1p(tf)`」的宽松打分。
 
-向量通道的词汇闸门（`vector_rank`，`backend/app/services/retrieval.py:150-198`）：`cutoff = max(min_sim, best × rel_ratio)`，`rel_ratio = 0.55`、`min_sim = 0.05`；`lexical_ids` 非空时只保留「语义命中且关键词也命中」的结果，交集为空则放行全部（当作同义改写）。用相对最高分的比例作主判据，因为不同模型的相似度分布差异很大，固定绝对阈值必然在某一类模型上失效。
+向量通道的词汇闸门（`vector_rank`，`backend/app/services/retrieval.py:145-193`）：`cutoff = max(min_sim, best × rel_ratio)`，`rel_ratio = 0.55`、`min_sim = 0.05`；`lexical_ids` 非空时只保留「语义命中且关键词也命中」的结果，交集为空则放行全部（当作同义改写）。用相对最高分的比例作主判据，因为不同模型的相似度分布差异很大，固定绝对阈值必然在某一类模型上失效。
 
-> 论文写作提醒：`bm25_score()` 是死代码（全项目零调用），**不要引用它**作为实现依据。
+> 论文写作提醒：`bm25_score()` 已于本轮删除（它曾是零调用的死代码），**不要引用它**作为实现依据；真实实现是 `keyword_rank()` 内联的那套 tf/idf。
 
 #### 第二层：跨库 —— 覆盖率 × 名次衰减 × 均衡因子
 
-`retrieve()` 拿到每库 top-N（`PER_KB_CANDIDATES = 8`）后**不使用 RRF**（`backend/app/services/retrieval.py:642-703`）：
+`retrieve()` 拿到每库 top-N（`PER_KB_CANDIDATES = 8`）后**不使用 RRF**（`backend/app/services/retrieval.py:637-698`）：
 
 ```
 coverage(d)  = |{t ∈ Q : t ∈ heading(d) ∪ text(d)}| / |Q|     # 0~1，绝对量
@@ -403,7 +403,7 @@ PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe backend/scripts/collect_metrics.
 
 ## 5. 可写的创新点（每条附可验证依据）
 
-1. **两层异构融合的可解释设计**：库内用加权 RRF 消除量纲，跨库改用「查询词覆盖率 × 名次衰减 × 库间均衡」，并显式承认两者不可统一（`backend/app/services/retrieval.py:269`、`backend/app/services/retrieval.py:642-703`）。相比「全局一把 RRF」，跨库层用绝对覆盖率解决了「不同库的 RRF 分数不可比」的问题；相比「按库加权投票」，它不需要预先知道库的可信度。
+1. **两层异构融合的可解释设计**：库内用加权 RRF 消除量纲，跨库改用「查询词覆盖率 × 名次衰减 × 库间均衡」，并显式承认两者不可统一（`backend/app/services/retrieval.py:264`、`backend/app/services/retrieval.py:637-698`）。相比「全局一把 RRF」，跨库层用绝对覆盖率解决了「不同库的 RRF 分数不可比」的问题；相比「按库加权投票」，它不需要预先知道库的可信度。
 2. **面向 embedding 静默截断的分块预算**：把「字符预算是硬约束、行数是软目标」写进表格分块（`backend/app/services/chunking.py:119-143`），并用表头重复保证每块可独立检索。这针对的是一类**不可观测的失败**（超长块被模型静默截断，块尾数据丢失且无信号），比「块偏碎」严重得多。
 3. **全库覆盖的 Map-Reduce 主题归纳 + 降级诚实性**：分片、全局编号、超限先压摘录再如实多调用、覆盖范围写进 `notes`（`backend/app/services/wiki.py:119-308`、`backend/app/services/wiki.py:472-506`）。工程价值在于把「大库能不能整理」变成有界成本问题，同时不静默丢内容。
 4. **可审计的三通道成本口径**：`chat/embed/vision` × `live/offline` 正交分解 + 阶段流水（`backend/app/services/cost.py`、`backend/app/services/llm.py:58-220`）。它让「索引成本 vs 整理成本」「真实费用 vs 离线演示」成为可直接查询的两个维度，而不是靠调用方自觉记账（历史上正是三处漏传 `stats` 导致系统性低估）。
@@ -413,11 +413,11 @@ PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe backend/scripts/collect_metrics.
 
 ## 6. 局限（论文必须自己写出来）
 
-1. **单机与规模上限**。SQLite 单文件 + 进程内 Worker，单库 1000 份文档量级可用；再往上需要换存储与外部队列。检索的关键词通道按 term 计频需把全库文本取回 Python（约 0.59 s / 2.1 MB @ 5000 块，`backend/app/services/retrieval.py:11-19` 记录），用 FTS 预筛会改变 IDF 统计范围进而影响排序，属于改变语义而非加速，故未做。
+1. **单机与规模上限**。SQLite 单文件 + 进程内 Worker，单库 1000 份文档量级可用；再往上需要换存储与外部队列。检索的关键词通道按 term 计频需把全库文本取回 Python（约 0.59 s / 2.1 MB @ 5000 块，`backend/app/services/retrieval.py:16-24` 记录），用 FTS 预筛会改变 IDF 统计范围进而影响排序，属于改变语义而非加速，故未做。
 2. **Wiki 是有损归纳**。主题数受 `MAX_TOPICS`、页面数受 `WIKI_MAX_PAGES` 约束；超限按证据数保留并写 notes，但「被略过的主题」确实不在 Wiki 里（仍可由分块检索命中）。Wiki 的事实保真度未做形式化保证，只保证证据可回挂。
 3. **拒答判定是规则式**，存在已知假阳性（半答半拒被判拒答）与假阴性（模型换一种说法绕过标记词）。它不能替代人工判定。
 4. **`IndexVersion` 只写不读**，不支持索引回滚；换 Embedding 只能全量重建，重建期间该库不可用（状态 `indexing`）。
-5. **`wiki_ready` 有三个口径且当前不一致**：`backend/app/serializers.py` 的 `kb_out()` 按「已发布且 `current_version_id` 非空」、`backend/app/routers/kbs.py` 的 `_index_status()` 按「`WikiSection` 数 > 0」、`plan_route()` 用第一种。页面已发布但章节切不出来时前两者结论相反；检索以 `plan_route()` 为准，另两处只影响展示。
+5. **`wiki_ready` 已统一，但谓词仍是两份实现**：唯一判定入口是 `serializers.wiki_published_count()` / `wiki_ready()`（`backend/app/serializers.py:36`、`backend/app/serializers.py:58`），`kb_out()` / `_index_status()` / `wiki_tree()` 三处展示都调它；`plan_route()` 用等价谓词但独立实现（`backend/app/services/retrieval.py:560-566`，services 层不反向依赖 serializers），靠 `backend/tests/test_wiki_ready.py` 的 6 条测试锁死两边一致。合并成一处需要单独设计，本轮没做。
 6. **视觉通道存在但弱**：图片只记元信息，未做内容理解（`backend/app/services/llm.py:687-697` 返回占位说明），`vision_calls` 统计在但实验里基本为 0。
 7. **离线模式不可用于效果结论**。哈希向量与抽取式回答只保证链路可跑通，`channel_weights()` 会把向量通道压到 0.45，排序质量与在线配置不可比。
 

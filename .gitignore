@@ -44,3 +44,7 @@ frontend/dist/
 
 # 本地临时验证产物
 .tmp-verify/
+# 诊断脚本 scripts/diag/lock_probe.py 默认的只读库副本目录
+.tmp-diag/
+# PyInstaller 归档临时解包（排查安装包内代码用）
+.tmp-pyz.pyz

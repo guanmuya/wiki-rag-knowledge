@@ -202,6 +202,19 @@ try {
   await app.close().catch(() => {})
 }
 
+// 主进程在 whenReady 里的异常会弹「应用启动失败」对话框，但窗口照常可用，
+// Playwright 看不到原生对话框——必须查日志。1.0.5/1.0.6 就是靠这条才发现的
+// （updater.init 末尾引用了一个已删除的变量，每次启动都弹框）。
+{
+  const startupLogPath = join(UD, 'logs', 'main.log')
+  const startupLog = existsSync(startupLogPath) ? readFileSync(startupLogPath, 'utf8') : ''
+  const startupErrors = startupLog
+    .split('\n')
+    .filter((l) => /启动失败：|未捕获异常/.test(l))
+  check('17. 主进程无启动异常（日志里没有「启动失败」）', startupErrors.length === 0,
+    startupErrors[0]?.trim() || '')
+}
+
 const passed = results.filter((r) => r.ok).length
 console.log(`\n=== ${passed}/${results.length} 通过 ===`)
 for (const r of results) console.log(`  ${r.ok ? 'PASS' : 'FAIL'}  ${r.name}`)

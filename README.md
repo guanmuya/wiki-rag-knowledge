@@ -4,9 +4,9 @@
 
 后端是 FastAPI + SQLAlchemy + SQLite 的单机进程，前端是 React + Vite，Electron 负责把后端作为 **sidecar 子进程**拉起并动态分配端口。没有外部队列、没有独立数据库服务、不需要运维。
 
-- 应用名 `企业知识库文档整理与问答系统`，版本 `1.0.0`（`backend/app/main.py:23-24`）
+- 应用名 `企业知识库文档整理与问答系统`，版本 `1.0.10`（`backend/app/main.py:31`；`frontend/package.json` 的 `version` 同为 `1.0.10`）
 - 安装包产品名 `企业知识库`，appId `com.wikiraq.knowledge`（`frontend/electron-builder.yml`）
-- 后端测试基线 **157 passed, 1 skipped**（`backend/tests/`，16 个文件、150 个 `def test_`，参数化后 157 项）
+- 后端测试基线 **200 passed, 1 skipped**（`backend/tests/`，23 个文件；v1.0.10 新增 `test_freeze_during_task.py` 8 条）
 
 ---
 
@@ -19,9 +19,9 @@
 | 表格分块 | 按字符预算切行组 + 每块重复表头 + `locator` 记录行区间 | `backend/app/services/chunking.py:76` |
 | 双形态索引 | `basic` = 分块；`wiki` = 主题归纳 → 页面 → 章节 | `backend/app/models.py:29`、`backend/app/services/wiki.py` |
 | Wiki Map-Reduce | 全库按字符预算分片归纳，片内用全库全局编号，合并去重 | `backend/app/services/wiki.py:119-308` |
-| 两层融合检索 | 库内**加权 RRF**；跨库**覆盖率 × 名次衰减 × 均衡因子** | `backend/app/services/retrieval.py:269`、`backend/app/services/retrieval.py:588` |
-| 逐库自动路由 | `wiki` 未就绪回退分块并标 `fallback`，不静默降级 | `backend/app/services/retrieval.py:562` |
-| 证据链 | 回答 `[编号]` → `Message.evidence` → `Chunk.locator` / `WikiEvidence` | `backend/app/services/answering.py:397` |
+| 两层融合检索 | 库内**加权 RRF**；跨库**覆盖率 × 名次衰减 × 均衡因子** | `backend/app/services/retrieval.py:264`、`backend/app/services/retrieval.py:583` |
+| 逐库自动路由 | `wiki` 未就绪回退分块并标 `fallback`，不静默降级 | `backend/app/services/retrieval.py:557` |
+| 证据链 | 回答 `[编号]` → `Message.evidence` → `Chunk.locator` / `WikiEvidence` | `backend/app/services/answering.py:415` |
 | 结构化拒答 | 固定前置句 + 本次命中资料 + 可点击建议问题 | `backend/app/services/answering.py:122-177` |
 | 成本核算 | `CallStats` 分 chat/embed/vision 三通道，流水落 `cost_records` | `backend/app/services/llm.py:59`、`backend/app/services/cost.py` |
 | 三协议模型适配 | `openai` / `openai-responses` / `anthropic` | `backend/app/services/llm.py:4-6`、`backend/app/models.py:321` |
@@ -61,7 +61,7 @@
 └──────────────────────────────────────────────────────────────┘
 ```
 
-sidecar 启动细节（`backend/app/desktop_entry.py`、`frontend/electron/main.cjs:139-193`）：
+sidecar 启动细节（`backend/app/desktop_entry.py`、`frontend/electron/main.cjs:177-306`，即 `startBackend()` / `stopBackend()`）：
 
 - **动态端口**：`WRK_PORT=0` 时 `bind((host, 0))` 让系统分配，多实例共存不冲突；指定端口被占用则自动回落。
 - **就绪上报**：`announce()` 线程最多轮询 600 × 50 ms，确认端口可连后打印 `WRK_READY {"host","port","version","app","pid"}`；主进程 60 秒未收到即失败并给出中文原因。
@@ -173,7 +173,7 @@ Wiki-Rag-Knowledge/
 │   │   │   └── cost.py           # 成本流水与聚合
 │   │   └── ...
 │   ├── scripts/                  # seed_demo seed_expanded inspect_chunks collect_metrics
-│   ├── tests/                    # 16 个文件，157 项
+│   ├── tests/                    # 17 个文件，166 项
 │   └── requirements.txt
 ├── frontend/
 │   ├── electron/main.cjs         # sidecar 生命周期、失败原因翻译、日志
@@ -279,6 +279,15 @@ Wiki-Rag-Knowledge/
 
 `POST /api/settings/embedding/switch`：已有索引时必须带 `confirm=true`，否则 409；确认后为每个有索引的库建 `embedding_rebuild` 任务全量重算。`GET /api/settings/embedding/status` 给出 `active`、各库 `mismatch`、`require_confirm` 与正在跑的重建任务。
 
+### 6.4 重试 = 同一条任务记录回退，不是再插一条
+
+任务表是**执行记录**，不是重试日志。旧实现每点一次「重试」就 `INSERT` 一条新任务：点三次任务列表多三条，同一份文档还会被并发解析三遍。现在：
+
+- `POST /documents/{id}/reindex`（文档列表的重试入口）：找到该文档最新版本对应的那条入库任务**原地打回队列**，次数记在 `payload.retry.count`，`attempts` 归零重新累计；没有任务记录的历史文档才补建一条。
+- `POST /tasks/{id}/retry`（任务中心的兜底入口）：同样的原地回退；任务已在排队/执行中直接 409，不会堆出重复任务。
+- 状态双向同步走 `services/taskflow.py`：重试 → 版本/文档/知识库一起回到「索引中」；执行失败或中断恢复放弃 → 版本/文档标失败、知识库按「还有没有可用索引」决定 `partial` / `failed`。任务列表说失败、文档却停在「索引中」这种自相矛盾不会再出现。
+- 文档列表的状态列以**最新上传的版本**为准（`latest_version`），而不是「已生效的版本」（`current_version`）——新版本失败时前者才有意义。
+
 ---
 
 ## 7. 接口速览
@@ -290,7 +299,7 @@ Wiki-Rag-Knowledge/
 | 初始化 | `GET /setup/status`、`POST /setup/admin`（仅无管理员时可调，之后永久 409）、`GET /setup/org` |
 | 认证 | `POST /auth/login`、`GET /auth/me`、`POST /auth/change-password` |
 | 知识库 | `GET/POST /kbs`、`PATCH /kbs/{id}`、`POST /kbs/{id}/rebuild`、`GET /kbs/{id}/cost` |
-| 文档与任务 | `POST /kbs/{id}/documents`、`GET /documents/{id}/chunks`、`GET /tasks`、`POST /tasks/{id}/retry` |
+| 文档与任务 | `POST /kbs/{id}/documents`、`GET /documents/{id}/chunks`、`POST /documents/{id}/reindex`（文档级重试）、`GET /tasks`、`POST /tasks/{id}/retry` |
 | Wiki | `GET /kbs/{id}/wiki/tree`、`PUT /kbs/{id}/wiki/pages/{slug}`（人工校对）、`POST .../unlock` |
 | 问答 | `POST /conversations/{id}/ask`、`POST /search/preview`（只检索不生成，实验用） |
 | 模型设置 | `GET/POST /settings/providers`、`POST /settings/providers/{id}/discover`、`POST /settings/embedding/switch` |
@@ -309,7 +318,7 @@ Wiki-Rag-Knowledge/
 .venv/Scripts/python.exe -m pytest backend/tests/test_wiki_scale.py -q
 ```
 
-测试覆盖：入库流水线、表格分块、检索质量、权限、拒答判定、成本口径、模型协议、首次引导、失败语义、老库补列、Wiki 规模。表格测试需要 `demo_data/fixtures/` 的样本，缺失时会 `pytest.skip` 并提示先跑 `python scripts/make_fixtures.py`。
+测试覆盖：入库流水线、表格分块、检索质量、权限、拒答判定、成本口径、模型协议、首次引导、失败语义、老库补列、Wiki 规模、**写锁韧性（`test_lock_resilience.py` / `test_responsive_during_embed.py`）**、**进程守护（`test_procguard.py`）**、**中断恢复与重试语义（`test_resume_and_locks.py` / `test_retry_semantics.py`）**。表格测试需要 `demo_data/fixtures/` 的样本，缺失时会 `pytest.skip` 并提示先跑 `python scripts/make_fixtures.py`。
 
 前端类型检查与构建：
 
@@ -347,8 +356,11 @@ PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe backend/scripts/collect_metrics.
 **Q：库里明明有文档，回答却说「现有资料不足以回答这个问题」。**
 先看响应里的 `route.kb_routes[]`：`used="none"` 说明该库当前不可检索（Wiki 未就绪且无分块），`fallback=true` 说明发生了检索方式回退。拒答文案本身也会列出这两类库与原因，以及本次真实命中的资料和建议问法。
 
-**Q：`data/` 会被提交进 git 吗。**
-不会，`.gitignore` 已忽略 `data/`、`*.sqlite3`、`secrets/`、`backend/uploads/`。
+**Q：`data/` 和构建产物会被提交进 git 吗。**
+不会。`.gitignore` 已忽略 `data/`、`*.sqlite3`、`secrets/`、`backend/uploads/`，以及构建产物目录
+`frontend/release/`、`frontend/build/backend/`、`frontend/build/pyinstaller/`（`.gitignore:36-39`；
+`git ls-files frontend/release` 为 0）。硬编码本机路径的临时探针 `frontend/.tmp-probe-ud.mjs` 已删除，
+git 里是删除状态。
 
 ---
 

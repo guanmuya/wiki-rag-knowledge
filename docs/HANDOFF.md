@@ -1,8 +1,294 @@
 # 交接说明
 
-> **最新快照：2026-10-28 19:00**（本节的结论优先；下面的「总览」是 10-27 的历史快照，保留作对比）
+> **最新快照：2026-11-01 11:15（v1.0.10：任务处理中整个软件卡死的真正根因）**
 >
-> ## 当前状态：可交付（安装包已按最新代码重打）
+> ## 本轮修的是什么
+>
+> 用户反馈（v1.0.9 实测，截图里「检索调试」一直停在「知识库加载中…」）：
+> **知识库里只要有任务在处理，整个软件就卡住。** 这不是上一次的「孤儿进程占写锁」，也不是
+> 「写锁等太久」——是**事件循环被同步创建线程卡死**。
+>
+> ### 现场证据（用户机器 `data/logs/lock-watchdog.log`，一次真实的 155 秒卡死）
+>
+> ```
+> probe: PRAGMA busy_timeout=300; BEGIN IMMEDIATE; ROLLBACK 耗时 402ms err=database is locked
+> --- thread wrk-worker-1
+>     File "app\services\ingest.py", line 120, in ingest_version
+>     File "app\services\llm.py", line 268, in pack_vector
+>     File "numpy\_core\multiarray.py", line 11, in <module>
+>     File "<frozen importlib._bootstrap_external>", line 1317, in create_module
+> --- thread MainThread
+>     File "anyio\_backends\_asyncio.py", line 2676, in run_sync_in_worker_thread
+>     File "threading.py", line 982, in start          ← 事件循环卡在这里
+> ----- 解锁：写锁阻塞持续 155072ms
+> ```
+>
+> ### 两个叠加的根因
+>
+> 1. **事件循环在请求路径上同步建线程**：anyio 的线程池是懒加载的——空闲线程不够时，
+>    它在**事件循环线程里**直接 `worker.start()`。而新线程启动要等 Windows 的 loader lock，
+>    后台 worker 线程那一刻正首次 `import numpy`（加载 `_multiarray_umath.pyd` / OpenBLAS），
+>    握着 loader lock 不放。于是 `Thread.start()` 把事件循环按停几十秒到几分钟：
+>    **所有接口**（包括纯读的 `GET /api/kbs`）都不再响应，前端就是「整个软件卡住」。
+>    任何一个「首次加载原生 DLL」都会触发（numpy / lxml / pypdf / docx / openpyxl / pptx），
+>    杀软首次扫描新解压的 `_MEI` 目录时尤其久。
+> 2. **入库写事务横跨慢操作**：`ingest_version` 先 `delete(Chunk)` + `flush()` 开写事务，
+>    再在循环里 `pack_vector()`。pack_vector 首次会 import numpy → 写锁被占 155 秒，
+>    期间所有交互写请求 3 秒超时 → 503「数据库正忙」。
+>
+> ### 修复（4 处，都有回归测试）
+>
+> | # | 改动 | 位置 |
+> |---|---|---|
+> | 1 | **常驻 HTTP 线程池**：启动时建好 12 条 daemon 线程，请求只投队列，事件循环永不 `Thread.start()`；池满排队而不是扩容 | 新增 `backend/app/services/threadpool.py`，`main.py:14-22`（补丁必须在 routers 之前）、`main.py:86`（lifespan 里 `start()`） |
+> | 2 | **连 anyio 一起换**：FastAPI 的同步依赖收尾（每个请求的 `db.close()`）直接调 `anyio.to_thread.run_sync`，只换 `run_in_threadpool` 会漏掉这条路径 | `threadpool.py:_pooled_run_sync` + `install()` |
+> | 3 | **入库写事务收窄**：先在内存里构造全部 Chunk 行（含 `pack_vector`），再开只含 DELETE/INSERT 的短事务 | `ingest.py:103-132` |
+> | 4 | **向量打包去 numpy** + **启动后台预热**：`pack_vector`/`unpack_vector` 改用 stdlib `array`（与历史 float32 小端逐字节兼容）；启动后用 daemon 线程预热解析库/numpy，首次任务不再现场加载 DLL | `llm.py:266-289`、新增 `backend/app/services/warmup.py`、`main.py:97` |
+>
+> 诊断接口新增 `threadpool` / `warmup` / `served_by` 三个字段：出问题时一眼能看出
+> 「常驻池有没有起来」「预热完没有」「这条请求是哪条线程执行的」。
+>
+> ### 验证
+>
+> | 项 | 结果 |
+> |---|---|
+> | 后端测试 | **200 passed, 1 skipped**（新增 `test_freeze_during_task.py` 8 条） |
+> | 老行为复现 | `scripts/diag/prove_old_freeze.py`（把常驻池下线、还原 anyio 懒加载）：4 个并发请求被拖到 **12037ms**，且新建 4 条 AnyIO 线程；修复后 **0 条新建线程、7–20ms 返回** |
+> | 打包 exe 复测 | `scripts/diag/repro_freeze_exe.py`（直接驱动 PyInstaller 产物）：任务处理期间 `GET /api/kbs` 探测「超过1s=0」 |
+> | 安装包 | `frontend/release/wiki-rag-knowledge-1.0.10-x64-setup.exe` |
+>
+> ### 下次第一件事
+>
+> ```bash
+> cd F:/GItHub_Code/Wiki-Rag-Knowledge/backend
+> PYTHONIOENCODING=utf-8 ../.venv/Scripts/python.exe -m pytest tests/ -q   # 200 passed, 1 skipped
+> ```
+>
+> ### 已知边界（如实写）
+>
+> - 常驻池固定 12 条线程（`WRK_HTTP_THREADS` 可调）。池满时请求排队，不会扩容——
+>   这是刻意的：扩容就要建线程，就又会踩回 loader lock。
+> - 预热是 best-effort：`WRK_WARMUP=0` 可关；预热失败只记日志，不影响功能（只是首次任务会慢）。
+> - 若某个依赖**运行期**才第一次加载原生 DLL（新增库时可能出现），事件循环已经不会被它卡住，
+>   但那次请求会等 import 锁。新增依赖时请把模块名加进 `warmup.WARM_MODULES`。
+>
+> ---
+>
+> **历史快照：2026-11-01 10:10（v1.0.9）**（下面这段是上一轮的结论，保留作对比）
+>
+> ## 当前状态：可交付（v1.0.9 已发布：进程/锁稳定性 + 卡顿可观测性）
+>
+> | 项 | 结果 |
+> |---|---|
+> | 后端测试 | **192 passed, 1 skipped**（193 collected / 22 个文件；本轮新增 `test_procguard.py` 9 条、`test_lock_resilience.py` 3 条、`test_retry_semantics.py` 9 条） |
+> | 前端 | `npx tsc -b` 0 错误；`npx vite build` 成功 |
+> | 版本号 | `backend/app/main.py:24` 与 `frontend/package.json:3` 均为 `1.0.9` |
+> | 后端 sidecar | `frontend/release/win-unpacked/resources/backend/wrk-backend.exe`（11-01 09:52，含本轮全部后端改动） |
+> | 桌面目录版 | `frontend/release/win-unpacked/`（11-01 09:55 重建） |
+> | **NSIS 安装包** | **`frontend/release/wiki-rag-knowledge-1.0.9-x64-setup.exe`（131,759,187 B / 125.7 MB，11-01 09:55）+ 同名 `.blockmap`（136,957 B）** |
+> | 打包产物验收 | `scripts/verify/e2e-setup.mjs` 17 项（含主进程启动异常检查）：**17/17 通过**；`scripts/verify/no-orphan.ps1 -StartApp`（后端就绪后强杀 Electron 主进程）：静态检查 **7/7**，实机 python 子进程 **1.31s** 退出、bootloader 随后退出（空闲机器另两次采样 0.83s / 1.32s；机器在跑构建/杀软扫临时目录时会拖到 6–10s，但不会留下长期孤儿，见「已知遗留」） |
+> | **自动更新** | GitHub Release **v1.0.9**（2026-11-01 09:55，UTC 01:55:55，已 publish 非 draft）：安装包 131,759,187 B / blockmap 136,957 B / `latest.yml`（`version: 1.0.9`）。**1.0.8 → 1.0.9 检出实测**：已安装的 1.0.8 启动后日志命中 `Found version 1.0.9` → `Downloading update from …` → 拉两份 `.blockmap` 走差分（`%APPDATA%\wiki-rag-desktop\logs\main.log`，10:11）；匿名 `releases/latest/download/latest.yml` 返回 `version: 1.0.9`。仓库保持 public——私有仓库的 Release 资产匿名 404，更新器拿不到（`docs/UPDATE.md` §2A） |
+>
+> ### 本轮（11-01 凌晨）改了什么：修复 A–F
+>
+> 1. **A｜Electron 按进程树结束 sidecar**：旧版 `backend.kill()` 只杀到 PyInstaller 的 bootloader，真进程被系统过继后继续跑 Worker、长期占着 SQLite 写锁
+>    （症状：应用关了任务还在跑、重开就 `database is locked`）。现在 `hardKillTree()` 走 `taskkill /PID <pid> /T /F`（`main.cjs:366-391`）；
+>    `stopBackend()` 先 stdin EOF 礼后兵、给 1500ms 宽限、还活着才强杀整棵树，之后再扫一遍残留（`main.cjs:490-533`）；
+>    启动前 `killStaleBackends()` 用 `Get-CimInstance` 按 exe 路径 + `--data-dir` 精确锁定并收掉残留（`main.cjs:393-479`）；
+>    `process.on('exit')` 同步兜底（`main.cjs:811`）。Electron 把自身 pid 传给后端（`WRK_PARENT_PID`，`main.cjs:225`）。
+> 2. **B｜后端单实例守护**：新增 `backend/app/services/procguard.py`。数据目录 `backend.lock` 独占锁（`procguard.py:206-316`），
+>    Windows 只锁第 0 字节、JSON 从第 1 字节起写（`procguard.py:44-47`）；探活走 `OpenProcess` + `GetExitCodeProcess`，
+>    **不用** `os.kill(pid, 0)`（Windows 上那是 TerminateProcess，`procguard.py:94-116`）；抢不到锁而旧实例 `/api/health` 通时打
+>    `WRK_ATTACH`，Electron 直接复用已有后端（`procguard.py:286-298`、`main.cjs:252-262`）；父进程一消失就 `os._exit(0)`
+>    （`watch_parent`，`procguard.py:407-429` + `desktop_entry.py:63-70`），优雅关闭另有 5 秒硬退兜底（`desktop_entry.py:55`、`desktop_entry.py:107-117`）。
+>    锁文件**永不删**——unlink-while-locked 会让第二个实例「抢到锁」，单实例语义当场失效（`procguard.py:271-276`）。
+> 3. **C｜SQLite 写锁治理**：`busy_timeout` 分三档——交互 3s / worker 30s / 进度写 1s（`config.py:34-42`），
+>    两个 engine 分开建池、checkin 时复位（`db.py:56-108`）；worker 并发默认 2 → 1（`config.py:26`，SQLite 同时只允许一个写者）；
+>    `run_with_lock_retry()` 只对锁错误做指数退避 + 抖动重试（`db.py:143-163`）；`get_db()` 把锁错误翻成 503「数据库正忙」（`db.py:309-329`）；
+>    `WorkerSession.commit()` 只对「仅改了 task.stage/progress」的事务 best-effort（≤2 次、1s 等锁），业务写撞锁照常抛出（`db.py:200-302`）；
+>    上传改成先在暂存目录落盘 + 算 sha256、再进写事务，事务里只剩一次同盘 `os.replace`（`kbs.py:271-284`、`kbs.py:353-361`），
+>    并挪进线程池避免卡住事件循环（`kbs.py:216`）；审计 500ms 等锁、写不进去只记日志（`kbs.py:28`、`kbs.py:252-267`）。
+> 4. **D｜写锁看门狗 + `/api/diagnostics`**：常驻线程每 0.5s 用独立连接 `BEGIN IMMEDIATE` + `ROLLBACK` 探一次写锁（不写业务数据，`watchdog.py:305-339`）；
+>    被挡超过 250ms 就把全线程栈、打开中的事务、正在执行的语句、最近慢语句 dump 到 `DATA_DIR/logs/lock-watchdog.log`，
+>    同一分钟只 dump 一次（`watchdog.py:398-483`），解锁时补一行「阻塞持续 Xms」（`watchdog.py:342-363`）。
+>    `/api/diagnostics/lock`、`/api/diagnostics/process` 只给 admin（`diagnostics.py:84-95`，注册在 `main.py:116`），
+>    `snapshot()` 只读内存不查库，库正卡着也能返回（`watchdog.py:565-602`）；看门狗排在 `bootstrap_admin` 之前启动（`main.py:84`）。
+> 5. **E｜孤儿/写锁回归测试 + 验证脚本**：新增 `test_procguard.py` 9 条（不删锁文件、持有者还没写内容前也互斥、父进程死亡只触发一次……）、
+>    `test_lock_resilience.py` 3 条（外部持锁时读写仍有界、进度写撞锁不把任务判失败、上传不在文件 I/O 期间持写锁）、`test_retry_semantics.py` 9 条。
+>    `scripts/verify/no-orphan.ps1` 两种模式：默认静态检查（有没有 `taskkill /T`、有没有残留 `wrk-backend.exe`、procguard 是否接入），
+>    `-StartApp` 实机强杀 Electron 后断言 3s 内后端消失（`no-orphan.ps1:1-61`）；
+>    脚本先摘掉 `ELECTRON_RUN_AS_NODE`（本机全局设了它，Electron 会退化成纯 Node、起来就 exit=0），测完还原（`no-orphan.ps1:236-240`、`:311`），
+>    并且必须等到本次启动的 `WRK_READY`（Electron 把 sidecar 的 stderr 写进 `logs/main.log`）才动手——原来一看到 `wrk-backend.exe` 就强杀，
+>    那时 python 进程还没装好父进程守护，测出来是假红（`no-orphan.ps1:246-261`）。
+>    `scripts/diag/lock_probe.py` 把原来三个临时诊断脚本并成一个，默认只读复制真实库，指向真实数据目录时直接以退出码 2 收场（`lock_probe.py:1-42`）。
+> 6. **F｜前端卡顿可观测**：请求统一 60s 超时、ask 180s（`api.ts:234`、`api.ts:576`）；失败分 `http/timeout/offline/busy` 四类（`api.ts:137`），
+>    503 与 `database is locked` 统一翻成「后台正在写入，稍后自动恢复」（`api.ts:160-181`）并广播全局事件；`LockBanner` 用一条横幅说明
+>    「这些失败是同一个原因」（`LockBanner.tsx:15-72`，挂在 `Layout.tsx:232`）；任务卡每秒走一次心跳、30 秒无进展给浅色提示
+>    （`TaskList.tsx:17`、`TaskList.tsx:192`、`TaskList.tsx:213-247`）；关于页新增「后端诊断」卡（pid / 版本 / 服务地址 / 数据目录、
+>    重启后端确认弹窗、查看锁诊断日志，`AboutPage.tsx:327-414`、`AboutPage.tsx:186`）；`wrk:info` 开始上报 `backendPid`（`main.cjs:682`）；
+>    文档列表把「重试」从任务行挪到文档行（`DocumentsTab.tsx:120-130`、`DocumentsTab.tsx:249`）。
+> 7. **（同一轮 diff 里的附带改动）重试不再堆任务行**：`taskflow.requeue()` 原地回排并记 `payload.retry`（`taskflow.py:48-80`），
+>    任务/版本/文档/知识库状态统一由 `sync_running()` / `sync_failure()` 回写（`taskflow.py:84-140`）；
+>    新增 `POST /api/documents/{id}/reindex` 并合并历史重复排队（`kbs.py:480`）；`doc_out()` 增加 `latest_version`，
+>    文档列表按「最新上传的版本」显示状态（`serializers.py:122-142`）。
+>
+> ### 下次第一件事
+>
+> ```bash
+> cd F:/GItHub_Code/Wiki-Rag-Knowledge/backend
+> PYTHONIOENCODING=utf-8 ../.venv/Scripts/python.exe -m pytest tests/ -q   # 192 passed, 1 skipped
+>
+> cd ../frontend
+> npx tsc -b && npx vite build      # 类型检查 + 前端产物
+> node scripts/build.mjs            # 只有再改代码才需要重打
+> pwsh -File ../scripts/verify/no-orphan.ps1 -StartApp   # 强杀 Electron → 3s 内无 wrk-backend.exe
+> ```
+>
+> 已知遗留（如实写）：
+> - **「3 秒内自毁」的前提是后端已就绪**：父进程守护要等真正的 python 进程起来（PyInstaller 单文件解包约 10s）才挂上
+>   （`desktop_entry.py:152` → `procguard.watch_parent()`）。这段窗口内强杀 Electron，后端不会被守护立刻带走，而是靠 stdin EOF
+>   在约 12s 内自行退出，残留也会被下次启动的 `killStaleBackends()` 收掉（`main.cjs:454-479`）。所以 `no-orphan.ps1`
+>   改成等 `WRK_READY` 再强杀（`no-orphan.ps1:246-261`）；「3 秒」不是无条件成立的数字。
+> - **任务心跳只有前端一半**：任务卡的心跳是前端算的——`updated_at` 后端并不返回（`types.ts:255-261` 自己写着「后端目前还没返回它」），
+>   实际退到 `started_at` / `created_at`；「30 秒无进展」是前端按 `status|stage|progress` 签名本地计时（`TaskList.tsx:213-247`）。
+>   所以「worker 线程卡死」现在能被用户看见，但仍不会自动判定、也不会自动恢复；要自动恢复仍需给 task 加 `heartbeat_at` 列 + 监视线程。
+> - **`wiki_ready` 谓词仍有两份实现**：`retrieval.plan_route()` 内联了等价条件（`retrieval.py:560-566`），没有复用 `serializers.wiki_ready()`；
+>   靠 `backend/tests/test_wiki_ready.py` 防漂移。
+> - **看门狗探针自己也会抢写锁**：0.5s 一次 `BEGIN IMMEDIATE`（拿到立刻回滚），繁忙时增加一点争抢；`WRK_LOCK_WATCHDOG=0` 可整体关掉（`watchdog.py:49`）。
+>   诊断接口的鉴权要读一次用户表，库被长期占住时它自己也会等 `busy_timeout`（`diagnostics.py:9-11`），真卡死时直接看 `lock-watchdog.log` 更快。
+> - **单实例锁按数据目录生效**：`backend.lock` 只保证「同一数据目录一个后端」，不同数据目录可以各起一个（`procguard.py:65-67`）。
+> - **attach 复用来的后端退出时不会被杀**：`backendAttached` 为真时 `stopBackend()` 直接放手（`main.cjs:495-500`）——那是别人拉起的进程。
+> - 诊断日志会增长：`lock-watchdog.log` 超 5MB 滚动一次、只留一份 `.log.1`（`watchdog.py:60`、`watchdog.py:138-146`）。
+> - **自动更新依赖公开仓库**：`update-config.json` 用 GitHub provider，仓库是 public；改回 private 后匿名拉 `latest.yml` 会 404（`docs/UPDATE.md` §2A）。
+> - 构建产物不在 git 索引（`git ls-files frontend/release` 为 0）；别再往仓库里放安装包或临时探针。
+>
+> ---
+>
+> **上一版快照：2026-11-01 01:05（v1.0.8）**（内容原样保留作对比；其中「启动前清理 / 重试堆行」两条已在本轮处理，
+> 「运行时心跳」只补了前端一半，见顶部「已知遗留」）
+>
+> ### 11-01 01:05 当时状态：可交付（v1.0.8 已发布：安装自动关旧版 + 启动弹框修复 + 卡顿收尾）
+>
+> | 项 | 结果 |
+> |---|---|
+> | 后端测试 | **171 passed, 1 skipped**（172 collected / 19 个文件；新增 `test_resume_and_locks.py` 3 条、`test_responsive_during_embed.py` 2 条） |
+> | 前端 | `npx tsc -b` 0 错误；`npx vite build` 成功（59 modules） |
+> | 后端 sidecar | `frontend/release/win-unpacked/resources/backend/wrk-backend.exe`（56.7 MB，11-01 01:02，**含本轮全部后端改动**） |
+> | 桌面目录版 | `frontend/release/win-unpacked/`（11-01 01:02 重建，`resources/app.asar` 8.96 MB） |
+> | **NSIS 安装包** | **`frontend/release/wiki-rag-knowledge-1.0.8-x64-setup.exe`（131,697,679 B / 125.6 MB，11-01 01:02）+ 同名 `.blockmap`（136,973 B）** |
+> | 打包产物验收 | `scripts/verify/e2e-setup.mjs` 跑打包产物 **16/16 通过**；单实例专项 **5/5 通过**（第二实例 code=0 自行退出、无第二个 sidecar、日志只有一次「应用启动」、退出后 sidecar 回收）；弹窗输入框回归 **8/8**（1.0.1 上同一脚本复现：Base URL 只剩 1 个字符） |
+> | **自动更新** | GitHub Release **v1.0.8** 已发布（安装包 / blockmap / latest.yml，`latest.yml` 已指向 1.0.8）。1.0.1 → 1.0.2 完整链路实测通过（检查 → 检出 → 下载 133 MB → 状态「待安装」，6/6）；差分下载实测 1.0.2 → 1.0.3 只需 33.9 MB（25%）。**仓库已由 private 改为 public**（私有仓库的 Release 资产匿名 404，更新器拿不到）；回退命令 `gh repo edit guanmuya/wiki-rag-knowledge --visibility private`（回退后自动更新失效） |
+>
+> #### 10-31 那一轮改了什么（15 张卡）
+>
+> 1. **k121 `wiki_ready` 统一为单一口径**：`serializers.wiki_published_count()` / `wiki_ready()` 成为唯一判定入口
+>    （`serializers.py:36`、`serializers.py:58`），`kb_out()` / `kbs._index_status()` / `wiki.wiki_tree()` 三处共用
+>    （`serializers.py:103`、`kbs.py:143`、`wiki.py:40`）；`_index_status()` 的 `wiki_units` 退为信息字段。
+>    新增 `backend/tests/test_wiki_ready.py`（6 条）。
+> 2. **k123 历史消息落 `suggestions` / `refusal_reason`**：`chat.ask()` 写进 `route` 快照（`chat.py:160-161`），
+>    `serializers.message_out()` 输出这两个键，脏数据/老数据退 `[]` / `""`（`serializers.py:225-242`）；
+>    `backend/tests/test_refusal.py` 补 3 条。
+> 3. **k125 清死代码**：`bm25_score()`、`_unique_slug()` 删除；`build_wiki` 内联去重**刻意不查库**
+>    （查库会把已存在 slug 当冲突加后缀，等于每次重建都新建页面、幂等失效，`wiki.py:513-523`）；
+>    模块 docstring 改写为「跨库不是 RRF」（`retrieval.py:6-13`）。
+> 4. **k127 前端拒答口径统一**：`ChatPage` 不再用「没有证据」近似判拒答，只认后端 `insufficient`
+>    （`frontend/src/pages/ChatPage.tsx:602-604`）；`types.ts` 补 `SuggestionItem` / `suggestions` / `refusal_reason`；
+>    清掉 `formatDate` / `useDebounced` / `TASK_RUNNING_STATUSES` 等死代码。
+> 5. **k142 桌面稳定性**：`app.requestSingleInstanceLock()` 防双实例（`main.cjs:26-30`，第二实例退出并唤回窗口，
+>    `main.cjs:528-537`）；`will-navigate` 改 `isDevUrl()` / `isAppFileUrl()`，打包后只允许 `dist/` 内文件
+>    （`main.cjs:309-335`、`main.cjs:371-377`）；两处 `before-quit` 合并为一处（`quitting=true` + `stopBackend()`
+>    + `updater.dispose()`，`main.cjs:543-547`）；删掉被 git 跟踪的临时探针 `frontend/.tmp-probe-ud.mjs`。
+> 6. **k132 文档对齐**：`API.md`（`top_k` 双语义、kbs 列表无 `index`、preview 全字段、分页真相、历史消息字段）、
+>    `DESIGN.md`（IndexVersion 行号与字段、`wiki_ready` 单一口径、死代码已删）、`THESIS.md`、`README.md`、本节。
+> 7. **k166 构建错误分类**：`build.mjs` 新增「NSIS 安装包写入失败」分支（`build.mjs:147-158`），
+>    **刻意排在「代码签名失败」之前**（`build.mjs:159-161`）——makensis 打不开输出文件时，electron-builder 的尾巴里
+>    常带一句 signing 提示，以前会被误判成「没有证书」，实际是 `release/` 下同名文件被占用或残留半截文件。
+>    本次构建就踩到了这一条，处理后 22:31 重打成功。
+> 8. **k184 弹窗输入框丢焦点（用户报的真实缺陷）**：`ui.tsx` 的 `Modal` 把 `onClose`
+>    （内联箭头函数，每次 render 都是新身份）放进了 focus effect 的依赖，输入框每敲一个字
+>    → 父组件 re-render → effect 重跑 → `ref.current.focus()` 把焦点抢回弹窗容器。
+>    修复：`onClose` 改用 ref 保存，effect 依赖收成 `[open, dismissable]`，只在打开时聚焦一次
+>    （`frontend/src/components/ui.tsx:116-134`）。影响所有用 Modal 的表单（模型/供应商/知识库/文档/Wiki/用户）。
+>    验证：打包产物 8/8；同一脚本在 1.0.1 上 Base URL 只剩 `"h"`，复现原缺陷。
+>    回归脚本已留在仓库：`frontend/scripts/verify-modal-input.mjs`（跑打包产物，需 `env -u ELECTRON_RUN_AS_NODE`）。
+> 9. **k186 v1.0.2 发布 + 自动更新实测**：版本号 1.0.2（`frontend/package.json`、`backend/app/main.py:24`）；
+>    发布 GitHub Release v1.0.2；仓库 private → public（更新器匿名拉 `latest.yml` 必须公开）；
+>    用 1.0.1 打包产物实测「检查 → 检出 1.0.2 → 下载 133 MB → 待安装」6/6 通过。
+> 10. **k190 中断恢复 + 慢速向量化不再占写锁（用户报的真实缺陷）**：
+>    - `worker.recover_interrupted()`：启动时把上次被强杀留下的 `running` 任务改回 `queued`
+>      （阶段「等待恢复」），文档版本同步回排队；`attempts >= 3` 标 failed 并写明原因。
+>      调用点在 `main.lifespan` 的 `worker.start()` 之前。之前**完全没有这段逻辑**，
+>      关掉应用后任务永远停在「处理中」。
+>    - `ingest_version()`：把「清旧块 + 写新块」从向量化**之前**挪到之后。原来 DELETE
+>      一执行就开启 SQLite 写事务，整个 Ollama 向量化期间（本地慢时几分钟）写锁不释放，
+>      其它写请求全部卡到 busy_timeout(15s)，表现就是「整个软件卡住」。现在写事务只覆盖
+>      毫秒级插入，向量化期间每批更新进度（「向量化 32/200」）。
+>    - `build_wiki()`：页面/版本落库后先 commit，章节向量化完再 commit，写锁不再跟着
+>      LLM/embedding 网络调用走。
+>    - 新增 `backend/tests/test_resume_and_locks.py`（3 条，含「向量化进行中另一会话写入
+>      必须 < 1.2s」）；全量 **169 passed, 1 skipped**。打包 1.0.3 后首次引导 E2E 仍 16/16。
+> 11. **k193 列表表头吸顶（用户报）**：`.table-wrap` 的 `overflow-x: auto` 让它变成滚动容器，
+>    `thead th` 的 `position: sticky` 只相对它生效（而它不纵向滚动），页面滚动时表头照样滚走。
+>    改为 `overflow: visible`，新增 `.table-wrap--scroll` 给确实要内滚动的表格；表头
+>    `sticky; top: var(--topbar-h); z-index: 3`，吸在顶栏（54px）下方。打包产物验证：
+>    滚到 900/1400px 表头 top 恒为 54.0px，5/5 通过。
+>    顺带按 §UPDATE 2.2 瘦身：只保留 zh-CN/en-US 语言包 + 7z 最高压缩，安装包 133 → **125.6 MB**。
+> 12. **k196 多源更新（国内加速）**：`update-config.json` 支持 `sources: [...]`，按顺序
+>    `setFeedURL` + `checkForUpdates`，前一个源抛错就换下一个，下载只走命中的源；没配
+>    `sources` 时行为与旧版一致。`docs/UPDATE.md` §2.3 给了三种国内加速方案
+>    （阿里云 OSS/腾讯云 COS 默认域名免备案、Cloudflare R2、Worker 反代）与上传命令。
+>    验证：源 1 指 `http://127.0.0.1:9/`（坏）→ 日志「更新源不可用（坏源）：net::ERR_UNSAFE_PORT」
+>    →「切到备用源「GitHub」」→ 最终「已是最新」，4/4 通过。
+> 13. **k199 卡顿真凶：Wiki 章节向量化仍占写锁（用户报）**：`_index_sections()` 原来先
+>    `DELETE WikiSection`（开写事务）再逐节 `llm.embed()`，wiki 库重建时写锁横跨整段向量化；
+>    另一个 worker 的批量提交每 17.5s 撞一次 `database is locked`（用户日志实测），
+>    前端 4–6s 探测于是超时。修复：先算向量、再删旧章节 + 插入；证据写入提前 commit。
+>    前端 `request()` 加 60s 超时（ask 180s），不再无限转圈；关于页探测文案改为
+>    「N 秒内无响应（可能正在向量化/索引）」。新增 2 条回归（旧代码 2 failed，新代码 2 passed），
+>    全量 **171 passed, 1 skipped**。
+> 14. **k202 修复启动弹框（k196 的回归）**：多源重构后 `updater.init()` 末尾仍引用已删除的
+>    `feed` 变量 → 每次启动弹「应用启动失败 ReferenceError」。该行在 `schedule()` 之后，
+>    所以更新其实一直能用（多源回落测试 4/4 通过），只是弹框。改为 `describeFeed(sources[0]?.feed)`。
+>    E2E 增加第 17 项：读主进程日志，出现「启动失败：」/「未捕获异常」即判失败
+>    （Playwright 看不到原生对话框，之前 16 项全过却没发现）。1.0.7 E2E **17/17**。
+> 15. **k205 安装包自动关闭旧版本**：新增 `frontend/build/installer.nsh`，用 `customCheckAppRunning`
+>    替换默认逻辑——先 `taskkill`（礼貌退出），等 2 秒仍在就强杀应用，再强杀 `wrk-backend.exe`。
+>    根因是 1.0.6 那个启动失败原生模态框吞掉了 WM_CLOSE，安装器等不到退出。
+>    实测：运行中的应用收到 taskkill 后 3 秒内退出、sidecar 一并回收。
+>
+> #### 当时的下次第一件事（含当日已知遗留；现况以顶部快照为准）
+>
+> ```bash
+> cd F:/GItHub_Code/Wiki-Rag-Knowledge/backend
+> PYTHONIOENCODING=utf-8 ../.venv/Scripts/python.exe -m pytest tests/ -q   # 169 passed, 1 skipped
+>
+> cd ../frontend
+> npx tsc -b && npx vite build      # 类型检查 + 前端产物（59 modules）
+> node scripts/build.mjs            # 只有再改代码才需要重打；当前包已含 10-31 全部改动
+> ```
+>
+> 已知遗留（如实写）：
+> - **`wiki_ready` 谓词有两份实现**：`retrieval.plan_route()` 内联了等价条件（`retrieval.py:560-566`），
+>   没有复用 `serializers.wiki_ready()`——services 层不反向依赖 serializers，合并要单独设计。
+>   目前靠 `backend/tests/test_wiki_ready.py` 把「三处展示」和「`plan_route().used == "wiki"`」锁死防漂移。
+> - **历史消息的老数据没有 `suggestions` / `refusal_reason`**：`message_out()` 退成 `[]` / `""`，
+>   前端显示「无建议」而不是报错；本轮之前写入的消息补不回来（没存过）。
+> - `IndexVersion` 仍只写不读，不支持回滚；换 Embedding 只能全量重建。
+> - **只有「启动时恢复」，没有运行时心跳**：`recover_interrupted()` 在 lifespan 里回收上次
+>   残留的 `running` 任务；如果 worker 线程在本次运行中卡死（例如 HTTP 客户端永不超时），
+>   任务会一直停在 running 到下次重启。Ollama 请求有 `WRK_HTTP_TIMEOUT_READ=120s`，
+>   正常不会无限挂起。要做运行时心跳，需要给 task 加 `heartbeat_at` 列 + 监视线程，单独开卡。
+> - **自动更新依赖公开仓库**：`update-config.json` 用 GitHub provider，仓库已改为 public；若改回 private，
+>   匿名拉 `latest.yml` 会 404，更新检查报「更新源不可访问」（`docs/UPDATE.md` §2A）。
+> - 构建产物不在 git 索引（`git ls-files frontend/release` 为 0）；`frontend/.tmp-probe-ud.mjs` 已删除
+>   （硬编码本机路径的临时探针，git 里是删除状态）。别再往仓库里放安装包或临时探针。
+>
+> ---
+>
+> **上一次快照：2026-10-28 19:00**（内容保留在下方作对比；其中「`wiki_ready` 三口径 / 历史消息不落库 / 构建产物入库」
+> 三条遗留已在 10-31 处理，见顶部快照与本文件后文各条的「现况」）
+>
+> ### 10-28 当时状态：可交付（安装包已按当日代码重打）
 >
 > | 项 | 结果 |
 > |---|---|
@@ -13,7 +299,7 @@
 > | **NSIS 安装包** | **`frontend/release/企业知识库-1.0.0-x64-setup.exe`（131 MB，2026-10-28 18:51 重打）** |
 > | 首次启动引导 | 打包产物 Playwright 端到端验证：空数据目录 → `#/setup` → 建号 → 登录 → 企业名生效（`scripts/verify/e2e-setup.mjs`） |
 >
-> ### 本轮（10-28）改了什么
+> #### 10-28 那一轮改了什么
 >
 > 1. **Wiki 生成改为 Map-Reduce 分片归纳**（`backend/app/services/wiki.py`）
 >    - 全库每个分块都进入某一分片，片内用**全库 1-based 全局编号**，绝不片内重编号；
@@ -41,7 +327,7 @@
 >    截图见 `docs/screenshots/`（12 张，1440×900，无 console error）。
 > 10. **自动更新**（v1.0.1）：`electron-updater` + NSIS 差量包（`.blockmap`）。主进程 `electron/updater.cjs` 启动 8 秒后检查、之后每 4 小时一次；关于页新增「软件更新」卡片；更新源在 `electron/update-config.json`（默认 GitHub，仓库需公开；也可 `provider: generic` 指向自建静态目录）。构建会生成 `latest.yml` 并收集到 `release/updates/`；`node scripts/build.mjs --publish` 可直接发 GitHub Release。详见 `docs/UPDATE.md`。
 >
-> ### 下次第一件事
+> #### 当时的下次第一件事
 >
 > ```bash
 > cd F:/GItHub_Code/Wiki-Rag-Knowledge/backend
@@ -52,14 +338,15 @@
 > node scripts/build.mjs --pack     # 只要免安装目录，快速验证
 > ```
 >
-> 已知遗留（不影响交付）：`wiki_ready` 三处口径不完全一致（以 `plan_route` 为准）；历史消息不落 `suggestions/refusal_reason`；
-> `frontend/build/pyinstaller/**` 与 `release/**` 被 git 跟踪（构建产物入库，体积大）。
+> 已知遗留（10-28 当时的判断，**三条现均已处理**）：`wiki_ready` 三处口径不一致 → 10-31 统一（k121）；
+> 历史消息不落 `suggestions/refusal_reason` → 10-31 已落库（k123）；`frontend/build/pyinstaller/**` 与 `release/**`
+> 被 git 跟踪 → 现在 `git ls-files frontend/release` 为 0，`frontend/build` 只剩 3 个图标。
 >
 > ---
 >
 > 上一次快照：2026-10-27 17:45 · 用户关机，任务暂停
 
-## 总览（先读这一节，再按需查下面的分工细节）
+## 总览（2026-10-27 历史快照；当前结论以上方 10-31 快照为准）
 
 ### 当前状态：**打包产物已验证可运行**，可交付
 
@@ -131,23 +418,24 @@ env -u ELECTRON_RUN_AS_NODE "./release/win-unpacked/企业知识库.exe"
 
 ### 论文撰写注意（thesis-writer 取证结论）
 
-**以下描述与实现不一致，写论文前必读：**
+**以下描述与实现不一致，写论文前必读**（10-27 取证结论；第 3 条与「扩料」段已在 10-28 修掉，现况以顶部 10-31 快照为准）：
 
 1. **跨库融合不是 RRF**。`rrf_fuse()` 只用于**库内**（关键词 vs 向量）。
    跨库是 `(0.25 + coverage) × 1/(1+0.45×local_idx) × balance`。
    论文必须分两层写，否则评审对照代码会发现。
 2. **`coverage` 已对外输出**（本次已修），`/api/search/preview` 可拿到。
-3. **Wiki 与查询向量化的模型调用不计入 `CallStats`**：
-   `retrieval.py`、`wiki.py:205`、`routers/wiki.py` 三处 `llm.embed()` 未传 `stats`。
-   直接读 `usage.calls` 会系统性低估 Wiki 增强成本。**做成本实验时必须自己统计。**
+3. ~~**Wiki 与查询向量化的模型调用不计入 `CallStats`**~~（10-28 已修：五处 `llm.embed()` 全部传 `stats`，
+   见 `retrieval.py:604`、`wiki.py:421`、`routers/wiki.py:159`、`ingest.py:84`、`ingest.py:230`）。
+   成本口径以 `docs/API.md` 的 `usage` 表为准。
 4. **覆盖率不能当拒答判据**：无关查询仍返回 `coverage>0` 的证据。
    「无答案题」必须人工判定。
 5. **覆盖率与 rank 非单调**：「P0 工单」题 rank1 cov=0.38、rank2 cov=0.62。
    指标定义要把「库内名次」和「跨库覆盖率」分开写。
 
 **扩料做实验前必读**：demo 三库只有 25 个检索单元，撑不起 40–60 题。
-需要扩到 150–300 块。Wiki 采样窗口现在是 60（`TOPIC_SAMPLE_SIZE`），
-超出部分不进 Wiki 但可分块检索，且会在 `notes` 里明确说明。
+需要扩到 150–300 块。~~Wiki 采样窗口现在是 60（`TOPIC_SAMPLE_SIZE`），超出部分不进 Wiki~~
+（10-28 已改：Map-Reduce 分片后**全库每一块都进 Wiki**，`TOPIC_SAMPLE_SIZE = 60` 只剩「单片块数上限」
+的含义，见 `wiki.py:36-39`、`wiki.py:127-131`）。
 
 ---
 
@@ -443,9 +731,14 @@ CallStats: calls=0, prompt_tokens=0, completion_tokens=0, mode='offline'
 
 ### 三、文档与实现不一致之处（本次最有价值的产出，共 13 条）
 
-按「影响论文表述的严重程度」排序。前 4 条必须在写作时回避或改写，不能照抄注释。
+按「影响论文表述的严重程度」排序。**本节是 2026-10-27 的取证快照**：标题里标「已处理」的条目，后续轮次已经改了代码并同步文档，正文保留当时的取证原文作对比；标「现状」的是行为没改、但已在 `DESIGN.md` / `API.md` 写明口径的条目。未标注的请以当前代码为准。
 
-#### 不一致 1（严重）：`DEFAULT_CHUNK_OVERLAP = 120` 实际不生效，块间没有字符级重叠
+#### 不一致 1（已处理）：`DEFAULT_CHUNK_OVERLAP` 现在真正生效
+
+> 现况（10-28 已修）：`chunking.py:164-166` 用 `is None` 判断而非 `or`，`overlap=0` 是合法输入；
+> `flush(carry_overlap=True)` 在「同一标题内长度溢出」分支保留尾部 overlap 字符（`chunking.py:248-250`），
+> 标题/表格边界仍强制 `carry_overlap=False`（`chunking.py:203/209/219/226/233`）。
+> 也就是说：**同标题内确有字符级重叠，跨标题恒为 0**——可以照这个写，但不能写「所有相邻块都保留 120 字符」。
 
 `chunking.py:162` 写 `overlap = overlap or config.DEFAULT_CHUNK_OVERLAP`——传 0 会被替换成 120。
 但 `split_blocks` 内 **7 处 `flush()` 全部显式传 `carry_overlap=False`**（`chunking.py` 内
@@ -463,32 +756,42 @@ CallStats: calls=0, prompt_tokens=0, completion_tokens=0, mode='offline'
 **写作要求**：不能写「相邻块保留 120 字符重叠」。应写「同一标题内按段落聚合，块边界不重叠；
 超长段落按句切分时回退 1 句以避免句子被截断」。若论文需要 overlap 实验，必须先把参数接上。
 
-#### 不一致 2（严重）：`retrieval.py` 模块 docstring 说跨库用 RRF，实际不是
+#### 不一致 2（已处理）：模块 docstring 已改写成「跨库不是 RRF」
 
-docstring 第 6 行：「3. 跨库：每库先取 top N，再统一按 RRF 排名融合，避免大库占满候选。」
-实际 `retrieve()`（`retrieval.py:539-566`）跨库用的是：
+> 现况（k125）：`retrieval.py` 模块 docstring 第 6-13 行已改成分两层写——库内加权 RRF、
+> 库间「覆盖率 × 名次衰减」，并明写「写论文时把库间也写成『统一 RRF』是错的」。
+> 跨库融合的实际代码在 `retrieval.py:652-662`。
+
+10-27 取证时 docstring 第 6 行写的是：「3. 跨库：每库先取 top N，再统一按 RRF 排名融合，避免大库占满候选。」
+实际 `retrieve()`（`retrieval.py:652-662`）跨库用的是：
 
 ```
 score = (0.25 + coverage) × (1 / (1 + 0.45 × local_idx)) × balance
 balance = 1.0 if local_idx == 0 else 1 / (1 + 0.10 × kb_idx)
 ```
 
-`rrf_fuse()` 只在**库内**（关键词通道 vs 向量通道）使用。**跨库没有 RRF。**
+`rrf_fuse()`（`retrieval.py:264`）只在**库内**（关键词通道 vs 向量通道）使用。**跨库没有 RRF。**
 
 **写作要求**：第 6 章「检索与融合」必须分两层写——库内 = 加权 RRF；库间 = 覆盖率 × 名次衰减。
 这是全文最容易写错的一处，评审若对照代码会立刻发现。
 
-#### 不一致 3（严重）：`coverage` 不对外输出，`/api/search/preview` 拿不到
+#### 不一致 3（已处理）：`coverage` 已对外输出
 
-`Evidence.coverage` 是跨库融合的唯一跨库可比量，但 `Evidence.to_dict()`（`retrieval.py:253-275`）
-**没有输出 `coverage`**。`/api/search/preview` 的 `evidence[]` 里没有这个字段。
+> 现况：`Evidence.to_dict()` 现在含 `"coverage": round(self.coverage, 4)`（`retrieval.py:341`，
+> `to_dict()` 全量字段见 `retrieval.py:330-355`）。`/api/search/preview` 的 `evidence[]` 直接可读，
+> `stats["query_terms"]` 同时给出本次查询词（`retrieval.py:685`）。
 
-**影响**：实验里要复算覆盖率（可用 `stats["query_terms"]` + 证据 `text`/`heading` 自行计算），
-或给 `to_dict()` 加一行。**不能写「通过 preview 接口读取 coverage」。**
+10-27 取证时：`Evidence.coverage` 是跨库融合的唯一跨库可比量，但 `Evidence.to_dict()` 没有输出它，
+`/api/search/preview` 的 `evidence[]` 里也拿不到这个字段。
 
-#### 不一致 4（严重）：Wiki 与 Embedding 的模型调用不计入 `CallStats`
+#### 不一致 4（已处理）：查询向量化 / Wiki 章节向量化 / 人工校对重建都已计入 `CallStats`
 
-`llm.embed()` 的 `stats` 是可选参数，三处调用**没传**：
+> 现况：五处 `llm.embed()` 全部传 `stats`——`retrieval.py:604`（查询向量化）、
+> `wiki.py:421`（Wiki 章节向量化）、`routers/wiki.py:159`（人工校对后重建）、
+> `ingest.py:84`、`ingest.py:230`（文档入库）。成本流水落 `cost_records`，
+> 口径见 `docs/API.md` 的 `usage` 表与 `/api/kbs/{id}/cost`。
+
+10-27 取证时：`llm.embed()` 的 `stats` 是可选参数，三处调用没传：
 - `retrieval.py:506` `llm.embed(db, [query])` —— 查询向量化，发生在 `answering.answer()` 创建 `call_stats` **之前**；
 - `wiki.py:205` `llm.embed(db, texts)` —— Wiki 章节向量化；
 - `routers/wiki.py:154` —— 人工校对后重建章节向量。
@@ -499,24 +802,30 @@ balance = 1.0 if local_idx == 0 else 1 / (1 + 0.10 × kb_idx)
 「整理成本」实验若直接读 `usage`，会系统性低估 Wiki 增强的真实开销——而 Wiki 的成本恰恰主要来自
 章节向量化 + 页面生成。必须显式说明，或在实验脚本里用代理计数（embedding 批次数 × 批大小）。
 
-#### 不一致 5（中）：`bm25_score()` 是死代码
+#### 不一致 5（已处理）：`bm25_score()` 已删除
 
-`retrieval.py:51` 定义了单 term 的 `bm25_score(term, text, k1=1.4, b=0.72, avg_len=120.0)`，
-**全项目无任何调用**。`keyword_rank()` 内部自己内联了一套 tf/idf 计算（`k1=1.4, b=0.72` 硬编码在 88 行）。
+`retrieval.py` 里那个单 term 的 `bm25_score(term, text, k1=1.4, b=0.72, avg_len=120.0)` 本轮已删除（k125）——
+它全项目零调用，留着只会让人以为关键词通道用的是它。真实实现是 `keyword_rank()` 内联的那套 tf/idf
+（`k1=1.4`、`b=0.72` 硬编码）。
 
 **写作要求**：可以写「BM25 变体」，但要落到 `keyword_rank()` 的真实行为上：
 IDF 按候选语料实时计算、平均长度按语料计算、关键词字段命中 ×1.8、标题命中 +0.9、
-覆盖率加成 `×(1 + 0.18×(hits-1))`、命中门槛 `hits≥2 或 存在≥3 字长词`。不要引用 `bm25_score` 的默认 `avg_len=120.0`。
+覆盖率加成 `×(1 + 0.18×(hits-1))`、命中门槛 `hits≥2 或 存在≥3 字长词`。不要引用已删除的 `avg_len=120.0` 默认值。
 
-#### 不一致 6（中）：`_unique_slug()` 是死代码，同名主题会撞唯一约束
+#### 不一致 6（已处理）：`_unique_slug()` 已删除，去重改成内联且刻意不查库
 
-`wiki.py:178` 定义了 `_unique_slug()`（带 `-2`/`-3` 后缀去重），**从未被调用**。
-`build_wiki` 在 269 行直接用 `chunking.slugify(title)`，然后 `scalar_one_or_none()` 查页面。
-若两个主题产出同一 title → 同一 slug → 第二次插入触发 `uq_wiki_kb_slug` 唯一约束。
+`wiki.py` 里那个带 `-2`/`-3` 后缀的 `_unique_slug()` 本轮已删除（k125）。`build_wiki()` 现在内联去重
+（`wiki.py:513-523`）：只用本次生成内的 `taken` 集合判重，**刻意不查库**——查库会把「已存在的 slug」
+也当冲突加 `-2` 后缀，等于每次重建都新建页面，`slug` 复用与 `version_no` 递增（幂等）直接失效。
+代码里已写明「不要把这段抽成『查库避重名』的公共 helper」。
 
-#### 不一致 7（中）：Wiki 离线聚类的编号与 60 条采样不一致（真实缺陷，已实测复现）
+#### 不一致 7（已处理）：离线聚类编号与采样窗错位（已随 Map-Reduce 重写消失）
 
-`build_wiki`：`sample = chunks[:60]`，上下文和 `_build_context(sample, ids)` 都基于 sample；
+> 现况（10-28 随 Map-Reduce 重写）：`chunks[:60]` 采样窗已移除，`_cluster_topics_offline(entries)`
+> 与 LLM 主题归纳拿的是**同一份分片 entries**（`wiki.py:94`、`wiki.py:231`），编号范围天然一致；
+> 模型编造的编号会被 `valid = {idx for idx, _ in entries}` 过滤并挂回本片首块（`wiki.py:208`、`wiki.py:220`）。
+
+10-27 取证时：`build_wiki`：`sample = chunks[:60]`，上下文和 `_build_context(sample, ids)` 都基于 sample；
 但 `_cluster_topics_offline(chunks)` 传入的是**全量** `chunks`，返回的是**全量** 1-based 序号。
 
 库内 chunk 数 > 60 时，离线主题的编号会超出 sample 范围，`_build_context` 的
@@ -540,36 +849,59 @@ demo 三库只有 8/10/7 个 chunk，未触发。**做 Wiki 实验一旦扩料�
 > 实测 `pages_created=12`、`pages_skipped=0`，看不出问题——**这个 bug 只在「主题分布跨越第 60 块边界」时暴露**，
 > 所以扩料后必须专门构造这种语料来验证。
 
-#### 不一致 8（中）：`wiki_ready` 两处口径不同
+#### 不一致 8（已处理）：`wiki_ready` 已统一为单一口径
 
+> 现况（k121）：唯一判定入口是 `serializers.wiki_published_count()` / `wiki_ready()`（`serializers.py:36`、`serializers.py:58`），
+> `kb_out()`（`serializers.py:103`）、`kbs._index_status()`（`kbs.py:143`）、`wiki.wiki_tree()`（`wiki.py:40`）三处共用；
+> `_index_status()` 的 `wiki_units` 只剩信息意义。`plan_route()` 用等价谓词但独立实现（`retrieval.py:560-566`），
+> 由 `backend/tests/test_wiki_ready.py` 的 6 条测试锁死一致——**这是本轮唯一没合并的重复谓词，见「已知遗留」**。
+
+10-27 取证时：
 - `serializers.kb_out()`：`wiki_ready = 存在 status != draft 且 current_version_id 非空的 WikiPage`
 - `kbs.py:_index_status()`：`wiki_ready = WikiSection 计数 > 0`
 
 前者按页面、后者按章节。页面已发布但章节切不出来（正文不足 8 字符）时两者会矛盾。
 `plan_route()` 用的又是第三种判定（与 `kb_out` 同口径）。
 
-#### 不一致 9（中）：`top_k` 语义被静默改写
+#### 不一致 9（现状：语义未改，已在文档写明）
 
-`retrieval.retrieve(top_k=N)`：N 同时作为「每库候选数」和「最终条数」，但最终条数被
-`total = MAX_EVIDENCE if top_k is None else max(top_k, 3)` 兜底——**传 `top_k=1` 实际返回 3 条**。
+> 现况：`top_k` 仍是「每库候选数 + 最终名额」两用（`retrieval.py:596`、`retrieval.py:665`），
+> 本轮只把口径写清楚，没有改语义。`docs/API.md` 新增「top_k 的两个语义」小节，`DESIGN.md:274` 同步。
+> **注意 10-27 那句「传 `top_k=1` 实际返回 3 条」不准确**：`max(top_k, 3)` 抬的是最终名额上限，
+> 而每库候选同时被压到 1，单库时最终只返回 1 条。
+
+10-27 取证时：`retrieval.retrieve(top_k=N)`：N 同时作为「每库候选数」和「最终条数」，但最终条数被
+`total = MAX_EVIDENCE if top_k is None else max(top_k, 3)` 兜底。
 `AskIn.top_k` 在 `docs/API.md` 里没有说明这一下限。
 
-#### 不一致 10（中）：`IndexVersion` 只写不读
+#### 不一致 10（现状：仍只写不读）
+
+> 现况：没有变化。三处 `db.add(IndexVersion(...))` 仍在（`ingest.py:138`、`ingest.py:249`、`wiki.py:602`，
+> 模型见 `models.py:266`），全项目仍然没有任何查询读它。论文只能写「索引构建留痕」，不能写「索引版本管理与回滚」。
 
 模型定义、三处 `db.add(IndexVersion(...))` 都在，但**全项目没有任何查询使用它**
 （`grep IndexVersion` 只有 add 和 `seed_demo` 的 delete）。
 论文若写「索引版本管理」，须说明当前仅作审计留痕，未参与检索决策或回滚。
 
-#### 不一致 11（轻）：`docs/API.md` 的响应样例缺字段
+#### 不一致 11（已处理）：`docs/API.md` 的响应样例已补齐
 
-| 接口 | API.md 写的 | 实际返回 |
+> 现况：四行都已补进 `docs/API.md`——`ask` 的 `citations` / `denied` / `suggestions` / `refusal_reason`（`API.md:138`）、
+> `search/preview` 的 `denied` / `context_preview`（`API.md:139`）、`/api/meta` 的 `capabilities`（`API.md:37`）、
+> `GET /api/kbs` 列表不带 `index`（`API.md:54`、`API.md:77`）。
+
+10-27 取证时的差异：
+
+| 接口 | API.md 当时写的 | 实际返回 |
 | --- | --- | --- |
 | `POST /conversations/{id}/ask` | `{message, evidence, route, usage}` + `insufficient` | 另有 `citations: {cited, invalid, citation_ok}` 与 `denied: []` |
 | `POST /search/preview` | `{evidence, routes, stats}` | 另有 `denied: []` 与 `context_preview`（完整上下文全文） |
 | `GET /api/meta` | `{app_name, initialized, version, offline_models}` | 另有 `capabilities: {llm_configured, embedding_configured, worker_enabled}` |
 | `GET /api/kbs`（列表） | 结构示例里带 `index` | `index` 只有 `GET /api/kbs/{id}` 才有 |
 
-#### 不一致 12（轻）：`parser` 支持但上传白名单不支持的格式
+#### 不一致 12（现状：有意收窄，文档已写明）
+
+> 现况：行为没变（`config.py:27` 仍是 8 种；`kbs.py:189` 上传前按白名单拦截）。
+> `DESIGN.md:162` 已写成「解析层实现了 `.csv/.json/.html`，但不在上传白名单内，正常上传路径不可达」。
 
 `parser.PLAIN_SUFFIXES` 含 `.csv` / `.json`，`HTML_SUFFIXES` 含 `.html` / `.htm`，
 但 `config.ALLOWED_SUFFIXES` 不含这些 → 这几条解析分支在**正常上传路径下不可达**
@@ -578,7 +910,10 @@ demo 三库只有 8/10/7 个 chunk，未触发。**做 Wiki 实验一旦扩料�
 **写作要求**：第 4 章「多格式解析」的格式清单按 `ALLOWED_SUFFIXES` 的 8 种写，
 CSV/JSON/HTML 只能写成「解析层已实现但未开放上传」。
 
-#### 不一致 13（轻）：源码与测试里的密码是脱敏占位符
+#### 不一致 13（现状：占位符仍在，属脱敏而非缺陷）
+
+> 现况：没变，也不算缺陷——文档里出现的是 `{{PASSWORD_xxx}}` / `{{SECRET_xxx}}` 这类**占位符**，
+> 真值由环境注入。写论文/实验文档时不要照抄占位符当账号密码，写「由 `seed_demo.py` 的 `DEMO_PASSWORD` 决定」即可。
 
 `security.py` 文档字符串第 3–5 行、`seed_demo.py:23` `DEMO_PASSWORD`、
 `test_permissions.py` 的多个密码，都是 `{{PASSWORD_xxx}}` / `{{SECRET_xxx}}` 形式。
@@ -620,6 +955,9 @@ coverage 0.62 > 0.38，但 rank 更低——因为两者同属一个库，`rank_
 第 4 章实验四、第 5 章指标定义要分别说清「库内名次」和「跨库覆盖率」两个层次。
 
 ### 五、下次继续的第一步
+
+> 状态（10-31）：本节是 10-27 的待办清单。第 3 条提到的「扩到 60 块以上触发 Wiki 丢页」已随 Map-Reduce 重写消失
+> （见不一致 7 现况）；第 4 条的成本埋点已完成（见不一致 4 现况）。**仍未做的只有「扩料」和实验执行本身**。
 
 不要重新读全部代码——上面的实测数据和不一致清单已经够写 80% 的正文。直接：
 

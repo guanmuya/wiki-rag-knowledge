@@ -326,7 +326,7 @@ MRR    = mean(1 / 首个命中位置)               未命中记 0
 
 预期单元的匹配用 `evidence_id`（`"chunk:{chunk_id}"` 或 `"wiki:{page_version_id}:{heading}"`）。Wiki 组的预期单元应标注为页面 slug + 章节标题，因为 Wiki 证据的 `chunk_id` 为 `None`。
 
-**`top_k` 的两个口径**：`retrieve()` 里 `total = MAX_EVIDENCE if top_k is None else max(top_k, 3)`，传 `top_k=1` 实际返回 3 条；`/api/search/preview` 的请求体没有 `top_k` 字段，固定按 `MAX_EVIDENCE = 10` 返回。要算 Hit@1 必须从返回结果里自己截取第一条，不能依赖接口参数。
+**`top_k` 的两个口径**：`retrieve()` 里 `total = MAX_EVIDENCE if top_k is None else max(top_k, 3)`（`retrieval.py:665`），同时 `per_kb = top_k or PER_KB_CANDIDATES`（`retrieval.py:596`）——**同一个 `top_k` 也是每库候选数**。所以传 `top_k=1` 不是「必回 3 条」：最终名额被抬到 3，但每库只出 1 条候选，单库时最终只返回 1 条；要凑满 3 条得 `top_k >= 3` 或有多库各出 1 条。`/api/search/preview` 的请求体没有 `top_k` 字段，固定按 `MAX_EVIDENCE = 10` 返回。要算 Hit@1 必须从返回结果里自己截取第一条，不能依赖接口参数。
 
 ### 4.4 整理成本
 
@@ -611,7 +611,7 @@ label_correctness, label_evidence_support, reviewer
 
 **单机环境的外部效度**。所有耗时数据来自单机、单进程、SQLite。多人并发场景下的锁竞争（`busy_timeout=15000`）、Worker 队列积压、以及 Electron 与 sidecar 的进程开销都未测量。P95 延迟在生产并发下会显著高于实验值。
 
-**`top_k` 的语义混用**。`retrieve(top_k=N)` 里 N 同时是「每库候选数」和「最终条数」，且最终条数被 `max(top_k, 3)` 兜底；`/api/search/preview` 根本不接受 `top_k`。做 Hit@k 实验时若直接用 `top_k=k`，k=1 和 k=2 两组实际返回相同条数，会得出「k 不影响效果」的错误结论。
+**`top_k` 的语义混用**。`retrieve(top_k=N)` 里 N 同时是「每库候选数」（`retrieval.py:596`）和「最终条数上限」（`retrieval.py:665`，且被 `max(top_k, 3)` 兜底）；`/api/search/preview` 根本不接受 `top_k`。做 Hit@k 实验时若直接用 `top_k=k`：单库时 k=1 只返回 1 条、k=2 返回 2 条（都凑不满 3），而**多库（≥3 个）时 k=1 与 k=2 都会返回 3 条**，会得出「k 不影响效果」的错误结论。要严格控制返回条数，只能从结果里自己截断。
 
 **拒答判定的保守偏置**。开头 80 字命中拒答语句即判拒答，会误伤「半答半拒」的回答（先拒一句再补一半）。这可能让无答案题的召回偏高、可答题的「部分正确」偏低。实验设计上必须把「拒答判定」与「回答质量」分开标注，不能用一个 `insufficient` 字段同时代表两件事。
 
