@@ -64,9 +64,6 @@ def ingest_version(db: Session, task: models.Task, *, stats: llm.CallStats) -> d
         raise RuntimeError("解析后没有可索引的文本")
 
     _set_progress(db, task, "向量化", 55)
-    # 先清旧数据（重跑幂等）
-    db.execute(delete(models.Chunk).where(models.Chunk.doc_version_id == version.id))
-    db.flush()
 
     # 分块向量化的成本单独记一份，便于与 Wiki 成本分列
     chunk_stats = llm.CallStats()
@@ -88,6 +85,14 @@ def ingest_version(db: Session, task: models.Task, *, stats: llm.CallStats) -> d
             vecs = []
         for j, vec in enumerate(vecs):
             vectors[i + j] = vec
+        # 每批只写一行任务进度（短事务），让界面能看到「向量化 32/200」在动。
+        # 这里刻意不写业务数据：向量化是纯网络调用（本地 Ollama 可能几十秒一批），
+        # 不能让它落在写事务里（见下面「建立索引」处的说明）。
+        done = min(i + batch, len(texts))
+        task.stage = f"向量化 {done}/{len(texts)}"
+        task.progress = 55 + int(20 * done / len(texts))
+        db.add(task)
+        db.commit()
 
     # 立刻并入调用方总账，而不是等函数末尾再 merge。
     # 为什么：向量化之后的建索引/写库步骤仍可能抛异常（磁盘满、约束冲突…），
@@ -96,9 +101,18 @@ def ingest_version(db: Session, task: models.Task, *, stats: llm.CallStats) -> d
     stats.merge(chunk_stats)
 
     _set_progress(db, task, "建立索引", 80)
-    count = 0
-    for unit, vec in zip(units, vectors):
-        db.add(models.Chunk(
+    # 关键：**先在内存里把全部 Chunk 行构造好，再开写事务**。
+    #
+    # 这里踩过两次坑，是同一条规则的两个面：
+    # 1) `delete(Chunk)` 必须在向量算完之后（旧实现放在 embed 之前，写事务横跨
+    #    整个向量化，所有写请求都卡在写锁上）。
+    # 2) 构造 Chunk 行里的 `pack_vector` / `keyword_field` 也不能落在写事务里。
+    #    pack_vector 曾经懒加载 numpy，打包版首次 import 要加载 DLL，实测把
+    #    写锁占了 155 秒（v1.0.9 现场日志），期间界面所有写操作 3 秒超时。
+    # 所以顺序固定为：算向量 → 构造行（可能慢，但此时没有事务）→ 开事务 →
+    # DELETE 旧块 + INSERT 新块 → 一次提交。写事务只覆盖毫秒级的数据库写入。
+    rows = [
+        models.Chunk(
             kb_id=kb.id, doc_id=doc.id, doc_version_id=version.id, ordinal=unit.ordinal,
             text=unit.text, heading=unit.heading[:500], locator=unit.locator,
             keywords=chunking.keyword_field(unit.text),
@@ -107,8 +121,14 @@ def ingest_version(db: Session, task: models.Task, *, stats: llm.CallStats) -> d
             chunk_hash=chunking.chunk_hash(unit.text, unit.heading),
             kind=unit.kind,
             meta=json.dumps(unit.meta, ensure_ascii=False) if unit.meta else "{}",
-        ))
-        count += 1
+        )
+        for unit, vec in zip(units, vectors)
+    ]
+    count = len(rows)
+
+    db.execute(delete(models.Chunk).where(models.Chunk.doc_version_id == version.id))
+    db.flush()
+    db.add_all(rows)
     db.flush()
 
     if not kb.embed_signature:

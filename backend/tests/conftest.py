@@ -20,6 +20,9 @@ os.environ["WRK_DATA_DIR"] = _TMP
 os.environ["WRK_DB_PATH"] = str(Path(_TMP) / "test.sqlite3")
 os.environ["WRK_SECRET_DIR"] = str(Path(_TMP) / "secrets")
 os.environ["WRK_WORKER_ENABLED"] = "0"
+# 关掉启动预热：它会起后台线程，干扰「请求路径不创建线程」这类断言。
+# 预热机制本身由 test_freeze_during_task.py 单独覆盖。
+os.environ["WRK_WARMUP"] = "0"
 os.environ["WRK_ADMIN_USERNAME"] = "admin"
 os.environ["WRK_ADMIN_PASSWORD"] = "AdminTest#2026"
 os.environ["WRK_PBKDF2_ITER"] = "2000"     # 加速测试

@@ -37,7 +37,7 @@ def wiki_tree(kb_id: int, db: Session = Depends(get_db),
     return {
         "items": items, "total": len(items),
         "mode": kb.mode, "mode_label": serializers.MODE_LABEL.get(kb.mode, kb.mode),
-        "wiki_ready": any(p.status != models.WikiPageStatus.draft.value for p in pages),
+        "wiki_ready": serializers.wiki_ready(db, kb_id),
         "status_detail": kb.status_detail,
         "empty_reason": "" if pages else (
             "该知识库还没有生成 Wiki 页面。先上传文档并等待入库完成，再执行「重建 Wiki」。"

@@ -395,19 +395,6 @@ def _extract_evidence(page_md: str, picked: list[models.Chunk], all_chunks: list
     return links
 
 
-def _unique_slug(db: Session, kb_id: int, title: str, taken: set[str]) -> str:
-    base = chunking.slugify(title) or "page"
-    slug = base
-    n = 2
-    existing = {p.slug for p in db.execute(
-        select(models.WikiPage).where(models.WikiPage.kb_id == kb_id)).scalars()}
-    while slug in existing or slug in taken:
-        slug = f"{base}-{n}"
-        n += 1
-    taken.add(slug)
-    return slug
-
-
 def _index_sections(db: Session, kb: models.KnowledgeBase, page: models.WikiPage,
                     version: models.WikiPageVersion, *,
                     stats: llm.CallStats | None = None) -> int:
@@ -418,9 +405,10 @@ def _index_sections(db: Session, kb: models.KnowledgeBase, page: models.WikiPage
     可能有几十次向量化调用。之前没传 stats，等于把 Wiki 成本的大头完全丢掉，
     只剩主题归纳和页面生成那几次 chat 调用，测出来的「Wiki 整理成本」偏低数倍。
     """
-    db.execute(delete(models.WikiSection).where(models.WikiSection.page_version_id == version.id))
     units = chunking.split_markdown(version.content_md)
     if not units:
+        # 正文为空：清掉旧章节（这里没有向量化，DELETE 不会造成长锁）
+        db.execute(delete(models.WikiSection).where(models.WikiSection.page_version_id == version.id))
         return 0
     # 章节标题带上页面名，检索命中时能区分是哪个页面的哪一节，
     # 也避免不同页面的同名小节（如「审批流程」）互相混淆。
@@ -439,6 +427,10 @@ def _index_sections(db: Session, kb: models.KnowledgeBase, page: models.WikiPage
         if stats:
             stats.add_note(f"Wiki 章节向量化失败，仅建关键词索引：{exc}")
         vectors = []
+    # 清旧章节放在向量化之后：DELETE 会立刻开启 SQLite 写事务，
+    # 如果放在 embed 之前，整段章节向量化都占着写锁（本地 Ollama 可能几十秒），
+    # 另一个 worker 的提交就会 database is locked。现在写事务只覆盖毫秒级插入。
+    db.execute(delete(models.WikiSection).where(models.WikiSection.page_version_id == version.id))
     count = 0
     for unit, vec in zip(units, vectors or [None] * len(units)):
         db.add(models.WikiSection(
@@ -523,6 +515,10 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
                 f"《{title}》未能定位到有效原文片段（编号 {ids[:5]}），已跳过")
             continue
 
+        # 去重只针对「本次生成内的同名主题」，**刻意避开已存在的页面 slug**：
+        # 同一标题下次重建必须命中同一个 slug，才能复用页面、版本号递增（幂等）。
+        # 不要把这段抽成「查库避重名」的公共 helper：那会把已存在的 slug 也当冲突
+        # 加 -2/-3 后缀，等于每次重建都新建页面，幂等直接失效。
         slug = chunking.slugify(title) or f"page-{order+1}"
         if slug in taken:
             n = 2
@@ -590,6 +586,14 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
         page.status = models.WikiPageStatus.published.value
         db.add(page)
 
+        # 先把页面/版本落库再向量化章节。
+        # 章节向量化是网络调用（本地 Ollama 一批可能要几十秒），如果此时还开着
+        # 写事务，SQLite 的写锁会一直占着，别的写请求（提问、建会话、另一个
+        # worker）全部卡到 busy_timeout 超时——表现就是「软件卡住」。
+        # 代价是极端情况下可能留下「有版本但没章节」的页面：它不会让 wiki_ready
+        # 变真（还要看 current_version_id），下次重建会补齐，可以接受。
+        db.commit()
+
         # 证据关联：先清旧版本关联，只保留当前版本
         db.execute(delete(models.WikiEvidence).where(models.WikiEvidence.page_version_id == version.id))
         links = _extract_evidence(content, picked, chunks)
@@ -601,7 +605,14 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
             ))
             result.evidence_links += 1
 
+        # 证据先落库再向量化章节：`delete(WikiEvidence)` 一执行就开启写事务，
+        # 如果带着它去 embed 章节（本地 Ollama 可能几十秒），SQLite 写锁会一直被占着，
+        # 另一个 worker 的批量提交就会 `database is locked`，前端也会跟着卡。
+        db.commit()
+
         result.sections += _index_sections(db, kb, page, version, stats=stats)
+        # 本章节写完立刻提交，别把写锁带到下一页的 LLM 调用里
+        db.commit()
 
     # 2. 页面间关联：同主题共享证据的页面互为关联
     db.flush()

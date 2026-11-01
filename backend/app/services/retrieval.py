@@ -3,9 +3,14 @@
 设计要点（与论文的对照实验直接相关）：
 1. 分块库：关键词检索与语义检索各自排名，用 RRF 合并——不直接比较两种原始分数。
 2. Wiki 库：检索 Wiki 章节单元（页面正文按章节切分），命中后回挂该页面的原文证据。
-3. 跨库：每库先取 top N，再统一按 RRF 排名融合，避免大库占满候选。
-   注意（勿照抄注释写论文）：库内才是加权 RRF，库间是「覆盖率 × 名次衰减」，
-   见 `retrieve()` 里的 scored 计算。
+3. 跨库是**两层**，别写成一层：库内才用加权 RRF，库间不是 RRF。
+   - 库内：关键词通道与向量通道各出排名，按加权 RRF 合并（`rrf_fuse` +
+     `channel_weights`），不直接比较两种原始分数；
+   - 库间：按「覆盖率 × 名次衰减」排序，score = (0.25 + coverage) ×
+     1/(1 + 0.45 × local_idx) × balance，见 `retrieve()` 里的 scored 计算。
+    之所以不在库间用 RRF：各库的候选集互相独立，库间比较的是查询词覆盖率
+    这个 0~1 的绝对量（与检索方式、库大小无关），而不是名次本身。
+   写论文时把库间也写成「统一 RRF」是错的。
 4. Embedding 签名不一致的单元不参与语义检索（防止新模型查旧索引），但仍可用关键词命中。
 
 规模约束（实测，单库 1000 文档 ≈ 5000 块 / 213 万字符）：
@@ -61,16 +66,6 @@ def query_terms(text: str) -> list[str]:
         for i in range(len(run) - 1):
             add(run[i:i + 2])
     return terms[:64]
-
-
-def bm25_score(term: str, text: str, k1: float = 1.4, b: float = 0.72,
-               avg_len: float = 120.0) -> float:
-    """单 term 的 BM25 简化打分（idf 在调用侧按候选集近似）。"""
-    tf = text.count(term)
-    if tf == 0:
-        return 0.0
-    dl = max(len(text), 1)
-    return tf * (k1 + 1) / (tf + k1 * (1 - b + b * dl / avg_len))
 
 
 def keyword_rank(rows: Iterable[tuple[int, str, str]], query: str, *,

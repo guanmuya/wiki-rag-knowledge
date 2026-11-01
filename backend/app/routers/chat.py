@@ -153,6 +153,12 @@ def ask(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
     persisted_route = dict(result["route"])
     persisted_route["insufficient"] = result["insufficient"]
     persisted_route["usage"] = result["usage"]
+    # 拒答的结构化建议与判定原因同样要落库：只存 insufficient 的话，
+    # 刷新页面后「本次检索到这些资料 / 你可以试试这样问」整块消失，
+    # 前端只能拿「evidence 为空」去猜，猜错了就把正常回答也显示成拒答。
+    # 只加键，不动已有键。
+    persisted_route["suggestions"] = result.get("suggestions") or []
+    persisted_route["refusal_reason"] = result.get("refusal_reason") or ""
     answer_msg = models.Message(
         conversation_id=conv.id, role="assistant", content=result["content"],
         kb_ids=json.dumps([kb.id for kb in allowed]),

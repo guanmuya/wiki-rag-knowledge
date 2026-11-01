@@ -11,8 +11,15 @@ from sqlalchemy import func, select
 
 from . import config, models, security
 from .db import SessionLocal, init_db
-from .routers import auth, chat, kbs, settings, setup, wiki
-from .services import worker
+# 线程池补丁必须在 routers 之前打：FastAPI 注册同步端点时会把
+# `run_in_threadpool` 抓成 functools.partial，晚一步就只改了名字、抓走的还是
+# anyio 那个「懒建线程」的版本。见 services/threadpool.py 的事故说明。
+from .services import threadpool
+
+threadpool.install()
+
+from .routers import auth, chat, diagnostics, kbs, settings, setup, wiki  # noqa: E402
+from .services import warmup, watchdog, worker  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,7 +28,7 @@ logging.basicConfig(
 log = logging.getLogger("wrk")
 
 APP_NAME = "企业知识库文档整理与问答系统"
-VERSION = "1.0.1"
+VERSION = "1.0.10"
 
 
 def bootstrap_admin() -> None:
@@ -78,14 +85,31 @@ def needs_setup() -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 常驻线程池要在开始服务之前建好：之后所有同步端点/同步依赖都跑在
+    # 这批线程上，事件循环再也不会在请求路径上 `Thread.start()`
+    # （那正是「有任务在处理时整个软件卡住」的直接原因）。
+    threadpool.start()
     init_db()
-    bootstrap_admin()
-    worker.start()
-    log.info("%s v%s 启动完成", APP_NAME, VERSION)
+    # 看门狗要在任何业务写入之前起来：bootstrap_admin / 任务回收 / worker
+    # 都可能撞上写锁，起来晚了这些阶段就仍然没有现场可查。
+    watchdog.start()
     try:
+        bootstrap_admin()
+        # 先回收上次被强杀留下的「处理中」任务，再启动 worker：
+        # 否则这些任务永远不会被领取，用户看到文档一直卡在「处理中」。
+        recovered = worker.recover_interrupted()
+        if recovered:
+            log.info("已恢复 %d 个上次未完成的任务", recovered)
+        # 预热重模块：daemon 线程，不阻塞启动、不碰数据库。
+        # 目的是让用户第一次上传文档时不必现场加载原生 DLL
+        # （打包版首次加载要拿 Windows loader lock，杀软扫描时能到几十秒）。
+        warmup.start()
+        worker.start()
+        log.info("%s v%s 启动完成", APP_NAME, VERSION)
         yield
     finally:
         worker.stop()
+        watchdog.stop()
 
 
 app = FastAPI(title=APP_NAME, version=VERSION, lifespan=lifespan)
@@ -103,6 +127,8 @@ app.include_router(kbs.router, prefix="/api")
 app.include_router(wiki.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
+# 诊断接口（admin）：卡住时用来取证，见 routers/diagnostics.py
+app.include_router(diagnostics.router, prefix="/api")
 
 
 @app.get("/api/meta")

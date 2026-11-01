@@ -265,17 +265,30 @@ def active_embedding(db: Session) -> tuple[models.ModelConfig | None, models.Pro
 
 # ------------------------------------------------------------------ 向量工具
 def pack_vector(vec: list[float]) -> str:
-    import numpy as np
-    arr = np.asarray(vec, dtype="float32")
+    """把向量打包成 base64（float32 小端，与历史数据逐字节兼容）。
+
+    为什么不用 numpy：这条函数在入库循环里逐块调用，而 numpy 是**懒加载**的。
+    打包版首次 `import numpy` 要去加载 `_multiarray_umath.pyd` 和 OpenBLAS，
+    Windows 上必须拿 loader lock —— 实测曾把 SQLite 写锁占了 155 秒，用户看到
+    的就是「任务处理中整个软件卡住」（见 services/threadpool.py 的事故说明）。
+    这里只需要把 float32 写进字节串，stdlib 的 array 就够了：
+    同样 4 字节、同样本机小端，读回来的值与 numpy 版本完全一致。
+    """
+    import array
+
+    arr = array.array("f", (float(v) for v in vec))
     return base64.b64encode(arr.tobytes()).decode("ascii")
 
 
 def unpack_vector(blob: str | None) -> list[float] | None:
+    """pack_vector 的逆操作；同样不依赖 numpy（原因见上）。"""
     if not blob:
         return None
-    import numpy as np
-    raw = base64.b64decode(blob.encode("ascii"))
-    return np.frombuffer(raw, dtype="float32").tolist()
+    import array
+
+    arr = array.array("f")
+    arr.frombytes(base64.b64decode(blob.encode("ascii")))
+    return arr.tolist()
 
 
 def normalize(vec: Iterable[float]) -> list[float]:

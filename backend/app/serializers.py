@@ -32,6 +32,34 @@ def iso(dt) -> str | None:
     return dt.isoformat() if dt else None
 
 
+# ------------------------------------------------------------------ wiki_ready 单一口径
+def wiki_published_count(db: Session, kb_id: int) -> int:
+    """「已发布且有正文版本」的 Wiki 页面数——全项目唯一的 wiki_ready 判定口径。
+
+    为什么必须集中一处：这个判定原本有三个各写一套的版本
+    （`kb_out()`、`kbs._index_status()`、`wiki.wiki_tree()`），
+    同一个知识库在不同接口上会给出相反结论——列表页说「已就绪」、
+    详情页说「未生成」、Wiki 页又说「已就绪」，用户无法判断该信哪个。
+    更糟的是 `_index_status()` 按 `WikiSection` 计数，草稿页和
+    「发布了但切不出章节」的空页都会被算成就绪，而那两类页面检索侧根本用不到。
+
+    判定标准与 `retrieval.plan_route()` 严格一致：
+    `status != draft` **且** `current_version_id` 非空。
+    """
+    return db.execute(
+        select(func.count(models.WikiPage.id)).where(
+            models.WikiPage.kb_id == kb_id,
+            models.WikiPage.status != models.WikiPageStatus.draft.value,
+            models.WikiPage.current_version_id.is_not(None),
+        )
+    ).scalar() or 0
+
+
+def wiki_ready(db: Session, kb_id: int) -> bool:
+    """`wiki_published_count() > 0` 的布尔视图，供只关心「能不能用 Wiki」的调用方。"""
+    return wiki_published_count(db, kb_id) > 0
+
+
 def user_out(db: Session, u: models.User) -> dict:
     grants = []
     if u.role == models.Role.employee.value:
@@ -65,13 +93,7 @@ def kb_out(db: Session, kb: models.KnowledgeBase, *, my_level: str | None = None
     page_count = db.execute(
         select(func.count(models.WikiPage.id)).where(models.WikiPage.kb_id == kb.id)
     ).scalar() or 0
-    published = db.execute(
-        select(func.count(models.WikiPage.id)).where(
-            models.WikiPage.kb_id == kb.id,
-            models.WikiPage.status != models.WikiPageStatus.draft.value,
-            models.WikiPage.current_version_id.is_not(None),
-        )
-    ).scalar() or 0
+    published = wiki_published_count(db, kb.id)
     return {
         "id": kb.id, "name": kb.name, "description": kb.description, "mode": kb.mode,
         "mode_label": MODE_LABEL.get(kb.mode, kb.mode),
@@ -88,23 +110,36 @@ def kb_out(db: Session, kb: models.KnowledgeBase, *, my_level: str | None = None
     }
 
 
+def _version_brief(v: models.DocumentVersion) -> dict:
+    return {
+        "id": v.id, "version_no": v.version_no, "status": v.status,
+        "status_label": TASK_STATUS_LABEL.get(v.status, v.status),
+        "status_detail": v.status_detail, "chunk_count": v.chunk_count,
+        "text_chars": v.text_chars, "created_at": iso(v.created_at),
+    }
+
+
 def doc_out(db: Session, d: models.Document) -> dict:
     version = None
     if d.current_version_id:
         v = db.get(models.DocumentVersion, d.current_version_id)
         if v:
-            version = {
-                "id": v.id, "version_no": v.version_no, "status": v.status,
-                "status_label": TASK_STATUS_LABEL.get(v.status, v.status),
-                "status_detail": v.status_detail, "chunk_count": v.chunk_count,
-                "text_chars": v.text_chars, "created_at": iso(v.created_at),
-            }
+            version = _version_brief(v)
+    # 最新版本 ≠ 当前生效版本：新版本还在解析/失败时，current_version 仍是上一版。
+    # 文档列表必须能看出「最新那一版」的真实状态，否则会出现
+    # 「任务显示失败、文档显示成功」这种自相矛盾。
+    latest = db.execute(
+        select(models.DocumentVersion)
+        .where(models.DocumentVersion.doc_id == d.id)
+        .order_by(models.DocumentVersion.version_no.desc())
+    ).scalars().first()
     return {
         "id": d.id, "kb_id": d.kb_id, "filename": d.filename, "suffix": d.suffix,
         "size_bytes": d.size_bytes, "mime": d.mime,
         "status": d.status, "status_label": STATUS_LABEL.get(d.status, d.status),
         "status_detail": d.status_detail,
         "created_at": iso(d.created_at), "current_version": version,
+        "latest_version": _version_brief(latest) if latest else None,
     }
 
 
@@ -122,6 +157,14 @@ def task_out(db: Session, t: models.Task) -> dict:
         result = json.loads(t.result or "{}")
     except ValueError:
         result = {}
+    # 重试不再新建任务行，重试次数与上次失败原因记在 payload.retry 上，
+    # 这里提到顶层，前端不必再解包（任务列表显示「手动重试 N 次」）。
+    try:
+        payload = json.loads(t.payload or "{}")
+    except ValueError:
+        payload = {}
+    retry = payload.get("retry") if isinstance(payload, dict) else None
+    retry = retry if isinstance(retry, dict) else {}
     return {
         "id": t.id, "kind": t.kind, "kind_label": TASK_LABEL.get(t.kind, t.kind),
         "status": t.status, "status_label": TASK_STATUS_LABEL.get(t.status, t.status),
@@ -129,6 +172,8 @@ def task_out(db: Session, t: models.Task) -> dict:
         "kb_id": t.kb_id, "kb_name": kb_name, "doc_id": t.doc_id, "doc_name": doc_name,
         "doc_version_id": t.doc_version_id,
         "error": t.error, "attempts": t.attempts, "result": result,
+        "retry_count": int(retry.get("count") or 0),
+        "last_error": retry.get("last_error") or "",
         # 只加字段：把成本从 result 里提到顶层，前端不必再解包
         # result 结构（result 的形态会随任务类型变化，顶层字段更稳）。
         "usage": result.get("usage") or {},
@@ -198,6 +243,14 @@ def message_out(m: models.Message) -> dict:
 
     route = _load(m.route, {})
     evidence = _load(m.evidence, [])
+    # 老消息（suggestions / refusal_reason 还没落库时写入的）与损坏数据都要能读：
+    # 类型不对就退回缺省值，绝不让一条历史消息把整个会话接口打挂。
+    suggestions = route.get("suggestions")
+    if not isinstance(suggestions, list):
+        suggestions = []
+    refusal_reason = route.get("refusal_reason")
+    if not isinstance(refusal_reason, str):
+        refusal_reason = ""
     return {
         "id": m.id, "role": m.role, "content": m.content,
         "kb_ids": _load(m.kb_ids, []), "evidence": evidence,
@@ -206,6 +259,10 @@ def message_out(m: models.Message) -> dict:
         # 否则刷新页面后统计信息全部丢失，前端只能靠猜。
         "insufficient": bool(route.get("insufficient", False)),
         "usage": route.get("usage", {}),
+        # 与当次 ask 返回完全等价：拒答建议区块、判定原因都要能从历史读回，
+        # 否则刷新一次页面，用户看到的就是一条没有出路的「证据不足」。
+        "suggestions": suggestions,
+        "refusal_reason": refusal_reason,
     }
 
 

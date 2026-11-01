@@ -6,13 +6,18 @@
    来自库内真实文本——不能是编的示例问题；
 3. 正常回答不得被误判成拒答（带合法引用就不判），否则用户会莫名其妙收到
    「资料不足」。
+
+另外锁 k123：`suggestions` / `refusal_reason` 必须随消息落库，
+刷新页面后从历史读回来的内容与当次 ask 返回完全一致（老数据返回缺省值）。
 """
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
 
+from app import models
 from app.services import answering, llm, worker
 
 
@@ -166,3 +171,107 @@ def test_empty_kb_refusal_gives_fallback_hint(app_client, admin_headers):
     assert data["content"].startswith(answering.REFUSAL_LEAD)
     assert answering.FALLBACK_HINT in data["content"]
     assert data["evidence"] == []
+
+
+# ---------------------------------------------------------------- k123 历史消息
+def _ask_with_conv(app_client, admin_headers, kb: dict, question: str) -> tuple[int, dict]:
+    """与 `_ask` 相同，但把会话 id 一起返回，便于再读一次历史。"""
+    conv = app_client.post("/api/conversations", headers=admin_headers,
+                           json={"title": "历史一致性", "kb_ids": [kb["id"]]}).json()
+    r = app_client.post(f"/api/conversations/{conv['id']}/ask", headers=admin_headers,
+                        json={"question": question})
+    assert r.status_code == 200, r.text
+    return conv["id"], r.json()
+
+
+def _history_assistant(app_client, admin_headers, cid: int) -> dict:
+    detail = app_client.get(f"/api/conversations/{cid}", headers=admin_headers)
+    assert detail.status_code == 200, detail.text
+    msgs = [m for m in detail.json()["messages"] if m["role"] == "assistant"]
+    assert msgs, "会话里没有助手消息"
+    return msgs[-1]
+
+
+def test_refusal_history_keeps_suggestions_and_reason(app_client, admin_headers, monkeypatch):
+    """拒答一次 → 从历史读回的消息与当次返回等价。
+
+    修复前 `ask()` 只落库 insufficient / usage，刷新页面后建议区块整块消失，
+    前端只能靠「evidence 为空」去猜，猜错了会把正常回答也显示成拒答。
+    """
+    kb = _kb_with_doc(app_client, admin_headers)
+
+    def fake_chat(db, messages, **kwargs):
+        return "现有资料不足以回答这个问题。资料里没有关于量子计算机退相干时间的内容。"
+
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    cid, data = _ask_with_conv(app_client, admin_headers, kb, "量子计算机的退相干时间是多少")
+    assert data["insufficient"] is True
+    assert data["suggestions"], "拒答当次就应该给出建议"
+
+    hist = _history_assistant(app_client, admin_headers, cid)
+    assert hist["insufficient"] is True
+    assert hist["refusal_reason"] == data["refusal_reason"]
+    assert hist["refusal_reason"], "历史消息必须能读回判定原因，否则无法排查误判"
+    assert hist["suggestions"] == data["suggestions"], (
+        f"历史建议与当次返回不一致：{hist['suggestions']} != {data['suggestions']}")
+    assert hist["content"] == data["content"], "历史正文应与当次返回一致"
+    for item in hist["suggestions"]:
+        assert item["kind"] in ("resource", "question")
+        assert item["title"]
+
+
+def test_normal_answer_history_has_empty_defaults(app_client, admin_headers, monkeypatch):
+    """正常回答：历史消息里两个字段分别是 [] 与 ""，不是 None 也不是残留值。"""
+    kb = _kb_with_doc(app_client, admin_headers)
+
+    def fake_chat(db, messages, **kwargs):
+        return "一线城市住宿上限为 600 元每晚，超标部分由个人承担。[1]"
+
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    cid, data = _ask_with_conv(app_client, admin_headers, kb, "一线城市住宿上限是多少")
+    assert data["insufficient"] is False
+
+    hist = _history_assistant(app_client, admin_headers, cid)
+    assert hist["insufficient"] is False
+    assert hist["suggestions"] == []
+    assert hist["refusal_reason"] == ""
+
+
+def test_legacy_message_without_new_keys_reads_defaults(app_client, admin_headers, db_session):
+    """老数据（route 里没有 suggestions / refusal_reason）+ 损坏的 route 都不许炸。"""
+    conv = app_client.post("/api/conversations", headers=admin_headers,
+                           json={"title": "老数据", "kb_ids": []}).json()
+
+    # 1) 旧版本写下的消息：route 只有 insufficient / usage
+    db_session.add(models.Message(
+        conversation_id=conv["id"], role="assistant", content="旧版本写下的回答",
+        kb_ids="[]", evidence="[]",
+        route=json.dumps({"insufficient": True, "usage": {}, "kb_routes": []}),
+    ))
+    # 2) 损坏的 route：整个会话接口不能因为一条坏消息 500
+    db_session.add(models.Message(
+        conversation_id=conv["id"], role="assistant", content="route 不是合法 JSON",
+        kb_ids="[]", evidence="", route="{not json",
+    ))
+    # 3) 类型不对：suggestions 存成了字符串、refusal_reason 存成了数字
+    db_session.add(models.Message(
+        conversation_id=conv["id"], role="assistant", content="字段类型不对",
+        kb_ids="[]", evidence="[]",
+        route=json.dumps({"insufficient": False, "suggestions": "坏值",
+                          "refusal_reason": 7}),
+    ))
+    db_session.commit()
+
+    detail = app_client.get(f"/api/conversations/{conv['id']}", headers=admin_headers)
+    assert detail.status_code == 200, detail.text
+    by_content = {m["content"]: m for m in detail.json()["messages"]}
+
+    legacy = by_content["旧版本写下的回答"]
+    assert legacy["suggestions"] == []
+    assert legacy["refusal_reason"] == ""
+    assert legacy["insufficient"] is True, "老字段仍要按原语义读出来"
+
+    for content in ("route 不是合法 JSON", "字段类型不对"):
+        msg = by_content[content]
+        assert msg["suggestions"] == []
+        assert msg["refusal_reason"] == ""

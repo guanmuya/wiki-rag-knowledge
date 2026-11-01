@@ -19,7 +19,29 @@ DATABASE_URL = os.getenv("WRK_DATABASE_URL", f"sqlite:///{DB_PATH.as_posix()}")
 # 单机首版：进程内 Worker 线程 + 数据库任务表。
 WORKER_ENABLED = os.getenv("WRK_WORKER_ENABLED", "1") == "1"
 WORKER_POLL_SECONDS = float(os.getenv("WRK_WORKER_POLL_SECONDS", "1.0"))
-WORKER_CONCURRENCY = int(os.getenv("WRK_WORKER_CONCURRENCY", "2"))
+# 默认 1：SQLite 同时只允许一个写者，多开 worker 线程并不会更快——它们只会在
+# 写锁上互相排队，把「一次阻塞」放大成多次超时（日志里那种每 17.5s 一条
+# database is locked 的循环，就是两个 worker 在抢同一把锁）。真要并行请先换
+# 成 Postgres 再调大这个值。
+WORKER_CONCURRENCY = int(os.getenv("WRK_WORKER_CONCURRENCY", "1"))
+
+# ---- SQLite 写锁等待（「整个软件卡住」的直接旋钮）
+# 为什么分两档：交互请求（列知识库、看任务、登录审计）宁可快速失败也不能让
+# 界面卡住——3 秒还拿不到锁就返回「数据库正忙」，前端提示用户重试即可；
+# worker 的写是后台任务，多等一会儿无所谓，等到了就不必把任务判失败。
+# 旧版一刀切 15000ms：任何一次外部持锁都会把 UI 卡满 15 秒，前端 4 秒超时后
+# 报「后端不可用」，用户只能强关应用。
+BUSY_TIMEOUT_INTERACTIVE = int(os.getenv("WRK_BUSY_TIMEOUT_INTERACTIVE", "3000"))
+BUSY_TIMEOUT_WORKER = int(os.getenv("WRK_BUSY_TIMEOUT_WORKER", "30000"))
+# 任务进度写（tasks.stage/progress）单独一档，刻意很短：它是 best-effort，
+# 丢了只是界面少刷新一次。若沿用 worker 档，最坏情况是 30s × 重试次数 =
+# 150s 全耗在一条进度上，worker 线程等于被按停，而它本可以继续干活。
+# 配合「进度写最多重试 2 次」，单次进度写最坏约 2 秒（见 db.WorkerSession.commit）。
+BUSY_TIMEOUT_PROGRESS = int(os.getenv("WRK_BUSY_TIMEOUT_PROGRESS", "1000"))
+# 拿不到锁时的重试次数（指数退避 + 抖动）。这是 busy_timeout 之外的兜底，
+# 总耗时远小于一次 busy_timeout，别调成几十次。
+LOCK_RETRY_ATTEMPTS = int(os.getenv(
+    "WRK_LOCK_RETRY_ATTEMPTS", os.getenv("WRK_LOCK_RETRY", "5")))
 
 # 上传限制
 MAX_UPLOAD_MB = int(os.getenv("WRK_MAX_UPLOAD_MB", "50"))
