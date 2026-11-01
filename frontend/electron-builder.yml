@@ -15,8 +15,15 @@ directories:
   output: release              # 安装包/解包产物输出到 release/，避免与 vite 的 dist/ 互相污染
 
 # 压缩级别是顶层选项（不是 nsis 的子项）。
-# normal：打包快；maximum：体积小但慢很多。后端 exe 已 ~57MB，用 normal 平衡。
-compression: normal
+# maximum：体积优先（安装包更小，用户下载更快），代价是构建多花几分钟。
+# 这是「更新慢」的主要可控项之一：包越小，GitHub 源上的下载时间线性下降。
+compression: maximum
+
+# Electron 自带 55 个 locale（解包约 41 MB），桌面版只服务中文用户，
+# 只留中文/英文，其余 53 个不打包——直接减小安装包，且不影响界面语言。
+electronLanguages:
+  - zh-CN
+  - en-US
 
 # ---- 打进 asar 的文件 ----
 # 只放运行时真正需要的：前端静态资源 + Electron 主进程/preload。
@@ -75,6 +82,8 @@ win:
 
 nsis:
   oneClick: false                          # 走向导，允许用户改安装目录
+  # 安装前自动关闭运行中的应用（先礼后兵），避免弹「无法关闭，请手动关闭后重试」
+  include: build/installer.nsh
   perMachine: false                        # 默认装到当前用户，无需管理员（不弹 UAC）
   allowToChangeInstallationDirectory: true # 允许改安装目录
   allowElevation: true                     # 用户主动选 Program Files 时才提权

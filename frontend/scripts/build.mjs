@@ -46,6 +46,8 @@ const VERSION = JSON.parse(readFileSync(join(FRONTEND, 'package.json'), 'utf8'))
 
 const t0 = Date.now()
 const log = (...a) => console.log(`[build] ${a.join(' ')}`)
+// 非致命问题（例如更新文件收集失败）用 warn：前缀不同，退出码不变。
+const warn = (...a) => console.warn(`[build] ! ${a.join(' ')}`)
 const elapsed = () => `${((Date.now() - t0) / 1000).toFixed(1)}s`
 const mb = (p) => (statSync(p).size / 1024 / 1024).toFixed(1) + ' MB'
 
@@ -142,6 +144,18 @@ const FAILURE_HINTS = [
     fix: [
       '架构参数必须写 --x64；写成 `--win x64` 会被当成 target 名。',
       '处理：检查本脚本 builderArgs，不要手工改成 --win x64。',
+    ],
+  },
+  {
+    // 必须排在「代码签名」之前：makensis 失败时 electron-builder 的尾巴里常带
+    // 一句 signing 相关的通用提示，会被误判成「没有证书」——实际是输出文件写不进去。
+    match: /Can't open output file|Cannot open output file|makensis.*failed/i,
+    title: 'NSIS 安装包写入失败',
+    fix: [
+      'makensis 打不开输出文件：多半是 release/ 下的同名安装包被杀毒软件或索引服务占用，',
+      '也可能上次构建留下了半截文件（体积只有几百 KB）。',
+      '处理：删掉 release/*-setup.exe 与 release/__uninstaller-*.exe 后重跑；',
+      '若反复失败，把 release/ 加入杀毒软件白名单。',
     ],
   },
   {

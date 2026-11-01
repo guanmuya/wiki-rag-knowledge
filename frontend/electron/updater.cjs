@@ -19,6 +19,9 @@ let log = console.log
 let timer = null
 let manualCheck = false
 let ipcReady = false
+/** 更新源列表（按优先级），以及当前命中的下标。 */
+let sources = []
+let activeSource = 0
 
 /** 当前更新状态，渲染进程通过 wrk:update-state 读取，事件通过 wrk:update 推送。 */
 let state = {
@@ -126,15 +129,46 @@ function check(manual = false) {
   }
   manualCheck = manual
   setState({ status: 'checking', message: '正在检查更新…', percent: 0 })
-  return autoUpdater
-    .checkForUpdates()
-    .then(() => ({ ok: true }))
-    .catch((err) => {
-      const message = explainError(err)
-      log('更新检查失败：', message)
-      setState({ status: 'error', message })
-      return { ok: false, message }
-    })
+
+  // 没配置 sources 时退回 electron-builder 生成的 app-update.yml，行为与旧版一致
+  if (!sources.length) {
+    return autoUpdater.checkForUpdates()
+      .then(() => ({ ok: true }))
+      .catch((err) => {
+        const message = explainError(err)
+        log('更新检查失败：', message)
+        setState({ status: 'error', message })
+        return { ok: false, message }
+      })
+  }
+
+  return (async () => {
+    let lastErr = null
+    for (let i = 0; i < sources.length; i += 1) {
+      try {
+        applySource(i)
+        if (i > 0) log(`更新：切到备用源「${sources[i].label}」`)
+        await autoUpdater.checkForUpdates()
+        return { ok: true }
+      } catch (err) {
+        lastErr = err
+        log(`更新源不可用（${sources[i].label}）：`, String(err?.message || err))
+      }
+    }
+    const message = explainError(lastErr)
+    log('更新检查失败：', message)
+    setState({ status: 'error', message })
+    return { ok: false, message }
+  })()
+}
+
+/** 把第 i 个源设为当前 feed。切源只发生在「检查」阶段，下载中途不会换源。 */
+function applySource(i) {
+  const src = sources[i]
+  if (!src) throw new Error('没有可用的更新源')
+  autoUpdater.setFeedURL(src.feed)
+  activeSource = i
+  setState({ feed: describeFeed(src.feed) })
 }
 
 function schedule(cfg) {
@@ -179,6 +213,8 @@ function init(options = {}) {
 
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
+  // 我们只发 NSIS 安装包，不用 web installer；显式关掉，避免 electron-updater 的告警
+  autoUpdater.disableWebInstaller = true
   autoUpdater.allowPrerelease = Boolean(cfg.allowPrerelease)
   autoUpdater.allowDowngrade = false
   autoUpdater.logger = {
@@ -191,18 +227,28 @@ function init(options = {}) {
   // 开发联调：electron-updater 默认拒绝在非打包环境工作，这里显式允许
   if (!app.isPackaged) autoUpdater.forceDevUpdateConfig = true
 
-  let feed = null
+  sources = []
   if (devUrl) {
-    feed = { provider: 'generic', url: devUrl }
+    sources = [{ feed: { provider: 'generic', url: devUrl }, label: '联调源' }]
+  } else if (Array.isArray(cfg.sources) && cfg.sources.length) {
+    // 多源：按顺序尝试，前一个不可用就换下一个。
+    // 典型配置：[国内对象存储 generic, GitHub] —— 国内用户先走快源，
+    // 快源挂了或没同步时自动回落到 GitHub，不会因为一个源坏掉就更新不了。
+    sources = cfg.sources.map((s, i) => {
+      const feed = s.provider === 'github'
+        ? { provider: 'github', owner: s.owner, repo: s.repo }
+        : { provider: 'generic', url: String(s.url || '') }
+      return { feed, label: s.label || (s.provider === 'github' ? 'GitHub' : `源 ${i + 1}`) }
+    }).filter((s) => s.feed.provider === 'github' ? (s.feed.owner && s.feed.repo) : s.feed.url)
   } else if (cfg.provider === 'generic' && cfg.url) {
-    feed = { provider: 'generic', url: String(cfg.url) }
+    sources = [{ feed: { provider: 'generic', url: String(cfg.url) }, label: '自建源' }]
   } else if (cfg.provider === 'github' && cfg.owner && cfg.repo) {
-    feed = { provider: 'github', owner: cfg.owner, repo: cfg.repo }
+    sources = [{ feed: { provider: 'github', owner: cfg.owner, repo: cfg.repo }, label: 'GitHub' }]
   }
 
-  if (feed) {
+  if (sources.length) {
     try {
-      autoUpdater.setFeedURL(feed)
+      applySource(0)
     } catch (e) {
       setState({ status: 'error', message: `更新源配置无效：${e.message}` })
       return
@@ -215,7 +261,7 @@ function init(options = {}) {
     return
   }
 
-  setState({ status: 'idle', message: '等待检查更新', feed: describeFeed(feed) })
+  setState({ status: 'idle', message: '等待检查更新', feed: describeFeed(sources[0]?.feed) })
 
   autoUpdater.on('checking-for-update', () => {
     setState({ status: 'checking', message: '正在检查更新…' })
@@ -258,7 +304,7 @@ function init(options = {}) {
   })
 
   schedule(cfg)
-  log('更新：已启用，源 =', describeFeed(feed) || 'app-update.yml')
+  log('更新：已启用，源 =', describeFeed(sources[0]?.feed) || 'app-update.yml')
 }
 
 function dispose() {

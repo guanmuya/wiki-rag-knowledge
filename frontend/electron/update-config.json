@@ -5,5 +5,7 @@
   "checkOnStart": true,
   "checkIntervalHours": 4,
   "allowPrerelease": false,
-  "_note": "GitHub 仓库必须公开，私有仓库的 Release 资产需要鉴权，终端用户下载不到。改用自建源时：provider 改成 generic，url 填放 latest.yml 的 HTTPS 目录。"
+  "_note": "GitHub 仓库必须公开，私有仓库的 Release 资产需要鉴权，终端用户下载不到。改用自建源时：provider 改成 generic，url 填放 latest.yml 的 HTTPS 目录。",
+  "_sources_note": "要加国内加速源，把下面 sources 数组填好并删掉上面的 provider/owner/repo（两者只能二选一）。sources 按顺序尝试，前一个失败自动换下一个；典型写法：[{provider:generic,url:国内桶}, {provider:github,owner,repo}]。详见 docs/UPDATE.md §2.3。",
+  "sources": []
 }

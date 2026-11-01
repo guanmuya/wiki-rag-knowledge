@@ -1,6 +1,6 @@
 {
   "name": "wiki-rag-desktop",
-  "version": "1.0.1",
+  "version": "1.0.10",
   "private": true,
   "description": "企业多知识库文档整理与智能问答系统（桌面版）",
   "main": "electron/main.cjs",
