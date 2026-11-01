@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactElement } from 'react'
 import { useAuth } from '../auth'
 import { isDesktop, setupApi } from '../api'
 import OfflineBanner from './OfflineBanner'
+import LockBanner from './LockBanner'
 
 interface NavItem {
   to: string
@@ -227,6 +228,8 @@ export default function Layout() {
           </div>
         </header>
         <main className={isFlush ? 'content content-flush' : 'content'}>
+          {/* 后端被写锁挡住时全局提示一次，各页面只需保留自己的数据 */}
+          <LockBanner />
           {location.pathname.startsWith('/kbs') && !location.pathname.startsWith('/kbs/') ? (
             <OfflineBanner />
           ) : null}

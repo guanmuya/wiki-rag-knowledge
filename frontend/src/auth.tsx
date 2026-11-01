@@ -95,10 +95,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 /** 读取 401 后要跳转的登录地址，交给 AuthProvider 处理。 */
 const UNAUTHORIZED_EVENT = 'wrk:unauthorized'
 
-export function emitUnauthorized(): void {
-  window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [permissions, setPermissions] = useState<Permissions | null>(null)

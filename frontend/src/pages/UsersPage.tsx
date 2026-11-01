@@ -503,6 +503,7 @@ export default function UsersPage() {
                           : [...prev, { kb_id: kb.id, level: 'read' }],
                       )
                     }
+                    aria-label={`授权 ${kb.name}`}
                     style={{ accentColor: 'var(--c-primary)' }}
                   />
                   <span className="grant-name" title={kb.name}>
@@ -518,6 +519,7 @@ export default function UsersPage() {
                           ),
                         )
                       }
+                      aria-label={`${kb.name} 的权限级别`}
                     >
                       <option value="read">可读</option>
                       <option value="manage">可管理</option>

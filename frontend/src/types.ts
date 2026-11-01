@@ -187,6 +187,8 @@ export interface DocumentItem {
   status_detail: string
   created_at: string | null
   current_version: DocumentVersion | null
+  /** 最新上传的版本（可能还在解析或已失败），文档列表的状态以它为准 */
+  latest_version?: DocumentVersion | null
 }
 
 export interface DocumentDetail extends DocumentItem {
@@ -243,9 +245,20 @@ export interface Task {
   doc_version_id?: number | null
   error: string
   attempts: number
+  /** 手动重试次数（重试复用同一条任务记录，不再新增行） */
+  retry_count?: number
+  /** 上一次失败的报错，重试后仍保留，便于对照 */
+  last_error?: string
   result: Record<string, unknown>
   created_at: string | null
   started_at: string | null
+  /**
+   * 任务心跳（最后一次进展的时间）。
+   * 后端目前还没返回它（`task_out` 只有 created/started/finished），
+   * 这里声明成可选：一旦后端补上，任务卡片的心跳会自动改用真实进展时间，
+   * 前端不用再改一次；没有就退回 started_at。
+   */
+  updated_at?: string | null
   finished_at: string | null
 }
 
@@ -367,6 +380,25 @@ export interface UsageInfo {
   notes?: string[]
 }
 
+/** 拒答建议的类型：本次命中的资料 / 可直接问的问题。 */
+export type SuggestionKind = 'resource' | 'question'
+
+/**
+ * 拒答时后端附带的单条建议，字段与 `backend/app/services/answering.py`
+ * 的 `SuggestionBlock.items` 一一对应（`_resource_items` / `_question_items`）。
+ * 本轮前端只对齐类型，不渲染。
+ */
+export interface SuggestionItem {
+  /** 来源知识库名 */
+  kb_name: string
+  /** resource = 本次检索命中的资料；question = 建议问题 */
+  kind: SuggestionKind
+  /** 资料来源名（文档名 / Wiki 页面名 / 章节 heading），一定是库内真实文本 */
+  title: string
+  /** 仅 kind='question' 时有值：点击后填入输入框的问题 */
+  question?: string
+}
+
 export interface ChatMessage {
   id: number
   role: ChatRole
@@ -376,8 +408,12 @@ export interface ChatMessage {
   route?: RouteInfo | null
   latency_ms?: number | null
   created_at: string | null
-  /** 仅前端本地标记：ask 返回 insufficient 时置 true（历史消息不带该字段） */
+  /** 后端判定「这段回答是不是拒答」；历史消息与当次回答同口径（serializers.message_out） */
   insufficient?: boolean
+  /** 拒答建议；老数据可能没有该字段，故为可选 */
+  suggestions?: SuggestionItem[]
+  /** 拒答原因；空串表示不是拒答 */
+  refusal_reason?: string
   usage?: UsageInfo | null
 }
 
@@ -406,6 +442,10 @@ export interface AskResponse {
   route: RouteInfo
   usage: UsageInfo
   insufficient: boolean
+  /** 拒答建议：answer() 的每个返回分支都带这个键，无建议时为空数组 */
+  suggestions: SuggestionItem[]
+  /** 拒答原因：answer() 的每个返回分支都带这个键，非拒答时为空串 */
+  refusal_reason: string
   /** 后端扩展：本次被拒绝的知识库（无权限/已删除） */
   denied?: DeniedKb[]
   citations?: { cited: number[]; invalid: number[]; citation_ok: boolean }

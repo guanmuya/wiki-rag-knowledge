@@ -1133,7 +1133,7 @@ export default function ModelsPage() {
                   <span className="spacer" />
                   <span className="tiny muted">共 {discoverRows.length} 个</span>
                 </div>
-                <div className="table-wrap" style={{ maxHeight: 380, overflowY: 'auto' }}>
+                <div className="table-wrap table-wrap--scroll" style={{ maxHeight: 380 }}>
                   <table className="table">
                     <thead>
                       <tr>
@@ -1168,6 +1168,7 @@ export default function ModelsPage() {
                               onChange={(e) =>
                                 setDiscoverPurpose(r.model, e.target.value as ModelPurpose)
                               }
+                              aria-label={`${r.model} 的用途`}
                               style={{ minWidth: 120 }}
                             >
                               <option value="llm">对话 llm</option>
@@ -1283,6 +1284,7 @@ export default function ModelsPage() {
               </div>
               <textarea
                 className="input textarea code params-textarea"
+                aria-label="模型参数 JSON"
                 value={mParams}
                 onChange={(e) => {
                   setMParams(e.target.value)

@@ -45,7 +45,6 @@ export default function ChatPage() {
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
-  const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const skipDetailRef = useRef<number | null>(null)
   const defaultsApplied = useRef(false)
@@ -405,7 +404,7 @@ export default function ChatPage() {
             ) : null}
           </div>
 
-          <div className="chat-scroll" ref={scrollRef}>
+          <div className="chat-scroll">
             <div className="chat-thread">
               {detailLoading ? (
                 <div className="card card-pad">
@@ -497,6 +496,7 @@ export default function ChatPage() {
             <div className="composer-inner">
               <textarea
                 className="composer-input"
+                aria-label="提问输入框"
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
                 placeholder={
@@ -550,6 +550,7 @@ export default function ChatPage() {
         <TextInput
           value={renameText}
           onChange={(e) => setRenameText(e.target.value)}
+          aria-label="会话名称"
           autoFocus
           maxLength={80}
         />
@@ -598,8 +599,9 @@ function MessageBubble({
   const isUser = message.role === 'user'
   const evidence = message.evidence ?? []
   const route = message.route ?? null
-  // 历史消息不落库 insufficient 字段时，用「无证据」近似判定
-  const insufficient = message.insufficient ?? (!isUser && evidence.length === 0 && route !== null)
+  // 拒答判定只看后端字段：历史消息与当次回答同口径（serializers.message_out 会回填）。
+  // 不再用「没有证据」近似猜测——正常回答也可能一次没召回证据。
+  const insufficient = message.insufficient ?? false
 
   return (
     <div className={`msg ${isUser ? 'msg-user' : 'msg-assistant'}`}>

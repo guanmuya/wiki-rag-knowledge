@@ -77,8 +77,9 @@ export default function TasksPage() {
   usePolling(() => load(true), 2000, hasRunning)
 
   const retry = async (task: Task) => {
-    await taskApi.retry(task.id)
-    push('已提交重试', 'success')
+    // 重试复用同一条任务记录（不新增行），并把文档状态同步回「索引中」
+    const res = await taskApi.retry(task.id)
+    push(`任务 #${res.task_id} 已重新排队（第 ${res.retry_count || 1} 次）`, 'success')
     await load(true)
   }
 
@@ -102,6 +103,7 @@ export default function TasksPage() {
           <Select
             value={status}
             onChange={(e) => setStatus(e.target.value)}
+            aria-label="按任务状态筛选"
             style={{ width: 140 }}
           >
             {STATUS_OPTIONS.map((o) => (
@@ -110,7 +112,12 @@ export default function TasksPage() {
               </option>
             ))}
           </Select>
-          <Select value={kbId} onChange={(e) => setKbId(e.target.value)} style={{ width: 180 }}>
+          <Select
+            value={kbId}
+            onChange={(e) => setKbId(e.target.value)}
+            aria-label="按知识库筛选"
+            style={{ width: 180 }}
+          >
             <option value="">全部知识库</option>
             {kbs.map((k) => (
               <option key={k.id} value={k.id}>
@@ -134,23 +141,31 @@ export default function TasksPage() {
         <span className="tiny muted">
           共 {tasks.length} 条{lastUpdated ? ` · 更新于 ${lastUpdated}` : ''}
           {hasRunning ? ' · 自动刷新中' : ' · 已停止自动刷新'}
+          {error && tasks.length > 0 ? ' · 刷新失败，显示上次结果' : ''}
         </span>
       </div>
 
       <div className="card">
         <div className="card-body">
-          {loading ? (
+          {/*
+            只在「一条数据都没有」时才整块占位 / 报错：
+            轮询失败但已有数据时交给 TaskList 顶部提示条，列表保持可见。
+          */}
+          {loading && tasks.length === 0 ? (
             <SkeletonLines rows={6} />
-          ) : error ? (
-            <ErrorState error={error} onRetry={() => void load()} />
           ) : tasks.length === 0 ? (
-            <EmptyState
-              title="没有符合条件的任务"
-              hint="上传文档、重建索引或在模型设置中切换 Embedding 后，任务会出现在这里。"
-            />
+            error ? (
+              <ErrorState error={error} onRetry={() => void load()} />
+            ) : (
+              <EmptyState
+                title="没有符合条件的任务"
+                hint="上传文档、重建索引或在模型设置中切换 Embedding 后，任务会出现在这里。"
+              />
+            )
           ) : (
             <TaskList
               tasks={tasks}
+              error={error}
               showKb
               onRetry={retry}
               onRetryError={(err) => push(errorText(err), 'error')}

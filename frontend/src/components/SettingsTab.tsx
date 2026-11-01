@@ -106,8 +106,8 @@ export default function SettingsTab({
   }
 
   const retryTask = async (task: Task) => {
-    await taskApi.retry(task.id)
-    onToast('已提交重试', 'success')
+    const res = await taskApi.retry(task.id)
+    onToast(`任务 #${res.task_id} 已重新排队（第 ${res.retry_count || 1} 次）`, 'success')
     await loadTasks()
   }
 

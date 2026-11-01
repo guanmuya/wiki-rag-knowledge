@@ -113,15 +113,25 @@ export function Modal({
 }) {
   const ref = useRef<HTMLDivElement>(null)
 
+  // 用 ref 保存最新的 onClose：调用方几乎都写成内联箭头函数（`() => setOpen(false)`），
+  // 每次父组件 re-render 都是新身份。若把它放进下面 effect 的依赖里，
+  // 输入框每敲一个字都会触发一次「卸载重挂」——effect 重跑时 `ref.current.focus()`
+  // 会把焦点从输入框抢到弹窗容器上，表现就是「只能输入一个字符，得再点一次」。
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
+
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && dismissable) onClose()
+      if (e.key === 'Escape' && dismissable) onCloseRef.current()
     }
     window.addEventListener('keydown', onKey)
+    // 只在「打开」这一刻把焦点移进弹窗，之后不再碰焦点
     ref.current?.focus()
     return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose, dismissable])
+  }, [open, dismissable])
 
   if (!open) return null
   return (
@@ -294,15 +304,6 @@ export function Tabs<T extends string>({
           {it.badge !== undefined ? <span className="tab-badge">{it.badge}</span> : null}
         </button>
       ))}
-    </div>
-  )
-}
-
-export function StatCell({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="stat-cell">
-      <span className="stat-value">{value}</span>
-      <span className="stat-label">{label}</span>
     </div>
   )
 }

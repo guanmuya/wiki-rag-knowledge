@@ -62,7 +62,19 @@ declare global {
       getInfo: () => Promise<{ apiBase: string; version: string; backendVersion: string; dataDir: string }>
       getLogs: () => Promise<string>
       openPath: (kind: 'data' | 'logs') => Promise<string>
-      restartBackend: () => Promise<{ ok: boolean; port?: number; error?: string }>
+      /**
+       * 重启内置后端。失败时主进程会额外给 `title`（人话）与 `detail`（技术细节），
+       * 诊断区块直接展示 `title`，`detail` 折叠进日志提示里——都是可选字段，
+       * 旧版主进程只返回 `{ok,error}` 也能正常跑。
+       */
+      restartBackend: () => Promise<{
+        ok: boolean
+        port?: number
+        error?: string
+        title?: string
+        detail?: string
+        reasonId?: string
+      }>
       updateState?: () => Promise<import('./types').UpdateState>
       checkUpdate?: () => Promise<{ ok: boolean; message?: string }>
       installUpdate?: () => Promise<{ ok: boolean; message?: string }>
@@ -115,16 +127,76 @@ export function setToken(token: string | null): void {
   }
 }
 
+/**
+ * 失败类别。界面据此选文案，而不是去匹配错误字符串：
+ * - `timeout`：我们自己的超时（后端还在跑，只是这次没等到）
+ * - `offline`：连不上后端（进程没起 / 端口变了）
+ * - `busy`：后端在写入数据库（SQLite 写锁），稍后自动恢复
+ * - `http`：其它有明确 detail 的业务错误
+ */
+export type ApiErrorKind = 'http' | 'timeout' | 'offline' | 'busy'
+
 export class ApiError extends Error {
   status: number
   detail: string
+  kind: ApiErrorKind
 
-  constructor(status: number, detail: string) {
+  constructor(status: number, detail: string, kind: ApiErrorKind = 'http') {
     super(detail)
     this.name = 'ApiError'
     this.status = status
     this.detail = detail
+    this.kind = kind
   }
+}
+
+/**
+ * 三种「不是用户操作错了」的失败统一文案。
+ *
+ * 背景：向量化/索引期间后端要长时间持有写事务，接口会超时、会 503、
+ * 报错里还会冒 `database is locked`。这些原始串对用户没有任何行动指引，
+ * 只会让人以为软件卡死了。所以这里给出「发生了什么 + 现在能做什么」。
+ */
+export const BACKEND_BUSY_MESSAGE =
+  '后台正在写入（数据库忙），稍后自动恢复；可以继续浏览其它页面，稍后刷新。'
+
+export const BACKEND_OFFLINE_MESSAGE =
+  '后端暂时不可用（连接失败）。请确认后端已启动；桌面版可在「关于 → 后端诊断」一键重启后端。'
+
+export function requestTimeoutMessage(timeoutMs: number): string {
+  return `请求超时（${Math.round(timeoutMs / 1000)} 秒无响应）：后台仍在处理（可能正在向量化/索引文档），可以继续浏览其它页面，稍后刷新。`
+}
+
+/**
+ * 锁相关错误的判定：503 一律按「忙」处理（后端用 503 表达「暂时不可用，请重试」），
+ * 另外兼容 sqlite 把原始异常塞进 detail 的情况（500 + `database is locked`）。
+ * 不用裸 `/locked/`：wiki 的 `human_locked` 是正常字段，误判会把页面锁当成故障。
+ */
+const LOCK_PATTERN =
+  /database is locked|database table is locked|database is busy|sqlite_busy|sqlite3?\.operationalerror/i
+
+export function looksLikeLockError(status: number, detail: string): boolean {
+  if (status === 503) return true
+  return LOCK_PATTERN.test(detail)
+}
+
+/** 全局「后端忙」事件：LockBanner 监听它，不侵入各页面的错误处理。 */
+export const BACKEND_BUSY_EVENT = 'wrk:backend-busy'
+export const BACKEND_BUSY_CLEARED_EVENT = 'wrk:backend-busy-cleared'
+
+/** 是否已经对外宣告过「忙」，用来避免每次轮询都重复弹横幅、也避免恢复时多发事件。 */
+let busyAnnounced = false
+
+function announceBusy(): void {
+  if (busyAnnounced) return
+  busyAnnounced = true
+  window.dispatchEvent(new Event(BACKEND_BUSY_EVENT))
+}
+
+function announceBusyCleared(): void {
+  if (!busyAnnounced) return
+  busyAnnounced = false
+  window.dispatchEvent(new Event(BACKEND_BUSY_CLEARED_EVENT))
 }
 
 type UnauthorizedHandler = () => void
@@ -149,7 +221,17 @@ interface RequestOptions {
   /** 登录接口等场景：401 不触发全局登出 */
   silent401?: boolean
   signal?: AbortSignal
+  /**
+   * 超时毫秒数，默认 60s。
+   * 之前完全没有超时：后端在向量化/索引时一旦卡住，页面就永远转圈，
+   * 用户只能重启应用。现在到点抛错，页面能走正常的 ErrorState + 重试。
+   * 生成类接口（ask）单独放宽到 180s。
+   */
+  timeoutMs?: number
 }
+
+/** 普通请求默认 60s：比任何一次正常写操作都宽，又能保证卡住时会报错。 */
+const DEFAULT_TIMEOUT_MS = 60_000
 
 async function parseError(res: Response): Promise<string> {
   try {
@@ -188,16 +270,29 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   }
 
   let res: Response
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const ctrl = opts.signal ? null : new AbortController()
+  const timer = ctrl && timeoutMs > 0
+    ? window.setTimeout(() => ctrl.abort(), timeoutMs)
+    : null
   try {
     res = await fetch(apiUrl(path), {
       method: opts.method ?? 'GET',
       headers,
       body,
-      signal: opts.signal,
+      signal: opts.signal ?? ctrl?.signal,
     })
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') throw err
-    throw new ApiError(0, '无法连接服务器，请检查后端是否已启动')
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      // 外部传了 signal 时由调用方自己解释中止；只有我们自己的超时要给用户可读原因
+      if (!opts.signal) {
+        throw new ApiError(0, requestTimeoutMessage(timeoutMs), 'timeout')
+      }
+      throw err
+    }
+    throw new ApiError(0, BACKEND_OFFLINE_MESSAGE, 'offline')
+  } finally {
+    if (timer !== null) window.clearTimeout(timer)
   }
 
   if (res.status === 401) {
@@ -216,8 +311,17 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   }
 
   if (!res.ok) {
-    throw new ApiError(res.status, await parseError(res))
+    const detail = await parseError(res)
+    if (looksLikeLockError(res.status, detail)) {
+      // 原始 detail（`database is locked`）只留在日志/控制台，界面统一说人话
+      announceBusy()
+      throw new ApiError(res.status, BACKEND_BUSY_MESSAGE, 'busy')
+    }
+    throw new ApiError(res.status, detail)
   }
+
+  // 有请求成功就说明写锁已经放开：让横幅立刻消失，不用等它自己超时
+  announceBusyCleared()
 
   if (res.status === 204) return undefined as T
   const text = await res.text()
@@ -234,7 +338,21 @@ async function requestBlob(path: string): Promise<Blob> {
   const headers: Record<string, string> = {}
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
-  const res = await fetch(apiUrl(path), { headers })
+  // 下载同样要有超时：后端被写锁挡住时 fetch 不会自己结束，
+  // 不设上限就又是一个「永远转圈」的入口。
+  const ctrl = new AbortController()
+  const timer = window.setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS)
+  let res: Response
+  try {
+    res = await fetch(apiUrl(path), { headers, signal: ctrl.signal })
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new ApiError(0, requestTimeoutMessage(DEFAULT_TIMEOUT_MS), 'timeout')
+    }
+    throw new ApiError(0, BACKEND_OFFLINE_MESSAGE, 'offline')
+  } finally {
+    window.clearTimeout(timer)
+  }
   if (res.status === 401) {
     setToken(null)
     onUnauthorized()
@@ -245,7 +363,15 @@ async function requestBlob(path: string): Promise<Blob> {
     onForbidden(detail)
     throw new ApiError(403, detail)
   }
-  if (!res.ok) throw new ApiError(res.status, await parseError(res))
+  if (!res.ok) {
+    const detail = await parseError(res)
+    if (looksLikeLockError(res.status, detail)) {
+      announceBusy()
+      throw new ApiError(res.status, BACKEND_BUSY_MESSAGE, 'busy')
+    }
+    throw new ApiError(res.status, detail)
+  }
+  announceBusyCleared()
   return res.blob()
 }
 
@@ -363,6 +489,12 @@ export const docApi = {
     request<Paged<ChunkPreview>>(
       `/documents/${docId}/chunks${qs({ page, page_size: pageSize })}`,
     ),
+  /** 重试这份文档的入库（解析 → 分块 → 索引）：复用同一份文档的任务记录，不新建。 */
+  reindex: (docId: number) =>
+    request<{ task_id: number; version_id: number; reused: boolean; retry_count: number }>(
+      `/documents/${docId}/reindex`,
+      { method: 'POST' },
+    ),
   remove: (docId: number) => request<{ ok: boolean }>(`/documents/${docId}`, { method: 'DELETE' }),
   download: (docId: number, versionId?: number) =>
     requestBlob(`/documents/${docId}/download${qs({ version_id: versionId })}`),
@@ -373,7 +505,10 @@ export const taskApi = {
   list: (params: { status?: string; kb_id?: number } = {}) =>
     request<Paged<Task>>(`/tasks${qs({ status: params.status, kb_id: params.kb_id })}`),
   get: (id: number) => request<Task>(`/tasks/${id}`),
-  retry: (id: number) => request<{ task_id: number }>(`/tasks/${id}/retry`, { method: 'POST' }),
+  retry: (id: number) =>
+    request<{ task_id: number; reused: boolean; retry_count: number }>(`/tasks/${id}/retry`, {
+      method: 'POST',
+    }),
 }
 
 // ---------------------------------------------------------------- Wiki
@@ -437,6 +572,8 @@ export const chatApi = {
     request<AskResponse>(`/conversations/${id}/ask`, {
       method: 'POST',
       body: { question, kb_ids, top_k },
+      // 生成回答要等模型，本地 Ollama 可能很慢；给 180s，超时也要有明确报错
+      timeoutMs: 180_000,
     }),
   preview: async (kb_ids: number[], query: string): Promise<SearchPreviewResponse> => {
     const raw = await request<SearchPreviewRaw>('/search/preview', {
@@ -537,6 +674,8 @@ export async function probeBackend(timeoutMs = 4000): Promise<{
   version?: string
   offlineModels?: boolean
   latencyMs: number
+  /** 探活失败但后端其实活着（在写库/索引）：界面据此用「稍后自动恢复」而不是「服务挂了」 */
+  busy?: boolean
 }> {
   if (baseReady) await baseReady
   const started = performance.now()
@@ -549,6 +688,9 @@ export async function probeBackend(timeoutMs = 4000): Promise<{
     })
     const latencyMs = Math.round(performance.now() - started)
     if (!res.ok) {
+      if (looksLikeLockError(res.status, '')) {
+        return { ok: false, message: BACKEND_BUSY_MESSAGE, latencyMs, busy: true }
+      }
       return { ok: false, message: `后端返回 HTTP ${res.status}`, latencyMs }
     }
     const data = (await res.json()) as MetaInfo
@@ -562,9 +704,15 @@ export async function probeBackend(timeoutMs = 4000): Promise<{
   } catch (err) {
     const latencyMs = Math.round(performance.now() - started)
     if (err instanceof DOMException && err.name === 'AbortError') {
-      return { ok: false, message: '连接后端超时（4 秒无响应）', latencyMs }
+      // 说明真实原因：向量化/索引期间 CPU 与数据库都忙，短超时探测会误报「后端挂了」
+      return {
+        ok: false,
+        busy: true,
+        message: `后端 ${Math.round(timeoutMs / 1000)} 秒内无响应：可能正在向量化/索引，后台仍在处理，可继续浏览其它页面，稍后刷新；持续如此请打开日志。`,
+        latencyMs,
+      }
     }
-    return { ok: false, message: '无法连接后端服务', latencyMs }
+    return { ok: false, message: BACKEND_OFFLINE_MESSAGE, latencyMs }
   } finally {
     window.clearTimeout(timer)
   }

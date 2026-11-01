@@ -825,12 +825,26 @@ code {
 /* ---------------------------------------------------------------- 9 表格 / 分页 */
 .table-wrap {
   width: 100%;
-  overflow-x: auto;
+  /* 刻意不做滚动容器：`overflow-x: auto` 会把这里变成新的 scrollport，
+     `thead th` 的 `position: sticky` 就只相对这个盒子生效，而它本身不纵向滚动，
+     结果就是页面往下滚时表头照样跟着走（用户反馈的问题）。
+     需要横向/纵向内滚动的表格请显式加 .table-wrap--scroll。 */
+  overflow: visible;
   border-radius: var(--radius);
   border: 1px solid var(--c-border);
   background: var(--c-surface);
 }
 .table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
+/* 表头吸顶：页面滚动时始终停在顶栏下方，列名不会丢。
+   top 用 --topbar-h（54px），因为顶栏本身是 sticky top:0、z-index 20。 */
+.table thead th {
+  position: sticky;
+  top: var(--topbar-h);
+  z-index: 3;
+}
+/* 自带内滚动的表格（如模型探测列表）：表头吸在这个滚动区的顶部 */
+.table-wrap--scroll { overflow: auto; }
+.table-wrap--scroll .table thead th { top: 0; }
 .table th {
   text-align: left;
   font-size: 10.5px;
@@ -2021,3 +2035,76 @@ td .btn-link.danger { color: var(--c-danger); }
 .kb-card-actions .btn-link:hover { color: var(--c-text); }
 .kb-card-actions .btn-link.danger { color: #b9bfcd; }
 .kb-card-actions .btn-link.danger:hover { color: var(--c-danger); }
+
+/* ---------------------------------------------------------------- 25 后端忙 / 轮询失败 */
+/*
+   这一组样式只描述「后端忙/刷新失败」这类「不是用户操作错了」的状态：
+   统一用淡蓝说明条，不用红色报错块——红色会让人以为数据坏了、去点删除或重装。
+*/
+.lock-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px;
+  margin-bottom: 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid #d5e5fb;
+  background: #f0f6ff;
+  color: #2c4a6b;
+}
+/* 聊天页是 content-flush（无内边距），横幅自己补一点留白，避免贴边 */
+.content-flush > .lock-banner { margin: 10px 14px 0; }
+.lock-banner-icon {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: #dcebff;
+  color: #2f74e0;
+  font-size: 12px;
+}
+.lock-banner-body { min-width: 0; flex: 1; }
+.lock-banner-body strong { font-size: 12.5px; font-weight: 650; display: block; }
+.lock-banner-detail { font-size: 11.5px; color: #5c7896; line-height: 1.55; }
+.lock-banner-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+
+/* 轮询失败提示条：出现在列表内部，保留上次数据的同时说清「这不是空列表」 */
+.poll-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 12px;
+  margin: 0 0 10px;
+  border-radius: var(--radius);
+  border: 1px solid #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.poll-notice-icon { flex: 0 0 auto; font-size: 12px; }
+.poll-notice-body { min-width: 0; }
+.poll-notice-body strong { font-size: 12px; font-weight: 650; display: block; }
+.poll-notice-detail { font-size: 11.5px; color: #a16207; }
+/* 任务卡片内部左右有 16px 内边距，提示条跟着对齐，不然会顶到卡片边上 */
+.task-list > .poll-notice { margin: 12px 16px 4px; }
+
+/* 任务心跳：和 stage 同一行，字号更小、颜色更淡，不跟进度条抢注意力 */
+.task-heartbeat { color: #a2b0c4; }
+
+/* 运行中但 30 秒没进展：浅蓝说明条，绝不能长得像 .task-error */
+.task-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid #dbe9fb;
+  background: #f5f9ff;
+  color: #4a6b8f;
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+.task-hint-icon { flex: 0 0 auto; }
