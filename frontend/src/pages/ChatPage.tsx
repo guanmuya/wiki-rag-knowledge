@@ -291,7 +291,35 @@ export default function ChatPage() {
   }
 
   const messages = detail?.messages ?? []
+  /**
+   * 服务端仍在生成中的回答（status='pending'）。
+   * 问答的生成在后端跑：用户离开页面再回来时，会话里已经有一条「提问 + 待完成回答」，
+   * 靠这个标记把「正在生成」画出来，并继续轮询到回答写完。
+   */
+  const pendingMessage =
+    messages.find((m) => m.role === 'assistant' && m.status === 'pending') ?? null
+  // 本页刚发出的提问（asking）与服务端还在生成的回答都算「忙」：输入框要锁住，
+  // 否则同一会话会并发写出两轮问答。
+  const busy = asking || Boolean(pendingMessage)
   const visibleKbs = kbs
+
+  /** 静默刷新会话（不显示骨架屏），只用于「回答还在生成」时的轮询。 */
+  const refreshDetail = useCallback(async (id: number) => {
+    try {
+      const data = await chatApi.get(id)
+      setDetail((prev) => (prev && prev.id === id ? data : prev))
+    } catch {
+      /* 轮询失败保持当前画面，下一轮再试 */
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!activeId || !Number.isFinite(activeId) || !pendingMessage) return
+    const timer = window.setInterval(() => {
+      void refreshDetail(activeId)
+    }, 2000)
+    return () => window.clearInterval(timer)
+  }, [activeId, pendingMessage?.id, refreshDetail])
 
   return (
     <>
@@ -458,20 +486,7 @@ export default function ChatPage() {
                         }}
                         userName={user?.display_name || user?.username || '我'}
                       />
-                      <div className="msg msg-assistant">
-                        <div className="msg-avatar">AI</div>
-                        <div className="msg-main">
-                          <div className="msg-bubble">
-                            <div className="row" style={{ gap: 8 }}>
-                              <Spinner size={14} />
-                              <span className="muted">正在检索并生成回答…</span>
-                            </div>
-                            <div style={{ marginTop: 10 }}>
-                              <SkeletonLines rows={2} />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
+                      <GeneratingBubble />
                     </>
                   ) : null}
                 </>
@@ -504,18 +519,18 @@ export default function ChatPage() {
                     ? '请先在上方选择知识库…'
                     : '输入你的问题，Enter 发送，Shift+Enter 换行'
                 }
-                disabled={asking}
+                disabled={busy}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
-                    if (!asking) void ask()
+                    if (!busy) void ask()
                   }
                 }}
               />
               <Button
                 variant="primary"
-                loading={asking}
-                disabled={asking || !question.trim()}
+                loading={busy}
+                disabled={busy || !question.trim()}
                 onClick={() => void ask()}
                 style={{ height: 44, minWidth: 84 }}
               >
@@ -587,6 +602,26 @@ const SAMPLE_QUESTIONS = [
   '产品的定价是怎么定的？',
 ]
 
+/** 「正在检索并生成回答」占位：本页刚发出的提问与服务端 pending 消息共用同一套样式。 */
+function GeneratingBubble() {
+  return (
+    <div className="msg msg-assistant">
+      <div className="msg-avatar">AI</div>
+      <div className="msg-main">
+        <div className="msg-bubble">
+          <div className="row" style={{ gap: 8 }}>
+            <Spinner size={14} />
+            <span className="muted">正在检索并生成回答…</span>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <SkeletonLines rows={2} />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function MessageBubble({
   message,
   userName,
@@ -602,6 +637,30 @@ function MessageBubble({
   // 拒答判定只看后端字段：历史消息与当次回答同口径（serializers.message_out 会回填）。
   // 不再用「没有证据」近似猜测——正常回答也可能一次没召回证据。
   const insufficient = message.insufficient ?? false
+
+  // 服务端还在生成的回答：离开页面再回来时由它接住「正在生成」，不必等用户刷新。
+  if (!isUser && message.status === 'pending') {
+    return <GeneratingBubble />
+  }
+
+  // 生成失败/被中断：把后端给的说明直接展示出来，并明确标注「未完成」，
+  // 避免把一条空回答误当成正常结果。
+  if (!isUser && message.status === 'failed') {
+    return (
+      <div className="msg msg-assistant">
+        <div className="msg-avatar">AI</div>
+        <div className="msg-main">
+          <div className="msg-bubble msg-failed">
+            {message.content || '这次回答没有生成完成，可以重新提问。'}
+          </div>
+          <div className="msg-meta">
+            <span>{formatTime(message.created_at)}</span>
+            <span>未完成</span>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className={`msg ${isUser ? 'msg-user' : 'msg-assistant'}`}>

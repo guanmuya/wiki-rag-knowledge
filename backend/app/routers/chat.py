@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,11 +10,19 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import models, schemas, serializers
-from ..db import get_db
+from ..db import SessionLocal, get_db
 from ..deps import audit, get_current_user, grant_level
 from ..services import answering, llm, retrieval
 
 router = APIRouter(tags=["chat"])
+log = logging.getLogger("wrk.chat")
+
+# 生成失败/被中断时给用户看的话。技术细节写进 route.error，只留在库里给排障用。
+ASK_FAILED_TEXT = "这次回答没有生成完成，可以重新提问。"
+# 同一会话又来了新提问时，上一条没写完的回答按「已跳过」收尾。
+SUPERSEDED_TEXT = "上一次回答没有生成完成，已跳过。"
+# 进程重启后，上个进程里未完成的回答不可能再写完，统一标成失败。
+RECOVERED_TEXT = "上次回答没有生成完成（应用已重启），请重新提问。"
 
 
 def _my_conversation(db: Session, user: models.User, cid: int) -> models.Conversation:
@@ -42,6 +51,51 @@ def _allowed_kbs(db: Session, user: models.User, kb_ids: list[int]) -> tuple[lis
             continue
         allowed.append(kb)
     return allowed, denied
+
+
+def _close_pending(db: Session, conversation_id: int, text: str) -> int:
+    """把某会话里还没写完的回答收尾成 failed（空内容才补提示文案）。
+
+    为什么需要：一次问答是「先落库 pending，再生成，最后改成 ok」的两段写。
+    如果进程被杀、或者用户直接又提了一个新问题，旧的 pending 就再也不会更新了；
+    不收尾的话前端会一直转圈，用户永远等不到结果。
+    """
+    rows = db.execute(
+        select(models.Message).where(
+            models.Message.conversation_id == conversation_id,
+            models.Message.role == "assistant",
+            models.Message.status == "pending",
+        )
+    ).scalars().all()
+    for row in rows:
+        row.status = "failed"
+        if not (row.content or "").strip():
+            row.content = text
+        db.add(row)
+    return len(rows)
+
+
+def recover_pending_messages() -> int:
+    """启动时收尾：上个进程没写完的回答标成失败，返回处理条数。
+
+    必须在开始服务之前调用（见 main.lifespan）：这些 pending 是上一个进程的
+    内存里在跑的生成，进程没了就不可能再完成，留着只会让页面一直「正在生成」。
+    """
+    with SessionLocal() as db:
+        rows = db.execute(
+            select(models.Message).where(
+                models.Message.role == "assistant",
+                models.Message.status == "pending",
+            )
+        ).scalars().all()
+        for row in rows:
+            row.status = "failed"
+            if not (row.content or "").strip():
+                row.content = RECOVERED_TEXT
+            db.add(row)
+        if rows:
+            db.commit()
+        return len(rows)
 
 
 @router.get("/conversations")
@@ -125,6 +179,33 @@ def delete_conversation(cid: int, db: Session = Depends(get_db),
     return {"ok": True}
 
 
+def _mark_answer_failed(db: Session, answer_id: int, started: float,
+                        exc: BaseException) -> None:
+    """生成失败时把 pending 占位收尾成 failed；本身绝不再往外抛。
+
+    先 rollback：`answering.answer` 失败后会话可能停在「必须先回滚」的状态，
+    不回滚的话这次收尾写也会失败，pending 就永远留在库里了。
+    """
+    log.warning("回答生成失败（消息 #%s）：%s", answer_id, exc)
+    try:
+        db.rollback()
+        answer = db.get(models.Message, answer_id)
+        if answer is None or answer.status != "pending":
+            return
+        answer.status = "failed"
+        answer.content = ASK_FAILED_TEXT
+        answer.latency_ms = int((time.time() - started) * 1000)
+        answer.route = json.dumps({"error": str(exc)[:500]}, ensure_ascii=False)
+        db.add(answer)
+        db.commit()
+    except Exception:  # noqa: BLE001 - 收尾失败不能覆盖原始异常
+        log.warning("标记回答失败状态时又出错（忽略）", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:  # pragma: no cover - 连接已坏
+            pass
+
+
 @router.post("/conversations/{cid}/ask")
 def ask(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
         user: models.User = Depends(get_current_user)):
@@ -136,18 +217,39 @@ def ask(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
     if not allowed:
         raise HTTPException(status_code=403, detail="当前没有可检索的知识库，请先选择有权限的知识库")
 
+    kb_ids_json = json.dumps([kb.id for kb in allowed])
     if body.kb_ids is not None:
-        conv.kb_ids = json.dumps([kb.id for kb in allowed])
-        db.add(conv)
+        conv.kb_ids = kb_ids_json
 
-    result = answering.answer(db, body.question, allowed, top_k=body.top_k)
+    # 提问和「正在生成」的占位先落库，再开始生成。
+    # 旧实现把两条消息都留到生成结束才写：用户中途离开页面（或刷新）回来，
+    # 会话里一个字都没有，看起来就像整轮问答被中止了。现在离开页面回来
+    # 至少能看到「问题 + 正在生成」，生成结束再由下面的更新改成完整回答。
+    _close_pending(db, conv.id, SUPERSEDED_TEXT)
+    pending_answer = models.Message(
+        conversation_id=conv.id, role="assistant",
+        content="", kb_ids=kb_ids_json, status="pending")
+    db.add_all([
+        models.Message(conversation_id=conv.id, role="user",
+                       content=body.question, kb_ids=kb_ids_json),
+        pending_answer,
+    ])
+    if conv.title in {"", "新会话"}:
+        conv.title = body.question.strip()[:40]
+    conv.updated_at = models.utcnow()
+    db.add(conv)
+    db.commit()
+    answer_id = pending_answer.id
+
+    try:
+        result = answering.answer(db, body.question, allowed, top_k=body.top_k)
+    except BaseException as exc:      # 含客户端断开导致的取消：都要把占位收尾
+        _mark_answer_failed(db, answer_id, started, exc)
+        raise
+
     if denied:
         result["route"]["denied"] = denied
 
-    db.add(models.Message(
-        conversation_id=conv.id, role="user", content=body.question,
-        kb_ids=json.dumps([kb.id for kb in allowed]),
-    ))
     # route 字段同时存下 insufficient 与 usage，这样刷新页面后
     # 仍能还原「当时是否证据不足」「消耗多少模型调用」，不必重跑。
     persisted_route = dict(result["route"])
@@ -159,18 +261,14 @@ def ask(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
     # 只加键，不动已有键。
     persisted_route["suggestions"] = result.get("suggestions") or []
     persisted_route["refusal_reason"] = result.get("refusal_reason") or ""
-    answer_msg = models.Message(
-        conversation_id=conv.id, role="assistant", content=result["content"],
-        kb_ids=json.dumps([kb.id for kb in allowed]),
-        evidence=json.dumps(result["evidence"], ensure_ascii=False),
-        route=json.dumps(persisted_route, ensure_ascii=False),
-        latency_ms=int((time.time() - started) * 1000),
-    )
-    db.add(answer_msg)
-    if conv.title in {"", "新会话"}:
-        conv.title = body.question.strip()[:40]
+    answer_msg = db.get(models.Message, answer_id)
+    answer_msg.content = result["content"]
+    answer_msg.evidence = json.dumps(result["evidence"], ensure_ascii=False)
+    answer_msg.route = json.dumps(persisted_route, ensure_ascii=False)
+    answer_msg.latency_ms = int((time.time() - started) * 1000)
+    answer_msg.status = "ok"
     conv.updated_at = models.utcnow()
-    db.add(conv)
+    db.add_all([answer_msg, conv])
     db.commit()
 
     result["message"] = serializers.message_out(answer_msg)

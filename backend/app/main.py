@@ -95,6 +95,11 @@ async def lifespan(app: FastAPI):
     watchdog.start()
     try:
         bootstrap_admin()
+        # 上个进程里没写完的回答不可能再完成了：先收尾成 failed，再开始服务。
+        # 否则用户打开应用会看到一条永远「正在生成」的消息。
+        recovered_answers = chat.recover_pending_messages()
+        if recovered_answers:
+            log.info("已把 %d 条未完成的回答标记为失败（上次退出时仍在生成）", recovered_answers)
         # 先回收上次被强杀留下的「处理中」任务，再启动 worker：
         # 否则这些任务永远不会被领取，用户看到文档一直卡在「处理中」。
         recovered = worker.recover_interrupted()
