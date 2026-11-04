@@ -716,12 +716,23 @@ export default function ModelsPage() {
                         </button>
                       </div>
                       <div className="table-wrap">
-                        <table className="table">
+                        {/* 三个用途的表共用同一套列宽（.model-table 固定布局）：
+                            维度列在非向量表里显示「—」，这样跨表的列头才对得齐。 */}
+                        <table className="table model-table">
+                          <colgroup>
+                            <col />
+                            <col className="model-col-provider" />
+                            <col className="model-col-dim" />
+                            <col className="model-col-default" />
+                            <col className="model-col-enabled" />
+                            <col className="model-col-tested" />
+                            <col className="model-col-actions" />
+                          </colgroup>
                           <thead>
                             <tr>
                               <th>模型</th>
                               <th>供应商</th>
-                              {purpose === 'embedding' ? <th>维度</th> : null}
+                              <th>维度</th>
                               <th>默认</th>
                               <th>启用</th>
                               <th>最近测试</th>
@@ -738,9 +749,7 @@ export default function ModelsPage() {
                                     <div className="mono tiny muted">{m.model}</div>
                                   </td>
                                   <td className="small">{m.provider_name}</td>
-                                  {purpose === 'embedding' ? (
-                                    <td className="small">{m.embed_dim || '—'}</td>
-                                  ) : null}
+                                  <td className="small">{m.embed_dim || '—'}</td>
                                   <td>
                                     {m.is_default ? (
                                       <Badge tone="info">默认</Badge>
@@ -755,13 +764,13 @@ export default function ModelsPage() {
                                     )}
                                   </td>
                                   <td>
-                                    <label className="switch">
+                                    <label className={`switch${m.enabled ? ' on' : ''}`}>
                                       <input
                                         type="checkbox"
                                         checked={m.enabled}
+                                        aria-label={`启用 ${m.label || m.model}`}
                                         onChange={() => void toggleModel(m)}
                                       />
-                                      <span className="switch-track" />
                                     </label>
                                   </td>
                                   <td>

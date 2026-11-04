@@ -528,8 +528,11 @@ code {
   cursor: pointer;
 }
 
+/* 开关：label 是轨道，::after 是滑块；原生 checkbox 铺满轨道但透明，
+   保留点击与键盘焦点语义。label 必须 inline-block，否则 width/height 不生效。 */
 .switch {
   position: relative;
+  display: inline-block;
   width: 34px;
   height: 20px;
   border-radius: 999px;
@@ -538,6 +541,16 @@ code {
   cursor: pointer;
   transition: background 0.18s ease;
   flex: 0 0 34px;
+  vertical-align: middle;
+}
+.switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 .switch::after {
   content: "";
@@ -553,6 +566,7 @@ code {
 }
 .switch.on { background: var(--c-primary); }
 .switch.on::after { transform: translateX(14px); }
+.switch:focus-within { box-shadow: var(--ring); }
 
 .pwd-meter { display: flex; align-items: center; gap: 10px; }
 .pwd-meter-bar {
@@ -1812,6 +1826,18 @@ code {
   text-transform: uppercase;
   color: var(--c-text-muted);
 }
+/* 三个用途各一张表：固定布局 + 同一套 colgroup 宽度，跨表的列头才会纵向对齐。
+   固定布局不再按内容撑列，长模型名/长测试信息靠换行兜住。
+   末尾几列按视口宽度取 clamp：窗口从 1440 收到最小 1100 时它们一起收窄，
+   余量留给「模型」列，模型名不会被挤成一列单字。 */
+.model-table { table-layout: fixed; }
+.model-table td { overflow-wrap: anywhere; }
+.model-table col.model-col-provider { width: clamp(104px, 9vw, 132px); }
+.model-table col.model-col-dim { width: clamp(60px, 5.2vw, 76px); }
+.model-table col.model-col-default { width: clamp(84px, 7.1vw, 104px); }
+.model-table col.model-col-enabled { width: clamp(64px, 5.4vw, 80px); }
+.model-table col.model-col-tested { width: clamp(170px, 15.1vw, 220px); }
+.model-table col.model-col-actions { width: clamp(96px, 6.8vw, 100px); }
 .params-toggle {
   display: inline-flex;
   align-items: center;
