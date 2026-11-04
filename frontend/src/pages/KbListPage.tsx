@@ -25,6 +25,44 @@ import {
   TextInput,
 } from '../components/ui'
 
+/** 卡片视图图标：2×2 网格，和「卡片」的语义一致。 */
+function CardViewIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      aria-hidden="true"
+    >
+      <rect x="2.25" y="2.25" width="4.75" height="4.75" rx="1.25" />
+      <rect x="9" y="2.25" width="4.75" height="4.75" rx="1.25" />
+      <rect x="2.25" y="9" width="4.75" height="4.75" rx="1.25" />
+      <rect x="9" y="9" width="4.75" height="4.75" rx="1.25" />
+    </svg>
+  )
+}
+
+/** 表格视图图标：带表头和首列分隔线的表格。 */
+function TableViewIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      aria-hidden="true"
+    >
+      <rect x="2.25" y="2.75" width="11.5" height="10.5" rx="1.5" />
+      <path d="M2.25 6.25h11.5M6.5 6.25v7" />
+    </svg>
+  )
+}
+
 export default function KbListPage() {
   const { isAdmin, refreshMe } = useAuth()
   const { push } = useToast()
@@ -128,19 +166,23 @@ export default function KbListPage() {
         </div>
         <div className="spacer" />
         <div className="page-head-actions">
-          <div className="tabs" style={{ border: 'none', padding: 0 }}>
+          <div className="view-switch" role="group" aria-label="知识库视图切换">
             <button
               type="button"
-              className={`tab ${view === 'card' ? 'active' : ''}`}
+              className={`view-switch-item ${view === 'card' ? 'active' : ''}`}
+              aria-pressed={view === 'card'}
               onClick={() => setView('card')}
             >
+              <CardViewIcon />
               卡片
             </button>
             <button
               type="button"
-              className={`tab ${view === 'table' ? 'active' : ''}`}
+              className={`view-switch-item ${view === 'table' ? 'active' : ''}`}
+              aria-pressed={view === 'table'}
               onClick={() => setView('table')}
             >
+              <TableViewIcon />
               表格
             </button>
           </div>
