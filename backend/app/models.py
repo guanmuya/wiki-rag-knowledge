@@ -386,6 +386,10 @@ class Message(Base):
     route: Mapped[str] = mapped_column(Text, default="{}")       # 路由与检索统计
     model_config_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    # 生成状态：ok=正常；pending=正在生成；failed=生成失败或进程中断。
+    # 为什么状态要落在消息行上：问答是「后台在跑、页面只是观察」的过程，
+    # 用户离开页面再回来必须还能看到「这轮问答仍在生成」，而不是一条空会话。
+    status: Mapped[str] = mapped_column(String(16), default="ok")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
 
 

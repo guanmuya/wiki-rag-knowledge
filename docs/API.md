@@ -132,7 +132,7 @@
 |---|---|---|
 | GET | `/api/conversations` | 我的会话列表 |
 | POST | `/api/conversations` | `{title,kb_ids}` |
-| GET | `/api/conversations/{id}` | 含 `messages:[{id,role,content,kb_ids,evidence,route,latency_ms,created_at,insufficient,usage,suggestions,refusal_reason}]`（`serializers.message_out()`，`serializers.py:212-243`） |
+| GET | `/api/conversations/{id}` | 含 `messages:[{id,role,content,kb_ids,evidence,route,latency_ms,status,created_at,insufficient,usage,suggestions,refusal_reason}]`（`serializers.message_out()`） |
 | PATCH | `/api/conversations/{id}` | 改标题 / 换知识库选择 |
 | DELETE | `/api/conversations/{id}` | 删除 |
 | POST | `/api/conversations/{id}/ask` | `{question,kb_ids?,top_k?}` → `{content, message, evidence, route, usage, insufficient, citations, suggestions, refusal_reason, denied}` |
@@ -171,6 +171,8 @@
 每项 `{kb_name, kind, title, question?}`，`kind` ∈ `resource`（本次命中资料）| `question`（可点击填入输入框）；
 `refusal_reason` 给出判定原因（如「回答开头即声明资料不足」）。
 历史消息与当次回答同口径：`chat.ask()` 把 `insufficient` / `usage` / `suggestions` / `refusal_reason` 一并写进 `route` 快照（`chat.py:154-161`），`serializers.message_out()` 再从 `route` 读回并展开成顶层字段（`serializers.py:237-242`）；老消息没有这两个键、或数据损坏时退回 `[]` / `""`（`serializers.py:225-230`），不会让一条脏消息把整个会话接口打挂。
+
+**问答是「先落库、再生成」的两段写**（`chat.py`）：`POST .../ask` 先写入提问与一条 `status="pending"` 的占位回答并提交，生成结束后把占位更新成 `status="ok"`。所以生成过程中 `GET /conversations/{id}` 就能读到「提问 + 正在生成」——用户离开页面再回来（甚至刷新）不会看到一个被清空的会话；前端在 `pending` 期间每 2 秒轮询一次，读到 `ok` 即停止（`ChatPage.tsx`）。生成失败时占位写成 `status="failed"`，`content` 是给用户看的说明、技术原因放进 `route.error`；进程重启时启动流程会把遗留的 `pending` 统一收尾成 `failed`，同一会话来了新提问也会把上一条未完成的回答收尾（`chat.recover_pending_messages()` / `chat._close_pending()`）。
 
 #### `top_k` 的两个语义（同一个参数）
 

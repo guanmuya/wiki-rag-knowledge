@@ -41,6 +41,13 @@ export const PROTOCOL_OPTIONS: Array<{ value: ProviderProtocol; label: string; h
 ]
 export type ChatRole = 'user' | 'assistant'
 export type RouteUsed = 'wiki' | 'chunk' | 'none'
+/**
+ * 回答的生成状态。
+ * - ok：正常回答（历史消息、老库补列后的默认值）
+ * - pending：服务端还在生成；离开页面再回来时靠它继续显示「正在生成」并轮询
+ * - failed：生成失败或进程中断，content 里是给用户看的说明
+ */
+export type MessageStatus = 'ok' | 'pending' | 'failed'
 
 /** 后端分页返回；部分接口（如 /users）只返回 items/total。 */
 export interface Paged<T> {
@@ -408,6 +415,8 @@ export interface ChatMessage {
   route?: RouteInfo | null
   latency_ms?: number | null
   created_at: string | null
+  /** 生成状态；老数据可能没有该字段，缺省按 ok 处理 */
+  status?: MessageStatus
   /** 后端判定「这段回答是不是拒答」；历史消息与当次回答同口径（serializers.message_out） */
   insufficient?: boolean
   /** 拒答建议；老数据可能没有该字段，故为可选 */

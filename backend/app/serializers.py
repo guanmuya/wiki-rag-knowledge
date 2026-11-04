@@ -255,6 +255,10 @@ def message_out(m: models.Message) -> dict:
         "id": m.id, "role": m.role, "content": m.content,
         "kb_ids": _load(m.kb_ids, []), "evidence": evidence,
         "route": route, "latency_ms": m.latency_ms, "created_at": iso(m.created_at),
+        # 生成状态（ok / pending / failed）：离开页面再回来时，前端靠它判断
+        # 「这轮回答还在生成」还是「生成失败」，而不是把空内容当成正常回答。
+        # 老库补列后是 'ok'，读不到时也按正常处理。
+        "status": (m.status or "ok"),
         # 历史消息也要能还原「当时是否证据不足」「消耗了多少模型调用」，
         # 否则刷新页面后统计信息全部丢失，前端只能靠猜。
         "insufficient": bool(route.get("insufficient", False)),
