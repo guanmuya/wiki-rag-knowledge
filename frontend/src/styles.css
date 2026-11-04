@@ -1045,6 +1045,49 @@ code {
 }
 .tab.active .tab-badge { background: var(--c-primary-soft); color: var(--c-primary); }
 
+/* 卡片 / 表格视图切换：页头里的分段控件。
+   不复用 .tabs —— 页签容器带 overflow-x: auto，放在这里会挤出横竖两条滚动条，
+   激活项的下划线也会被裁掉，看起来像一块没对齐的白色方块。 */
+.view-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  background: var(--c-surface-sunken);
+}
+.view-switch-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--c-text-secondary);
+  font-size: 12.5px;
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.view-switch-item svg { display: block; flex: 0 0 auto; }
+.view-switch-item:not(.active):hover {
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--c-text);
+}
+.view-switch-item.active {
+  background: var(--c-surface);
+  color: var(--c-primary);
+  font-weight: 600;
+  box-shadow: var(--shadow-xs);
+}
+.view-switch-item:focus-visible { box-shadow: var(--ring); color: var(--c-text); }
+.view-switch-item.active:focus-visible { color: var(--c-primary); }
+
 /* ---------------------------------------------------------------- 13 登录 / 初始化 */
 .login-page {
   min-height: 100vh;
