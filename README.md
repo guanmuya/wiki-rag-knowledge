@@ -91,14 +91,14 @@ cd frontend && pnpm install && cd ..
 ### 3.2 开发模式（两个终端）
 
 ```bash
-# 终端 A：后端 http://127.0.0.1:8000 ，接口文档 /docs
+# 终端 A：后端 http://127.0.0.1:8000，接口文档 /docs
 bash scripts/start_backend.sh
 
 # 终端 B：vite(5173) + Electron 窗口；后端由 Electron 自己拉起
 cd frontend && node scripts/dev.mjs
 ```
 
-只要浏览器调试界面时用 `node scripts/dev.mjs --web-only`（不启 Electron，直接开 `http://localhost:5173`）。
+只想用浏览器调试界面时，用 `node scripts/dev.mjs --web-only`（不启 Electron，直接开 `http://localhost:5173`）。
 
 一键脚本 `bash scripts/dev.sh` 会把「建 venv → 装依赖 → 灌演示数据 → 同时起前后端」串起来（设 `SKIP_SEED=1` 可跳过灌数据）。
 
@@ -123,15 +123,6 @@ WRK_ADMIN_PASSWORD='<你的初始密码>' bash scripts/start_backend.sh
 
 此时启动即建号，并打印横幅提示「首次登录后必须修改密码」。**已有管理员时永不覆盖。**
 
-### 3.6 自动更新
-
-桌面版内置 `electron-updater`，安装版会在启动后与每 4 小时检查一次更新，下载完成提示重启安装（不动知识库数据）。完整说明见 [docs/UPDATE.md](docs/UPDATE.md)。
-
-- 默认更新源：GitHub Releases（`electron/update-config.json`，**仓库必须公开**）
-- 自建源：`node scripts/build.mjs` 会把 `latest.yml` + 安装包 + `.blockmap` 收集到 `release/updates/`，传到任意 HTTPS 静态目录，配置 `provider: generic` + `url`
-- 本地联调：`WRK_UPDATE_URL=http://127.0.0.1:8899 ./release/win-unpacked/企业知识库.exe`
-- 发版：改 `frontend/package.json` 的 `version` → `node scripts/build.mjs --publish`（GitHub）或手动上传 `release/updates/`
-
 ### 3.5 打包成 Windows 安装包
 
 ```bash
@@ -145,6 +136,15 @@ node scripts/build.mjs --pack     # 只出 release/win-unpacked/，不生成安�
 打包前必须清掉本机全局的 `ELECTRON_RUN_AS_NODE`——脚本里的 `cleanEnv()` 已自动 `delete`（`frontend/scripts/build.mjs:53-57`），手工执行 `electron-builder` 时要自己 `env -u ELECTRON_RUN_AS_NODE`。上一次构建残留的 `wrk-backend.exe` 会锁住输出目录，报 `EPERM` 时先 `taskkill /F /IM wrk-backend.exe`。
 
 安装向导默认是**简体中文**。改语言时注意 `electron-builder.yml` 里两个开关必须配合：`installerLanguages: [zh_CN]` 只有在 `multiLanguageInstaller: true` 时才参与编译（设成 `false` 会被 `LangConfigurator` 强制成 `en_US`）；`language: "2052"` 只影响版本资源的 locale id。只给一种语言时 NSIS 不会弹语言选择框。
+
+### 3.6 自动更新
+
+桌面版内置 `electron-updater`，安装版会在启动后以及每 4 小时检查一次更新，下载完成提示重启安装（不动知识库数据）。完整说明见 [docs/UPDATE.md](docs/UPDATE.md)。
+
+- 默认更新源：GitHub Releases（`electron/update-config.json`，**仓库必须公开**）
+- 自建源：`node scripts/build.mjs` 会把 `latest.yml` + 安装包 + `.blockmap` 收集到 `release/updates/`，传到任意 HTTPS 静态目录，配置 `provider: generic` + `url`
+- 本地联调：`WRK_UPDATE_URL=http://127.0.0.1:8899 ./release/win-unpacked/企业知识库.exe`
+- 发版：改 `frontend/package.json` 的 `version` → `node scripts/build.mjs --publish`（GitHub）或手动上传 `release/updates/`
 
 ---
 
