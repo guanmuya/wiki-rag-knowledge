@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth, useToast } from '../auth'
 import { chatApi, kbApi } from '../api'
 import type {
@@ -46,6 +46,8 @@ export default function ChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
   const bottomRef = useRef<HTMLDivElement>(null)
+  const newConversationRef = useRef<HTMLButtonElement>(null)
+  const sidebarToggleRef = useRef<HTMLButtonElement>(null)
   const skipDetailRef = useRef<number | null>(null)
   const defaultsApplied = useRef(false)
 
@@ -81,6 +83,10 @@ export default function ChatPage() {
     void loadKbs()
     void loadConversations()
   }, [loadKbs, loadConversations])
+
+  useEffect(() => {
+    if (sidebarOpen) newConversationRef.current?.focus()
+  }, [sidebarOpen])
 
   const loadDetail = useCallback(async (id: number) => {
     if (skipDetailRef.current === id) {
@@ -145,6 +151,11 @@ export default function ChatPage() {
     void persistKbSelection([])
   }
 
+  const closeSidebar = () => {
+    setSidebarOpen(false)
+    sidebarToggleRef.current?.focus()
+  }
+
   const newConversation = async () => {
     try {
       const title = `新会话 ${new Date().toLocaleString('zh-CN', {
@@ -155,7 +166,7 @@ export default function ChatPage() {
       })}`
       const created = await chatApi.create(title, selectedKbs)
       await loadConversations()
-      setSidebarOpen(false)
+      if (sidebarOpen) closeSidebar()
       navigate(`/chat/${created.id}`)
     } catch (err) {
       push(errorText(err), 'error')
@@ -324,11 +335,30 @@ export default function ChatPage() {
   return (
     <>
       <div className="chat-shell">
-        <aside className={`chat-sidebar ${sidebarOpen ? 'open' : ''}`}>
+        <aside
+          id="chat-conversation-sidebar"
+          className={`chat-sidebar ${sidebarOpen ? 'open' : ''}`}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && sidebarOpen) closeSidebar()
+          }}
+        >
           <div className="chat-sidebar-head">
-            <Button variant="primary" className="full" size="sm" onClick={() => void newConversation()}>
+            <button
+              type="button"
+              ref={newConversationRef}
+              className="btn btn-primary btn-sm full"
+              onClick={() => void newConversation()}
+            >
               + 新建会话
-            </Button>
+            </button>
+            <button
+              type="button"
+              className="icon-btn mobile-only chat-sidebar-close"
+              onClick={closeSidebar}
+              aria-label="关闭会话列表"
+            >
+              ×
+            </button>
           </div>
           <div className="conv-list">
             {convLoading ? (
@@ -345,38 +375,61 @@ export default function ChatPage() {
               </div>
             ) : (
               conversations.map((c) => (
-                <div
-                  key={c.id}
-                  className={`conv-item ${activeId === c.id ? 'active' : ''}`}
-                  onClick={() => {
-                    navigate(`/chat/${c.id}`)
-                    setSidebarOpen(false)
-                  }}
-                >
-                  <span className="conv-title" title={c.title}>
+                <div key={c.id} className={`conv-item ${activeId === c.id ? 'active' : ''}`}>
+                  <Link
+                    to={`/chat/${c.id}`}
+                    className="conv-title"
+                    title={c.title}
+                    aria-current={activeId === c.id ? 'page' : undefined}
+                    onClick={() => {
+                      if (sidebarOpen) closeSidebar()
+                    }}
+                  >
                     {c.title}
-                  </span>
+                  </Link>
                   <span className="conv-actions">
                     <button
                       type="button"
                       title="重命名"
-                      onClick={(e) => {
-                        e.stopPropagation()
+                      aria-label={`重命名会话：${c.title}`}
+                      onClick={() => {
                         setRenameTarget(c)
                         setRenameText(c.title)
                       }}
                     >
-                      ✎
+                      <svg
+                        viewBox="0 0 20 20"
+                        width="14"
+                        height="14"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="m3.5 16.5 3.3-.7 8.7-8.7a2.1 2.1 0 0 0-3-3l-8.3 8.7-.7 3.7ZM11.7 5.3l3 3" />
+                      </svg>
                     </button>
                     <button
                       type="button"
                       title="删除"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setDeleteTarget(c)
-                      }}
+                      aria-label={`删除会话：${c.title}`}
+                      onClick={() => setDeleteTarget(c)}
                     >
-                      ×
+                      <svg
+                        viewBox="0 0 20 20"
+                        width="14"
+                        height="14"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M4 5.5h12M7.5 5.5V4h5v1.5M5.5 5.5l.6 10.2c0 .7.6 1.3 1.3 1.3h5.2c.7 0 1.3-.6 1.3-1.3l.6-10.2M8 8.5v5.5M12 8.5v5.5" />
+                      </svg>
                     </button>
                   </span>
                 </div>
@@ -390,8 +443,11 @@ export default function ChatPage() {
             <button
               type="button"
               className="icon-btn mobile-only"
-              onClick={() => setSidebarOpen((v) => !v)}
+              ref={sidebarToggleRef}
+              onClick={() => (sidebarOpen ? closeSidebar() : setSidebarOpen(true))}
               aria-label="会话列表"
+              aria-controls="chat-conversation-sidebar"
+              aria-expanded={sidebarOpen}
             >
               ☰
             </button>
@@ -407,20 +463,17 @@ export default function ChatPage() {
                 <span className="tiny muted">暂无可选知识库，请联系管理员授权</span>
               ) : (
                 visibleKbs.map((k) => (
-                  <span
+                  <button
                     key={k.id}
+                    type="button"
                     className={`kb-pick ${selectedKbs.includes(k.id) ? 'on' : ''}`}
+                    aria-pressed={selectedKbs.includes(k.id)}
                     onClick={() => toggleKb(k.id)}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') toggleKb(k.id)
-                    }}
                     title={`${k.name} · ${k.mode_label}`}
                   >
                     {k.name}
                     <span className="lv">{k.my_level === 'manage' ? '管理' : '只读'}</span>
-                  </span>
+                  </button>
                 ))
               )}
             </div>
@@ -521,7 +574,9 @@ export default function ChatPage() {
                 }
                 disabled={busy}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
+                  // 229 是部分输入法在组合文字时使用的键码。
+                  const composing = e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229
+                  if (e.key === 'Enter' && !e.shiftKey && !composing) {
                     e.preventDefault()
                     if (!busy) void ask()
                   }
