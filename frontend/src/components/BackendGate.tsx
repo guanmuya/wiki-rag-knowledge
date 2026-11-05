@@ -148,15 +148,10 @@ export default function BackendGate({ children }: { children: ReactNode }) {
     void check()
   }, [check])
 
-  // 初始化完成后重新探活：否则门里的 needs_setup 仍是旧值，
-  // 会把刚建好账号的用户弹回引导页，与 SetupPage 的跳转互相打架。
+  // 创建成功的响应已确认初始化完成；立即清除缓存，避免跳转时被旧状态弹回。
+  // 下次启动或刷新页面时，check() 仍会重新向后端确认状态。
   useEffect(() => {
-    const handler = () => {
-      void metaApi
-        .get()
-        .then((meta) => setNeedsSetup(Boolean(meta.needs_setup)))
-        .catch(() => setNeedsSetup(false))
-    }
+    const handler = () => setNeedsSetup(false)
     window.addEventListener(SETUP_COMPLETED_EVENT, handler)
     return () => window.removeEventListener(SETUP_COMPLETED_EVENT, handler)
   }, [])

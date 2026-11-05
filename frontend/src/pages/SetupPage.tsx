@@ -55,11 +55,12 @@ export default function SetupPage() {
       setError('用户名至少 3 个字符')
       return
     }
-    if (password.length < 10) {
+    if (strength.length < 10) {
       setError('密码至少 10 位')
       return
     }
-    if (strength.kinds < 3) {
+    // 非 ASCII 字符的分类由后端判定，避免误拒有效密码。
+    if (strength.isAscii && strength.kinds < 3) {
       setError('密码需包含大写、小写、数字、符号中的至少三类')
       return
     }
@@ -75,7 +76,7 @@ export default function SetupPage() {
         display_name: displayName.trim(),
         org_name: orgName.trim(),
       })
-      // 先让启动门刷新 needs_setup，再跳转；顺序反了会被门弹回本页形成死循环
+      // 先通知启动门清除已完成的初始化状态，再跳转登录页。
       notifySetupCompleted()
       navigate('/login', { replace: true })
     } catch (err) {
@@ -159,7 +160,7 @@ export default function SetupPage() {
               placeholder="例如：张管理"
             />
           </Field>
-          <Field label="密码" required hint="至少 10 位，包含大小写、数字、符号中的三类">
+          <Field label="密码" required hint="至少 10 位，包含大写、小写、数字、符号中的至少三类">
             <TextInput
               type="password"
               value={password}
@@ -176,7 +177,7 @@ export default function SetupPage() {
                   style={{ width: `${strength.percent}%` }}
                 />
               </div>
-              <span className="pwd-meter-text">{strength.text}</span>
+              <span className="pwd-meter-text">参考：{strength.text}</span>
             </div>
           ) : null}
           <Field label="确认密码" required>
@@ -204,17 +205,20 @@ export default function SetupPage() {
   )
 }
 
-function passwordStrength(pwd: string): { level: number; percent: number; text: string; kinds: number } {
+function passwordStrength(pwd: string): { level: number; percent: number; text: string; kinds: number; length: number; isAscii: boolean } {
+  const length = Array.from(pwd).length
+  const isAscii = /^[\x00-\x7f]*$/.test(pwd)
+  // 供强度指示参考；后端对非 ASCII 数字的分类可能更宽。
   const kinds =
-    (pwd.length >= 10 ? 1 : 0) +
-    (/[a-z]/.test(pwd) ? 1 : 0) +
-    (/[A-Z]/.test(pwd) ? 1 : 0) +
-    (/[0-9]/.test(pwd) ? 1 : 0) +
-    (/[^a-zA-Z0-9]/.test(pwd) ? 1 : 0)
-  const percent = Math.min(100, Math.round((kinds / 5) * 100))
-  if (!pwd) return { level: 0, percent: 0, text: '', kinds: 0 }
-  if (kinds <= 2) return { level: 1, percent, text: '强度偏弱', kinds }
-  if (kinds === 3) return { level: 2, percent, text: '强度一般', kinds }
-  if (kinds === 4) return { level: 3, percent, text: '强度良好', kinds }
-  return { level: 4, percent, text: '强度很好', kinds }
+    (/\p{Lowercase}/u.test(pwd) ? 1 : 0) +
+    (/\p{Uppercase}/u.test(pwd) ? 1 : 0) +
+    (/\p{Decimal_Number}/u.test(pwd) ? 1 : 0) +
+    (/[^\p{L}\p{N}]/u.test(pwd) ? 1 : 0)
+  const score = kinds + (length >= 10 ? 1 : 0)
+  const percent = Math.min(100, Math.round((score / 5) * 100))
+  if (!pwd) return { level: 0, percent: 0, text: '', kinds, length, isAscii }
+  if (score <= 2) return { level: 1, percent, text: '强度偏弱', kinds, length, isAscii }
+  if (score === 3) return { level: 2, percent, text: '强度一般', kinds, length, isAscii }
+  if (score === 4) return { level: 3, percent, text: '强度良好', kinds, length, isAscii }
+  return { level: 4, percent, text: '强度很好', kinds, length, isAscii }
 }

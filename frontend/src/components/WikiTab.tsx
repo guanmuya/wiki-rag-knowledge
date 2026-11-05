@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { wikiApi } from '../api'
 import type {
   KnowledgeBase,
@@ -10,6 +10,7 @@ import { errorText, formatTime, taskStatusClass, wikiStatusLabel } from '../util
 import {
   Badge,
   Button,
+  ConfirmDialog,
   EmptyState,
   ErrorState,
   Modal,
@@ -38,11 +39,25 @@ export default function WikiTab({
   const [detail, setDetail] = useState<WikiPageDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<unknown>(null)
+  const selectedSlugRef = useRef<string | null>(initialSlug ?? null)
+  const currentKbIdRef = useRef(kb.id)
+  currentKbIdRef.current = kb.id
+  const pageRequestRef = useRef(0)
+  const treeRequestRef = useRef(0)
+  const mountedRef = useRef(true)
+  const treeButtonRefs = useRef(new Map<string, HTMLButtonElement>())
+  const focusSelectionRef = useRef(false)
 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [draftSummary, setDraftSummary] = useState('')
   const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
+  const [pendingSlug, setPendingSlug] = useState<string | null>(null)
+  const navigationTriggerRef = useRef<HTMLElement | null>(null)
+  const previousInitialSlugRef = useRef(initialSlug)
+  const deferredInitialSlugRef = useRef<string | null>(null)
+  const deferredTreeSelectionRef = useRef(false)
 
   const [versionsOpen, setVersionsOpen] = useState(false)
   const [versions, setVersions] = useState<WikiPageVersion[]>([])
@@ -53,43 +68,82 @@ export default function WikiTab({
   const [unlockOpen, setUnlockOpen] = useState(false)
   const [unlockBusy, setUnlockBusy] = useState(false)
 
+  // All page selection goes through here so an earlier response becomes stale immediately.
+  const selectSlug = useCallback((next: string | null, focusSelection = false) => {
+    if (selectedSlugRef.current === next) return
+    if (savingRef.current) {
+      deferredTreeSelectionRef.current = true
+      return
+    }
+    selectedSlugRef.current = next
+    pageRequestRef.current += 1
+    focusSelectionRef.current = focusSelection
+    setSlug(next)
+    setDetail(null)
+    setDetailError(null)
+    setDetailLoading(Boolean(next))
+  }, [])
+
   const loadTree = useCallback(async () => {
+    const requestId = ++treeRequestRef.current
+    const isCurrent = () =>
+      mountedRef.current && requestId === treeRequestRef.current && currentKbIdRef.current === kb.id
     setTreeLoading(true)
     setTreeError(null)
     try {
       const data = await wikiApi.tree(kb.id)
+      if (!isCurrent()) return
       const list = [...(data.pages ?? [])].sort((a, b) => a.order_index - b.order_index)
       setPages(list)
-      setSlug((prev) => {
-        if (prev && list.some((p) => p.slug === prev)) return prev
-        return list.length > 0 ? list[0].slug : null
-      })
+      const current = selectedSlugRef.current
+      if (!current || !list.some((p) => p.slug === current)) {
+        selectSlug(list[0]?.slug ?? null)
+      }
     } catch (err) {
+      if (!isCurrent()) return
       setTreeError(err)
       setPages([])
     } finally {
-      setTreeLoading(false)
+      if (isCurrent()) setTreeLoading(false)
     }
-  }, [kb.id])
+  }, [kb.id, selectSlug])
 
   const loadPage = useCallback(
     async (targetSlug: string) => {
+      if (!mountedRef.current || currentKbIdRef.current !== kb.id || selectedSlugRef.current !== targetSlug) return
+      const requestId = ++pageRequestRef.current
+      const isCurrent = () =>
+        mountedRef.current &&
+        currentKbIdRef.current === kb.id &&
+        selectedSlugRef.current === targetSlug &&
+        requestId === pageRequestRef.current
       setDetailLoading(true)
       setDetailError(null)
       try {
         const data = await wikiApi.page(kb.id, targetSlug)
+        if (!isCurrent()) return
         setDetail(data)
         setDraft(data.version?.content_md ?? '')
         setDraftSummary(data.page?.summary ?? '')
       } catch (err) {
+        if (!isCurrent()) return
         setDetailError(err)
         setDetail(null)
       } finally {
-        setDetailLoading(false)
+        if (isCurrent()) setDetailLoading(false)
       }
     },
     [kb.id],
   )
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      pageRequestRef.current += 1
+      treeRequestRef.current += 1
+    }
+  }, [])
 
   useEffect(() => {
     void loadTree()
@@ -97,16 +151,71 @@ export default function WikiTab({
 
   useEffect(() => {
     if (slug) void loadPage(slug)
+    return () => { pageRequestRef.current += 1 }
   }, [slug, loadPage])
-
-  useEffect(() => {
-    if (initialSlug) setSlug(initialSlug)
-  }, [initialSlug])
 
   useEffect(() => {
     setEditing(false)
     setViewVersion(null)
   }, [slug])
+
+  const dirty = editing && detail !== null && (
+    draft !== (detail.version?.content_md ?? '') || draftSummary !== (detail.page?.summary ?? '')
+  )
+
+  const requestNavigation = useCallback((next: string, trigger?: HTMLElement | null, focusSelection = false) => {
+    if (savingRef.current || next === selectedSlugRef.current) return
+    if (dirty) {
+      navigationTriggerRef.current = trigger ?? null
+      setPendingSlug(next)
+      return
+    }
+    setEditing(false)
+    selectSlug(next, focusSelection)
+  }, [dirty, selectSlug])
+
+  // A changed deep link is handled through the same draft guard, after any save finishes.
+  useEffect(() => {
+    if (previousInitialSlugRef.current !== initialSlug) {
+      previousInitialSlugRef.current = initialSlug
+      deferredInitialSlugRef.current = initialSlug ?? null
+    }
+    if (saving || !deferredInitialSlugRef.current) return
+    const next = deferredInitialSlugRef.current
+    deferredInitialSlugRef.current = null
+    requestNavigation(next)
+  }, [initialSlug, saving, requestNavigation])
+
+  useEffect(() => {
+    if (saving || treeLoading || treeError || !deferredTreeSelectionRef.current) return
+    deferredTreeSelectionRef.current = false
+    const current = selectedSlugRef.current
+    if (!current || !pages.some((p) => p.slug === current)) selectSlug(pages[0]?.slug ?? null)
+  }, [saving, treeLoading, treeError, pages, selectSlug])
+
+  useEffect(() => {
+    if (!slug || treeLoading || !focusSelectionRef.current) return
+    focusSelectionRef.current = false
+    treeButtonRefs.current.get(slug)?.focus()
+  }, [slug, treeLoading])
+
+  const cancelNavigation = () => {
+    const trigger = navigationTriggerRef.current
+    navigationTriggerRef.current = null
+    setPendingSlug(null)
+    window.requestAnimationFrame(() => {
+      if (trigger?.isConnected) trigger.focus()
+    })
+  }
+
+  const confirmNavigation = () => {
+    if (!pendingSlug || savingRef.current) return
+    const next = pendingSlug
+    navigationTriggerRef.current = null
+    setPendingSlug(null)
+    setEditing(false)
+    selectSlug(next, true)
+  }
 
   const openVersions = async () => {
     if (!slug) return
@@ -126,22 +235,25 @@ export default function WikiTab({
   }
 
   const save = async () => {
-    if (!slug || !detail) return
+    if (!slug || !detail || savingRef.current) return
     if (draft.trim().length < 10) {
       onToast('正文至少 10 个字符', 'error')
       return
     }
+    savingRef.current = true
     setSaving(true)
     try {
       await wikiApi.save(kb.id, slug, draft, draftSummary || undefined)
+      if (!mountedRef.current || selectedSlugRef.current !== slug) return
       setEditing(false)
       onToast('已保存人工版本，该页索引正在重建', 'success')
       await loadPage(slug)
       await loadTree()
     } catch (err) {
-      onToast(errorText(err), 'error')
+      if (mountedRef.current) onToast(errorText(err), 'error')
     } finally {
-      setSaving(false)
+      savingRef.current = false
+      if (mountedRef.current) setSaving(false)
     }
   }
 
@@ -210,7 +322,7 @@ export default function WikiTab({
 
   return (
     <div className="wiki-layout">
-      <div className="wiki-tree">
+      <nav className="wiki-tree" aria-label="Wiki 目录">
         {grouped.map((group) => (
           <div key={group.key}>
             {group.label ? (
@@ -219,27 +331,30 @@ export default function WikiTab({
               </div>
             ) : null}
             {group.items.map((p) => (
-              <div
+              <button
                 key={p.slug}
-                className={`wiki-tree-item ${p.slug === slug ? 'active' : ''}`}
-                onClick={() => setSlug(p.slug)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') setSlug(p.slug)
+                ref={(node) => {
+                  if (node) treeButtonRefs.current.set(p.slug, node)
+                  else treeButtonRefs.current.delete(p.slug)
                 }}
-                title={p.summary || p.title}
+                type="button"
+                className={`wiki-tree-item ${p.slug === slug ? 'active' : ''}`}
+                aria-current={p.slug === slug ? 'page' : undefined}
+                aria-label={`${p.title}，${wikiStatusLabel(p.status, p.status_label)}${p.human_locked ? '，人工锁定' : ''}`}
+                disabled={saving}
+                onClick={(e) => requestNavigation(p.slug, e.currentTarget)}
+                title={p.summary ? `${p.title} · ${p.summary}` : p.title}
               >
-                <span className={`wiki-mark ${markClass(p)}`}>
+                <span className={`wiki-mark ${markClass(p)}`} aria-hidden="true">
                   {p.status === 'published' ? '●' : p.status === 'needs_review' ? '◐' : '○'}
                 </span>
                 <span className="wiki-tree-title">{p.title}</span>
-                {p.human_locked ? <span title="人工锁定">🔒</span> : null}
-              </div>
+                {p.human_locked ? <span title="人工锁定" aria-hidden="true">🔒</span> : null}
+              </button>
             ))}
           </div>
         ))}
-      </div>
+      </nav>
 
       <div className="wiki-main">
         {detailLoading ? (
@@ -268,7 +383,16 @@ export default function WikiTab({
                   <>
                     {editing ? (
                       <>
-                        <Button size="sm" variant="ghost" onClick={() => setEditing(false)} disabled={saving}>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setDraft(detail.version?.content_md ?? '')
+                            setDraftSummary(detail.page?.summary ?? '')
+                            setEditing(false)
+                          }}
+                          disabled={saving}
+                        >
                           取消
                         </Button>
                         <Button size="sm" variant="primary" loading={saving} onClick={() => void save()}>
@@ -371,9 +495,15 @@ export default function WikiTab({
                 {detail.related && detail.related.length > 0 ? (
                   <div className="related-chips">
                     {detail.related.map((r) => (
-                      <span key={r.slug} className="chip" onClick={() => setSlug(r.slug)}>
+                      <button
+                        key={r.slug}
+                        type="button"
+                        className="chip"
+                        disabled={saving}
+                        onClick={(e) => requestNavigation(r.slug, e.currentTarget, true)}
+                      >
                         {r.title}
-                      </span>
+                      </button>
                     ))}
                   </div>
                 ) : (
@@ -460,6 +590,17 @@ export default function WikiTab({
           </div>
         )}
       </Modal>
+
+      <ConfirmDialog
+        open={Boolean(pendingSlug)}
+        title="放弃未保存的修改？"
+        message="切换页面会丢弃当前未保存的正文和摘要。"
+        confirmText="放弃并切换"
+        danger
+        busy={saving}
+        onConfirm={confirmNavigation}
+        onCancel={cancelNavigation}
+      />
 
       <Modal
         open={unlockOpen}

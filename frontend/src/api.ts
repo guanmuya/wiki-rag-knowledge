@@ -454,7 +454,7 @@ export const setupApi = {
  * 为什么需要它：`BackendGate` 在启动时缓存了 `needs_setup`。初始化成功后若只
  * navigate 到 /login，门里的缓存仍是 true，会把用户又弹回 /setup；
  * SetupPage 再检测到已初始化跳回 /login —— 来回死循环，页面停在
- * 「正在检查系统状态…」。所以初始化成功后必须让门重新探活。
+ * 「正在检查系统状态…」。所以初始化成功后必须通知门清除旧状态；下次启动时仍会重新检查。
  */
 export const SETUP_COMPLETED_EVENT = 'wrk:setup-completed'
 
