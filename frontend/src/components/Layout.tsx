@@ -13,7 +13,7 @@ interface NavItem {
   match?: (path: string) => boolean
 }
 
-type NavIconName = 'book' | 'chat' | 'search' | 'clock' | 'users' | 'settings' | 'info'
+type NavIconName = 'book' | 'chat' | 'search' | 'clock' | 'users' | 'settings' | 'info' | 'usage'
 
 /**
  * 导航图标用内联 SVG，而不是 ▤ ✦ ⌕ 这类字符。
@@ -43,6 +43,12 @@ const NAV_ICONS: Record<NavIconName, ReactElement> = {
       <circle cx="8" cy="7.5" r="2.8" />
       <path d="M3.5 16.5c.6-2.6 2.4-4 4.5-4s3.9 1.4 4.5 4" />
       <path d="M13.4 5.2a2.6 2.6 0 0 1 0 4.9M14.4 12.9c1.4.4 2.4 1.6 2.8 3.6" />
+    </>
+  ),
+  usage: (
+    <>
+      <path d="M3.5 16.5h13" />
+      <path d="M5.5 14V9.5M10 14V5M14.5 14v-3" />
     </>
   ),
   settings: (
@@ -97,6 +103,7 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
     items: [
       { to: '/admin/users', label: '用户管理', icon: 'users', adminOnly: true, match: (p) => p.startsWith('/admin/users') },
       { to: '/admin/models', label: '模型设置', icon: 'settings', adminOnly: true, match: (p) => p.startsWith('/admin/models') },
+      { to: '/admin/usage', label: '用量概览', icon: 'usage', adminOnly: true, match: (p) => p.startsWith('/admin/usage') },
     ],
   },
   {
@@ -242,6 +249,7 @@ export default function Layout() {
 function currentTitle(path: string): string {
   if (path.startsWith('/admin/users')) return '用户管理'
   if (path.startsWith('/admin/models')) return '模型设置'
+  if (path.startsWith('/admin/usage')) return '用量概览'
   if (path.startsWith('/kbs/')) return '知识库详情'
   if (path.startsWith('/kbs')) return '知识库'
   if (path.startsWith('/chat')) return '智能问答'

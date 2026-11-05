@@ -257,7 +257,9 @@ Wiki-Rag-Knowledge/
 
 ## 6. 模型配置
 
-界面在 `/admin/models`，接口在 `/api/settings/*`。供应商（Provider）→ 模型（ModelConfig，`purpose` = `llm` / `embedding` / `vision`，各自可设默认）。
+界面在 `/admin/models`，接口在 `/api/settings/*`。供应商（Provider）→ 模型（ModelConfig，`purpose` = `llm` / `embedding` / `vision`，各自可设默认）。添加供应商时可选常用直连接口预设或自定义地址；请求直接发往配置的供应商，模型列表和可用能力以供应商实际支持为准。
+
+管理员可在「用量概览」（`/admin/usage`）查看近 7 天、近 30 天或全部已记录用量。数据来自知识库处理流水及成功保存的问答；检索调试、连接测试和未保存或失败的问答不包含在内。供应商可能不返回 Token 数，失败或中断的调用也可能消耗用量，所示数字不能当作完整账单、余额或按供应商划分的用量。
 
 ### 6.1 三种协议
 
@@ -267,7 +269,7 @@ Wiki-Rag-Knowledge/
 | `openai-responses` | `POST {base}/responses` | **无** | `Authorization: Bearer` |
 | `anthropic` | `POST {base}/messages` | **无** | `x-api-key` + `anthropic-version` |
 
-`openai-responses` 与 `anthropic` 没有 Embedding 端点，`llm.embed()` 会**直接抛错**而不是悄悄退回哈希向量（`backend/app/services/llm.py:636-639`、`backend/app/services/llm.py:466-471`）——静默降级会让用户以为向量检索正常，实际排序质量已经塌了。向量用途需另配一个 OpenAI 兼容供应商。
+`openai-responses` 与 `anthropic` 没有 Embedding 端点，`llm.embed()` 会**直接抛错**而不是悄悄退回哈希向量——静默降级会让用户以为向量检索正常，实际排序质量已经塌了。向量用途需另配一个支持 Embedding 的 OpenAI 兼容供应商。官方 OpenAI 的 o1/o3/o4 系列使用兼容推理模型的输出参数；阿里云中国区的 `text-embedding-v3/v4` 会按每次最多 10 条文本分批请求。
 
 ### 6.2 探测与导入
 

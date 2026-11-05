@@ -25,6 +25,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable
+from urllib.parse import urlsplit
 
 import httpx
 from sqlalchemy import select
@@ -226,7 +227,9 @@ def _join(base: str, path: str) -> str:
         raise ModelUnavailable("供应商接口地址为空")
     if not re.match(r"^https?://", base, re.I):
         raise ModelUnavailable(f"供应商接口地址需以 http:// 或 https:// 开头：{base}")
-    if re.search(r"/v\d+$", base):
+    # Gemini 的 OpenAI 兼容地址以 /v1beta/openai 结尾，已经包含 API 根路径。
+    # 其他无版本号的旧地址仍沿用补 /v1 的规则，避免改变已有供应商配置。
+    if re.search(r"/(?:v\d+|v\d+beta/openai)$", base, re.I):
         return f"{base}/{path.lstrip('/')}"
     return f"{base}/v1/{path.lstrip('/')}"
 
@@ -352,6 +355,39 @@ def provider_protocol(provider: models.Provider) -> str:
     """
     value = (getattr(provider, "protocol", "") or "").strip()
     return value if value in SUPPORTED_PROTOCOLS else PROTOCOL_OPENAI
+
+
+def _official_https_base(base: str, host: str, path: str | None = None) -> bool:
+    """仅识别官方 HTTPS 地址，避免对兼容网关应用供应商特例。"""
+    try:
+        parsed = urlsplit((base or "").strip())
+        return (
+            parsed.scheme.lower() == "https"
+            and parsed.hostname == host
+            and parsed.port in (None, 443)
+            and "@" not in parsed.netloc
+            and not parsed.query and not parsed.fragment
+            and (path is None or parsed.path.rstrip("/") == path)
+        )
+    except ValueError:
+        return False
+
+
+def _openai_reasoning_chat(provider: models.Provider, model: str) -> bool:
+    """官方 o1/o3/o4 系列 Chat Completions 使用不同的 token 参数。"""
+    return bool(
+        _official_https_base(provider.base_url, "api.openai.com")
+        and re.match(r"^o[134](?:-|$)", model or "")
+    )
+
+
+def _dashscope_embedding(provider: models.Provider, model: str) -> bool:
+    """中国区同步向量 API 的 v3/v4 模型每次最多接受 10 条文本。"""
+    return (
+        model in ("text-embedding-v3", "text-embedding-v4")
+        and _official_https_base(
+            provider.base_url, "dashscope.aliyuncs.com", "/compatible-mode/v1")
+    )
 
 
 def _plain_text(content: Any) -> str:
@@ -580,10 +616,12 @@ def chat(
         payload = {
             "model": cfg.model,
             "messages": messages,
-            "temperature": temp,
         }
+        reasoning = _openai_reasoning_chat(provider, cfg.model)
+        if not reasoning:
+            payload["temperature"] = temp
         if limit:
-            payload["max_tokens"] = limit
+            payload["max_completion_tokens" if reasoning else "max_tokens"] = limit
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
@@ -638,12 +676,56 @@ def chat(
     return content or ""
 
 
+def _embed_dashscope_batches(texts: list[str], payload: dict, provider: models.Provider,
+                             protocol: str, stats: CallStats | None) -> list[list[float]]:
+    """将中国区 DashScope 的单次同步请求限制为 10 条，并校验所有批次。"""
+    url = _join(provider.base_url, "embeddings")
+    vectors: list[list[float]] = []
+    expected_dim = payload.get("dimensions")
+    for start in range(0, len(texts), 10):
+        batch = texts[start:start + 10]
+        batch_payload = {**payload, "input": batch}
+        started = time.time()
+        data = _post(url, batch_payload, provider, protocol)
+        try:
+            rows = data["data"]
+            if not isinstance(rows, list):
+                raise TypeError("data 不是数组")
+            if len(rows) != len(batch):
+                raise ModelUnavailable(
+                    f"Embedding 数量不匹配：请求 {len(batch)} 条，返回 {len(rows)} 条")
+            indexes = [row["index"] for row in rows]
+            if (any(type(index) is not int for index in indexes)
+                    or sorted(indexes) != list(range(len(batch)))):
+                raise ModelUnavailable("Embedding 索引不匹配")
+            rows = sorted(rows, key=lambda row: row["index"])
+            batch_vectors = [normalize(row["embedding"]) for row in rows]
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise ModelUnavailable(f"Embedding 响应结构异常：{str(data)[:300]}") from exc
+        for vector in batch_vectors:
+            if expected_dim is None:
+                expected_dim = len(vector)
+            if not vector or len(vector) != expected_dim:
+                raise ModelUnavailable(
+                    f"Embedding 维度不匹配：预期 {expected_dim}，返回 {len(vector)}")
+        if stats:
+            usage = data.get("usage") or {}
+            stats.record_embed(
+                texts=len(batch),
+                tokens=int(usage.get("prompt_tokens") or usage.get("total_tokens") or 0),
+                latency_ms=int((time.time() - started) * 1000),
+                live=True,
+            )
+        vectors.extend(batch_vectors)
+    return vectors
+
+
 def embed(db: Session, texts: list[str], *, stats: CallStats | None = None,
           cfg_override: models.ModelConfig | None = None) -> list[list[float]]:
     """返回与 texts 等长的向量列表。未配置模型时使用离线哈希向量。
 
-    统计口径：无论 live 还是 offline 都会记一次 embed 调用与 embed_texts 条数，
-    因为「向量化了多少文本」本身就是整理成本的一部分（论文要报这个数）。
+    统计口径：live 按成功的供应商请求计数，offline 记一次调用；两者都记录
+    embed_texts 条数，因为「向量化了多少文本」本身就是整理成本的一部分。
     但只有 live 调用进 live_calls —— 离线哈希是本地计算，不产生费用。
 
     协议约束：`openai-responses` 与 `anthropic` 都没有 Embedding 端点。
@@ -671,24 +753,28 @@ def embed(db: Session, texts: list[str], *, stats: CallStats | None = None,
     payload: dict[str, Any] = {"model": cfg.model, "input": texts}
     if params.get("dimensions"):
         payload["dimensions"] = int(params["dimensions"])
-    started = time.time()
-    data = _post(_join(provider.base_url, "embeddings"), payload, provider, protocol)
-    try:
-        rows = sorted(data["data"], key=lambda r: r.get("index", 0))
-        vectors = [normalize(r["embedding"]) for r in rows]
-    except (KeyError, TypeError) as exc:
-        raise ModelUnavailable(f"Embedding 响应结构异常：{str(data)[:300]}") from exc
-    if len(vectors) != len(texts):
-        raise ModelUnavailable(f"Embedding 数量不匹配：请求 {len(texts)} 条，返回 {len(vectors)} 条")
+    if _dashscope_embedding(provider, cfg.model):
+        vectors = _embed_dashscope_batches(texts, payload, provider, protocol, stats)
+    else:
+        started = time.time()
+        data = _post(_join(provider.base_url, "embeddings"), payload, provider, protocol)
+        try:
+            rows = sorted(data["data"], key=lambda r: r.get("index", 0))
+            vectors = [normalize(r["embedding"]) for r in rows]
+        except (KeyError, TypeError) as exc:
+            raise ModelUnavailable(f"Embedding 响应结构异常：{str(data)[:300]}") from exc
+        if len(vectors) != len(texts):
+            raise ModelUnavailable(
+                f"Embedding 数量不匹配：请求 {len(texts)} 条，返回 {len(vectors)} 条")
+        if stats:
+            usage = data.get("usage") or {}
+            stats.record_embed(
+                texts=len(texts),
+                tokens=int(usage.get("prompt_tokens") or usage.get("total_tokens") or 0),
+                latency_ms=int((time.time() - started) * 1000),
+                live=True,
+            )
     real_dim = len(vectors[0])
-    if stats:
-        usage = data.get("usage") or {}
-        stats.record_embed(
-            texts=len(texts),
-            tokens=int(usage.get("prompt_tokens") or usage.get("total_tokens") or 0),
-            latency_ms=int((time.time() - started) * 1000),
-            live=True,
-        )
     if cfg.embed_dim != real_dim or not cfg.embed_signature:
         cfg.embed_dim = real_dim
         cfg.embed_signature = embed_signature(cfg, provider, real_dim)
@@ -757,7 +843,8 @@ def describe_image(db: Session, image_bytes: bytes, mime: str, filename: str,
                     {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
                 ],
             }],
-            "max_tokens": 500,
+            "max_completion_tokens" if _openai_reasoning_chat(provider, cfg.model)
+            else "max_tokens": 500,
         }
         data = _post(url, payload, provider, protocol)
         try:
@@ -892,8 +979,11 @@ def test_model(db: Session, cfg: models.ModelConfig) -> dict:
             ok = bool(vecs and vecs[0])
             message = f"返回向量维度 {len(vecs[0])}" if ok else "返回空向量"
         else:
+            # o 系列的输出配额包含推理 token；16 常在生成可见文本之前就用完。
+            test_budget = (2048 if protocol == PROTOCOL_OPENAI
+                           and _openai_reasoning_chat(provider, cfg.model) else 16)
             text = chat(db, [{"role": "user", "content": "只回复 OK 两个字符。"}],
-                        max_tokens=16, cfg_override=cfg)
+                        max_tokens=test_budget, cfg_override=cfg)
             ok = bool(text.strip())
             message = f"模型返回：{text.strip()[:60]}"
     except ModelUnavailable as exc:

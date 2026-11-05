@@ -18,7 +18,7 @@ from .services import threadpool
 
 threadpool.install()
 
-from .routers import auth, chat, diagnostics, kbs, settings, setup, wiki  # noqa: E402
+from .routers import auth, chat, diagnostics, kbs, settings, setup, usage, wiki  # noqa: E402
 from .services import warmup, watchdog, worker  # noqa: E402
 
 logging.basicConfig(
@@ -131,6 +131,7 @@ app.include_router(setup.router, prefix="/api")
 app.include_router(kbs.router, prefix="/api")
 app.include_router(wiki.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
+app.include_router(usage.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
 # 诊断接口（admin）：卡住时用来取证，见 routers/diagnostics.py
 app.include_router(diagnostics.router, prefix="/api")

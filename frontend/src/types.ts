@@ -16,7 +16,7 @@ export type ModelPurpose = 'llm' | 'embedding' | 'vision'
 
 /**
  * 供应商 API 协议族。
- * - openai：/chat/completions + /embeddings（默认，兼容绝大多数中转）
+ * - openai：/chat/completions 和供应商支持的 /embeddings（默认）
  * - openai-responses：/responses
  * - anthropic：/messages
  */
@@ -26,17 +26,17 @@ export const PROTOCOL_OPTIONS: Array<{ value: ProviderProtocol; label: string; h
   {
     value: 'openai',
     label: 'OpenAI 兼容',
-    hint: 'POST /chat/completions 与 /embeddings，绝大多数中转与自建网关用这个。',
+    hint: '适用于 OpenAI 和兼容协议的直连 API；支持的接口因供应商而异。',
   },
   {
     value: 'openai-responses',
     label: 'OpenAI Responses',
-    hint: 'POST /responses，新协议；不提供 Embedding 接口。',
+    hint: '适用于支持 /responses 的直连 API；不支持 Embedding。',
   },
   {
     value: 'anthropic',
     label: 'Anthropic Messages',
-    hint: 'POST /messages，system 独立字段；不提供 Embedding 接口。',
+    hint: 'Anthropic 直连 API 使用 /v1/messages；不支持 Embedding。',
   },
 ]
 export type ChatRole = 'user' | 'assistant'
