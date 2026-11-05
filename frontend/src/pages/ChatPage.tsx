@@ -46,6 +46,7 @@ export default function ChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
   const bottomRef = useRef<HTMLDivElement>(null)
+  const newConversationRef = useRef<HTMLButtonElement>(null)
   const sidebarToggleRef = useRef<HTMLButtonElement>(null)
   const skipDetailRef = useRef<number | null>(null)
   const defaultsApplied = useRef(false)
@@ -82,6 +83,10 @@ export default function ChatPage() {
     void loadKbs()
     void loadConversations()
   }, [loadKbs, loadConversations])
+
+  useEffect(() => {
+    if (sidebarOpen) newConversationRef.current?.focus()
+  }, [sidebarOpen])
 
   const loadDetail = useCallback(async (id: number) => {
     if (skipDetailRef.current === id) {
@@ -146,6 +151,11 @@ export default function ChatPage() {
     void persistKbSelection([])
   }
 
+  const closeSidebar = () => {
+    setSidebarOpen(false)
+    sidebarToggleRef.current?.focus()
+  }
+
   const newConversation = async () => {
     try {
       const title = `新会话 ${new Date().toLocaleString('zh-CN', {
@@ -156,8 +166,7 @@ export default function ChatPage() {
       })}`
       const created = await chatApi.create(title, selectedKbs)
       await loadConversations()
-      setSidebarOpen(false)
-      if (sidebarOpen) sidebarToggleRef.current?.focus()
+      if (sidebarOpen) closeSidebar()
       navigate(`/chat/${created.id}`)
     } catch (err) {
       push(errorText(err), 'error')
@@ -326,11 +335,30 @@ export default function ChatPage() {
   return (
     <>
       <div className="chat-shell">
-        <aside id="chat-conversation-sidebar" className={`chat-sidebar ${sidebarOpen ? 'open' : ''}`}>
+        <aside
+          id="chat-conversation-sidebar"
+          className={`chat-sidebar ${sidebarOpen ? 'open' : ''}`}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && sidebarOpen) closeSidebar()
+          }}
+        >
           <div className="chat-sidebar-head">
-            <Button variant="primary" className="full" size="sm" onClick={() => void newConversation()}>
+            <button
+              type="button"
+              ref={newConversationRef}
+              className="btn btn-primary btn-sm full"
+              onClick={() => void newConversation()}
+            >
               + 新建会话
-            </Button>
+            </button>
+            <button
+              type="button"
+              className="icon-btn mobile-only chat-sidebar-close"
+              onClick={closeSidebar}
+              aria-label="关闭会话列表"
+            >
+              ×
+            </button>
           </div>
           <div className="conv-list">
             {convLoading ? (
@@ -354,8 +382,7 @@ export default function ChatPage() {
                     title={c.title}
                     aria-current={activeId === c.id ? 'page' : undefined}
                     onClick={() => {
-                      setSidebarOpen(false)
-                      if (sidebarOpen) sidebarToggleRef.current?.focus()
+                      if (sidebarOpen) closeSidebar()
                     }}
                   >
                     {c.title}
@@ -417,7 +444,7 @@ export default function ChatPage() {
               type="button"
               className="icon-btn mobile-only"
               ref={sidebarToggleRef}
-              onClick={() => setSidebarOpen((v) => !v)}
+              onClick={() => (sidebarOpen ? closeSidebar() : setSidebarOpen(true))}
               aria-label="会话列表"
               aria-controls="chat-conversation-sidebar"
               aria-expanded={sidebarOpen}

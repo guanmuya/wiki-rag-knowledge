@@ -1539,7 +1539,8 @@ code {
   border-right: 1px solid var(--c-border);
   background: var(--c-surface-alt);
 }
-.chat-sidebar-head { padding: 12px; border-bottom: 1px solid var(--c-hairline); }
+.chat-sidebar-head { display: flex; align-items: center; gap: 6px; padding: 12px; border-bottom: 1px solid var(--c-hairline); }
+.chat-sidebar-close { flex: 0 0 30px; }
 .conv-list { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
 .conv-item {
   display: flex;
