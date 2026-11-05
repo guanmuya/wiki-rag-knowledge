@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useAuth, useToast } from '../auth'
-import { chatApi, kbApi } from '../api'
+import { ApiError, chatApi, getToken, kbApi } from '../api'
 import type {
   AskResponse,
   ChatMessage,
@@ -14,29 +14,187 @@ import { Button, ErrorState, Modal, SkeletonLines, Spinner, TextInput } from '..
 import { Markdown } from '../components/Markdown'
 import { MessageInsights } from '../components/Evidence'
 
+// Keep only this page's outstanding requests across an ordinary route unmount.
+// The server remains authoritative after a reload or in another browser tab.
+type AskJob = {
+  key: number
+  userId: number | null
+  session: string | null
+  visit: number
+  intent: number
+  targetId: number | null
+  text: string
+  kbIds: number[]
+  baselineId: number
+  initialDetail: ConversationDetail | null
+  phase: 'creating' | 'asking' | 'success' | 'error'
+  response?: AskResponse
+  error?: string
+  ambiguous?: boolean
+  matchingTurnSeen?: boolean
+}
+type ChatJobEvent = {
+  kind: 'change' | 'list' | 'settled'
+  userId: number | null
+  session: string | null
+  job?: AskJob
+}
+const MAX_CHAT_JOBS = 32
+const askJobs = new Map<number, AskJob>()
+const visibleSuccessJobs = new Set<number>()
+const jobListeners = new Set<(event: ChatJobEvent) => void>()
+let nextJobKey = 0
+let nextVisitKey = 0
+
+function publishJob(kind: ChatJobEvent['kind'], job: AskJob) {
+  jobListeners.forEach((listener) => listener({ kind, userId: job.userId, session: job.session, job }))
+}
+
+function publishList(userId: number | null, session: string | null) {
+  jobListeners.forEach((listener) => listener({ kind: 'list', userId, session }))
+}
+
+function forgetJob(job: AskJob) {
+  if (askJobs.get(job.key) !== job) return
+  askJobs.delete(job.key)
+  publishJob('change', job)
+}
+
+function retainSettledJob(job: AskJob) {
+  // Retain a visible successful fallback; clean up abandoned records eventually.
+  const expire = () => {
+    if (askJobs.get(job.key) !== job) return
+    if (job.phase === 'success' && visibleSuccessJobs.has(job.key)) {
+      window.setTimeout(expire, 60 * 1000)
+    } else if (job.phase === 'success') {
+      forgetJob(job)
+    }
+  }
+  window.setTimeout(expire, 5 * 60 * 1000)
+}
+
+function jobMatchesSession(job: AskJob, userId: number | null) {
+  return job.userId === userId && (job.session === getToken() || job.phase === 'error')
+}
+
+function serverHasQuestion(messages: ChatMessage[], job: AskJob) {
+  return messages.some((message, index) =>
+    message.id > job.baselineId &&
+    message.role === 'user' &&
+    message.content === job.text &&
+    Boolean(message.kb_ids?.length) &&
+    message.kb_ids?.every((id) => job.kbIds.includes(id)) &&
+    messages[index + 1]?.role === 'assistant',
+  )
+}
+
+function withJobAnswer(messages: ChatMessage[], job: AskJob): ChatMessage[] {
+  const res = job.response
+  if (!res) return messages
+  const assistant: ChatMessage = {
+    ...res.message,
+    evidence: res.evidence,
+    route: res.route,
+    latency_ms: res.usage?.latency_ms ?? null,
+    kb_ids: job.kbIds,
+    insufficient: res.insufficient,
+    usage: res.usage,
+  }
+  const existingAnswer = messages.findIndex((message) => message.id === assistant.id)
+  if (existingAnswer >= 0) {
+    const next = [...messages]
+    next[existingAnswer] = assistant
+    return next
+  }
+  const userMessage: ChatMessage = {
+    id: -job.key,
+    role: 'user',
+    content: job.text,
+    kb_ids: job.kbIds,
+    created_at: assistant.created_at ?? new Date().toISOString(),
+  }
+  return [...messages, userMessage, assistant]
+}
+
 export default function ChatPage() {
   const { conversationId } = useParams<{ conversationId: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const { push } = useToast()
   const { user } = useAuth()
+  const userId = user?.id ?? null
+  const session = getToken()
+  const parsedId = conversationId ? Number(conversationId) : null
+  const activeId = parsedId && Number.isFinite(parsedId) ? parsedId : null
+
+  const viewRef = useRef<{
+    locationKey: string
+    pathname: string
+    visit: number
+    intent: number
+    id: number | null
+    userId: number | null
+    session: string | null
+  } | null>(null)
+  if (!viewRef.current || viewRef.current.locationKey !== location.key ||
+      viewRef.current.pathname !== location.pathname || viewRef.current.userId !== userId ||
+      viewRef.current.session !== session) {
+    viewRef.current = {
+      locationKey: location.key, pathname: location.pathname, visit: ++nextVisitKey,
+      intent: 0, id: activeId, userId, session,
+    }
+  }
+  const visit = viewRef.current.visit
+  const mountedRef = useRef(false)
+  const detailSequence = useRef(0)
+  const detailInFlight = useRef<{ sequence: number; visit: number } | null>(null)
+  const hydratedVisit = useRef<number | null>(null)
+  const listSequence = useRef(0)
+  const kbSequence = useRef(0)
+  useLayoutEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      detailSequence.current += 1
+      listSequence.current += 1
+      kbSequence.current += 1
+    }
+  }, [])
+
+  const isCurrentView = useCallback((expectedVisit: number, expectedId?: number | null) => {
+    const view = viewRef.current
+    const hashPath = window.location.hash.startsWith('#/')
+      ? window.location.hash.slice(1).split('?')[0]
+      : window.location.pathname
+    return Boolean(mountedRef.current && view && view.visit === expectedVisit &&
+      (expectedId === undefined || view.id === expectedId) &&
+      view.pathname === hashPath && view.session === getToken())
+  }, [])
 
   const [kbs, setKbs] = useState<KnowledgeBase[]>([])
+  const [kbsOwner, setKbsOwner] = useState<{ userId: number | null; session: string | null } | null>(null)
   const [kbsLoading, setKbsLoading] = useState(true)
   const [kbsError, setKbsError] = useState<unknown>(null)
 
   const [conversations, setConversations] = useState<Conversation[]>([])
+  const [convLoaded, setConvLoaded] = useState(false)
   const [convLoading, setConvLoading] = useState(true)
   const [convError, setConvError] = useState<unknown>(null)
 
   const [detail, setDetail] = useState<ConversationDetail | null>(null)
+  const [detailVisit, setDetailVisit] = useState<number | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [reconcilingVisit, setReconcilingVisit] = useState<number | null>(null)
   const [detailError, setDetailError] = useState<unknown>(null)
+  const [detailErrorVisit, setDetailErrorVisit] = useState<number | null>(null)
 
   const [selectedKbs, setSelectedKbs] = useState<number[]>([])
   const [question, setQuestion] = useState('')
-  const [asking, setAsking] = useState(false)
-  const [askError, setAskError] = useState('')
-  const [pending, setPending] = useState<string | null>(null)
+  const [validationError, setValidationError] = useState<{ visit: number; text: string } | null>(null)
+  const [, setJobVersion] = useState(0)
+  const restoredErrors = useRef(new Set<number>())
+  const restoredDrafts = useRef(new Set<number>())
+  const recoveredJobKey = useRef<number | null>(null)
 
   const [renameTarget, setRenameTarget] = useState<Conversation | null>(null)
   const [renameText, setRenameText] = useState('')
@@ -48,83 +206,237 @@ export default function ChatPage() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const newConversationRef = useRef<HTMLButtonElement>(null)
   const sidebarToggleRef = useRef<HTMLButtonElement>(null)
-  const skipDetailRef = useRef<number | null>(null)
   const defaultsApplied = useRef(false)
+  const stateOwner = useRef({ userId, session })
 
-  const activeId = conversationId ? Number(conversationId) : null
+  useLayoutEffect(() => {
+    // Old successful replies are already persisted; active requests settle or time out.
+    for (const job of askJobs.values()) {
+      if (job.session !== session && job.phase === 'success') forgetJob(job)
+    }
+  }, [userId, session])
+
+  useLayoutEffect(() => {
+    if (stateOwner.current.userId === userId && stateOwner.current.session === session) return
+    stateOwner.current = { userId, session }
+    defaultsApplied.current = false
+    setKbs([])
+    setKbsOwner(null)
+    setKbsLoading(true)
+    setKbsError(null)
+    setConversations([])
+    setConvLoaded(false)
+    setConvLoading(true)
+    setConvError(null)
+    setDetail(null)
+    setDetailVisit(null)
+    setDetailError(null)
+    setDetailErrorVisit(null)
+    setReconcilingVisit(null)
+    setSelectedKbs([])
+    setQuestion('')
+    setValidationError(null)
+    setRenameTarget(null)
+    setDeleteTarget(null)
+  }, [userId, session])
 
   const loadKbs = useCallback(async () => {
+    const sequence = ++kbSequence.current
+    const requestSession = getToken()
+    const requestUser = viewRef.current?.userId
+    const current = () => mountedRef.current && sequence === kbSequence.current &&
+      requestSession === getToken() && requestUser === viewRef.current?.userId
     setKbsLoading(true)
     try {
       const data = await kbApi.list()
+      if (!current()) return
       setKbs(data.items ?? [])
+      setKbsOwner({ userId: requestUser ?? null, session: requestSession })
       setKbsError(null)
     } catch (err) {
-      setKbsError(err)
+      if (current()) setKbsError(err)
     } finally {
-      setKbsLoading(false)
+      if (current()) setKbsLoading(false)
     }
   }, [])
 
   const loadConversations = useCallback(async () => {
+    const sequence = ++listSequence.current
+    const requestSession = getToken()
+    const requestUser = viewRef.current?.userId
+    const current = () => mountedRef.current && sequence === listSequence.current &&
+      requestSession === getToken() && requestUser === viewRef.current?.userId
     setConvLoading(true)
     try {
       const data = await chatApi.conversations()
+      if (!current()) return
       setConversations(data.items ?? [])
+      setConvLoaded(true)
       setConvError(null)
     } catch (err) {
-      setConvError(err)
+      if (current()) setConvError(err)
     } finally {
-      setConvLoading(false)
+      if (current()) setConvLoading(false)
     }
   }, [])
 
   useEffect(() => {
     void loadKbs()
     void loadConversations()
-  }, [loadKbs, loadConversations])
+  }, [loadKbs, loadConversations, userId, session])
 
   useEffect(() => {
     if (sidebarOpen) newConversationRef.current?.focus()
   }, [sidebarOpen])
 
-  const loadDetail = useCallback(async (id: number) => {
-    if (skipDetailRef.current === id) {
-      // 刚本地追加完问答，避免再用服务端快照覆盖本地消息
-      skipDetailRef.current = null
-      return
+  const loadDetail = useCallback(async (id: number, silent = false, force = false, blocking = false) => {
+    const view = viewRef.current
+    if (!view || view.id !== id || !isCurrentView(view.visit, id)) return
+    const requestVisit = view.visit
+    if (silent && !force && detailInFlight.current?.visit === requestVisit) return
+    const sequence = ++detailSequence.current
+    detailInFlight.current = { sequence, visit: requestVisit }
+    const current = () => sequence === detailSequence.current && isCurrentView(requestVisit, id)
+    if (!silent) setDetailLoading(true)
+    if (blocking) setReconcilingVisit(requestVisit)
+    if (!silent) {
+      setDetailError(null)
+      setDetailErrorVisit(null)
     }
-    setDetailLoading(true)
-    setDetailError(null)
     try {
       const data = await chatApi.get(id)
+      if (!current()) return
+      const needsSelection = !silent || hydratedVisit.current !== requestVisit
+      hydratedVisit.current = requestVisit
       setDetail(data)
-      setSelectedKbs(data.kb_ids ?? [])
+      setDetailVisit(requestVisit)
+      if (needsSelection) setSelectedKbs(data.kb_ids ?? [])
+      setDetailError(null)
+      setDetailErrorVisit(null)
+      // Completed answers have exact IDs; a matching failed turn is only a hint.
+      for (const job of askJobs.values()) {
+        if (!jobMatchesSession(job, view.userId) || job.targetId !== id) continue
+        if (job.phase === 'success' && data.messages.some((message) => message.id === job.response?.message.id)) {
+          forgetJob(job)
+        } else if (job.phase === 'error' && job.ambiguous && !job.matchingTurnSeen &&
+                   serverHasQuestion(data.messages, job)) {
+          // Matching text and KBs are only a hint; another tab could have sent them.
+          job.matchingTurnSeen = true
+          if (restoredDrafts.current.has(job.key)) {
+            setQuestion((previous) => isCurrentView(requestVisit, id) && previous === job.text ? '' : previous)
+            restoredDrafts.current.delete(job.key)
+          }
+          publishJob('change', job)
+        }
+      }
     } catch (err) {
-      setDetailError(err)
-      setDetail(null)
+      if (current() && (!silent || hydratedVisit.current !== requestVisit)) {
+        setDetailError(err)
+        setDetailErrorVisit(requestVisit)
+        setDetail(null)
+        setDetailVisit(null)
+      }
     } finally {
-      setDetailLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (activeId && Number.isFinite(activeId)) {
-      void loadDetail(activeId)
-    } else {
-      setDetail(null)
-      if (!defaultsApplied.current && kbs.length > 0) {
-        defaultsApplied.current = true
-        setSelectedKbs(kbs.map((k) => k.id))
+      if (detailInFlight.current?.sequence === sequence) detailInFlight.current = null
+      if (current()) {
+        setDetailLoading(false)
+        setReconcilingVisit(null)
       }
     }
-  }, [activeId, loadDetail, kbs])
+  }, [isCurrentView])
+
+  useEffect(() => {
+    if (activeId) {
+      void loadDetail(activeId)
+    } else {
+      detailSequence.current += 1
+      setDetail(null)
+      setDetailVisit(null)
+      setDetailLoading(false)
+      setDetailError(null)
+      setDetailErrorVisit(null)
+    }
+  }, [activeId, visit, loadDetail])
+
+  useEffect(() => {
+    if (!activeId && !defaultsApplied.current && kbs.length > 0 &&
+        kbsOwner?.userId === userId && kbsOwner.session === session) {
+      defaultsApplied.current = true
+      setSelectedKbs(kbs.map((k) => k.id))
+    }
+  }, [activeId, kbs, kbsOwner, userId, session])
+
+  useEffect(() => {
+    const listener = ({ kind, job, userId: eventUser, session: eventSession }: ChatJobEvent) => {
+      if (eventUser !== userId || (eventSession !== getToken() && job?.phase !== 'error')) return
+      if (job && !askJobs.has(job.key)) {
+        restoredErrors.current.delete(job.key)
+        restoredDrafts.current.delete(job.key)
+        if (recoveredJobKey.current === job.key) recoveredJobKey.current = null
+      }
+      setJobVersion((version) => version + 1)
+      if (kind === 'list' || kind === 'settled') void loadConversations()
+      const view = viewRef.current
+      if (kind === 'settled' && job?.targetId && view?.id === job.targetId &&
+          isCurrentView(view.visit, job.targetId)) {
+        void loadDetail(job.targetId, true, true, job.phase === 'error')
+      }
+    }
+    jobListeners.add(listener)
+    return () => { jobListeners.delete(listener) }
+  }, [userId, isCurrentView, loadConversations, loadDetail])
+
+  const currentJobs = [...askJobs.values()].filter((job) => jobMatchesSession(job, userId) &&
+    (activeId ? job.targetId === activeId :
+      job.phase === 'error' || (job.targetId === null && job.visit === visit && job.intent === viewRef.current?.intent)))
+  const activeJob = currentJobs.find((job) => job.phase === 'creating' || job.phase === 'asking')
+  const errorJobs = currentJobs.filter((job) => job.phase === 'error')
+  const errorJob = activeJob ? undefined : [...errorJobs].reverse().find((job) =>
+    activeId ? job.targetId === activeId : job.targetId === null)
+  const successfulJobs = currentJobs.filter((job) => job.phase === 'success')
+  const loadedDetail = detailVisit === visit && detail?.id === activeId ? detail : null
+  const currentDetailError = detailErrorVisit === visit ? detailError : null
+  const fallbackDetail = currentDetailError ? successfulJobs.find((job) => job.initialDetail)?.initialDetail : null
+  const visibleDetail = loadedDetail ?? fallbackDetail ?? null
+  const messages = successfulJobs.reduce((items, job) => withJobAnswer(items, job), visibleDetail?.messages ?? [])
+  const pendingMessage = messages.find((message) => message.role === 'assistant' && message.status === 'pending') ?? null
+  const asking = Boolean(activeJob)
+  const pending = activeJob && !serverHasQuestion(messages, activeJob) ? activeJob.text : null
+  const detailReady = !activeId || Boolean(loadedDetail && !detailLoading && !currentDetailError)
+  const reconciling = reconcilingVisit === visit
+  const retryCandidate = errorJobs.find((job) => job.text === question.trim() &&
+    (activeId ? job.targetId === activeId : job.targetId === null))
+  const userJobCount = [...askJobs.values()].filter((job) => jobMatchesSession(job, userId)).length
+  const capacityBlocked = userJobCount >= MAX_CHAT_JOBS && !retryCandidate
+  const busy = !detailReady || reconciling || asking || Boolean(pendingMessage) || capacityBlocked
+  const shownSelectedKbs = detailReady ? selectedKbs : []
+  const askError = validationError?.visit === visit ? validationError.text : ''
+  const successfulJobKeys = successfulJobs.map((job) => job.key).join(',')
+
+  useEffect(() => {
+    for (const job of successfulJobs) visibleSuccessJobs.add(job.key)
+    return () => { for (const job of successfulJobs) visibleSuccessJobs.delete(job.key) }
+  }, [visit, successfulJobKeys])
+
+  useEffect(() => {
+    if (!errorJob || errorJob.matchingTurnSeen || restoredErrors.current.has(errorJob.key) ||
+        !isCurrentView(visit, activeId) || reconciling ||
+        (activeId && !detailReady && !currentDetailError)) return
+    restoredErrors.current.add(errorJob.key)
+    setQuestion((previous) => {
+      if (previous || !isCurrentView(visit, activeId)) return previous
+      restoredDrafts.current.add(errorJob.key)
+      recoveredJobKey.current = errorJob.key
+      return errorJob.text
+    })
+  }, [errorJob, activeId, detailReady, currentDetailError, reconciling, isCurrentView, visit])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [detail?.messages?.length, asking, pending])
+  }, [messages.length, asking, pending])
 
   const toggleKb = (id: number) => {
+    if (!detailReady) return
     const next = selectedKbs.includes(id)
       ? selectedKbs.filter((x) => x !== id)
       : [...selectedKbs, id]
@@ -134,19 +446,23 @@ export default function ChatPage() {
 
   /** 把当前知识库选择写回会话（PATCH /conversations/{id}），失败只提示不回滚，避免操作抖动。 */
   const persistKbSelection = async (ids: number[]) => {
-    if (!activeId || !Number.isFinite(activeId)) return
+    if (!activeId || !detailReady) return
     try {
       await chatApi.update(activeId, { kb_ids: ids })
+      if (!mountedRef.current || session !== getToken()) return
       setConversations((prev) =>
         prev.map((c) => (c.id === activeId ? { ...c, kb_ids: ids } : c)),
       )
-      setDetail((prev) => (prev && prev.id === activeId ? { ...prev, kb_ids: ids } : prev))
+      if (isCurrentView(visit, activeId)) {
+        setDetail((prev) => (prev && prev.id === activeId ? { ...prev, kb_ids: ids } : prev))
+      }
     } catch (err) {
-      push(`知识库选择未能保存：${errorText(err)}`, 'error')
+      if (session === getToken()) push(`知识库选择未能保存：${errorText(err)}`, 'error')
     }
   }
 
   const clearKbSelection = () => {
+    if (!detailReady) return
     setSelectedKbs([])
     void persistKbSelection([])
   }
@@ -157,6 +473,10 @@ export default function ChatPage() {
   }
 
   const newConversation = async () => {
+    if (!viewRef.current) return
+    const intent = ++viewRef.current.intent
+    setJobVersion((version) => version + 1)
+    const kbIds = detailReady ? selectedKbs : []
     try {
       const title = `新会话 ${new Date().toLocaleString('zh-CN', {
         month: '2-digit',
@@ -164,136 +484,161 @@ export default function ChatPage() {
         hour: '2-digit',
         minute: '2-digit',
       })}`
-      const created = await chatApi.create(title, selectedKbs)
-      await loadConversations()
-      if (sidebarOpen) closeSidebar()
-      navigate(`/chat/${created.id}`)
+      const created = await chatApi.create(title, kbIds)
+      if (session !== getToken()) return
+      publishList(userId, session)
+      if (isCurrentView(visit, activeId) && viewRef.current?.intent === intent) {
+        if (sidebarOpen) closeSidebar()
+        navigate(`/chat/${created.id}`)
+      }
     } catch (err) {
-      push(errorText(err), 'error')
+      if (session === getToken()) push(errorText(err), 'error')
     }
   }
 
   const ask = async () => {
+    if (busy || !isCurrentView(visit, activeId)) return
+    // The registry is updated synchronously, so two clicks in one render cannot submit twice.
+    if ([...askJobs.values()].some((job) => jobMatchesSession(job, userId) &&
+      (activeId ? job.targetId === activeId :
+        job.targetId === null && job.visit === visit && job.intent === viewRef.current?.intent) &&
+      (job.phase === 'creating' || job.phase === 'asking'))) return
     const text = question.trim()
     if (!text) {
-      setAskError('请输入问题')
+      setValidationError({ visit, text: '请输入问题' })
       return
     }
     if (selectedKbs.length === 0) {
-      setAskError('请至少选择一个知识库')
+      setValidationError({ visit, text: '请至少选择一个知识库' })
       return
     }
-    setAskError('')
-    setAsking(true)
-    setPending(text)
+    const recovered = errorJobs.find((job) => job.key === recoveredJobKey.current &&
+      (activeId ? job.targetId === activeId : job.targetId === null)) ?? retryCandidate
+    if (recovered) forgetJob(recovered)
+    if ([...askJobs.values()].filter((job) => jobMatchesSession(job, userId)).length >= MAX_CHAT_JOBS) {
+      setValidationError({ visit, text: '待处理提问过多，请先处理已有问题或等待其他提问完成。' })
+      return
+    }
+    recoveredJobKey.current = null
+    setValidationError(null)
     setQuestion('')
+    const originIntent = ++viewRef.current!.intent
+    const job: AskJob = {
+      key: ++nextJobKey, userId, session, visit, intent: originIntent, targetId: activeId, text,
+      kbIds: [...selectedKbs], baselineId: Math.max(0, ...messages.map((message) => message.id)),
+      initialDetail: loadedDetail ? { ...loadedDetail, messages } : null,
+      phase: activeId ? 'asking' : 'creating',
+    }
+    askJobs.set(job.key, job)
+    publishJob('change', job)
 
-    let targetId = activeId
     try {
-      if (!targetId) {
+      if (!job.targetId) {
         const title = text.slice(0, 28) + (text.length > 28 ? '…' : '')
-        const created = await chatApi.create(title, selectedKbs)
-        targetId = created.id
-        // 新会话：本地直接接上消息，避免路由切换后重新拉取造成闪烁
-        skipDetailRef.current = created.id
-        setDetail({
-          id: created.id,
-          title: created.title,
-          kb_ids: selectedKbs,
-          message_count: 0,
-          created_at: created.created_at,
-          updated_at: created.updated_at,
-          messages: [],
-        })
-        void loadConversations()
-        navigate(`/chat/${created.id}`, { replace: true })
+        const created = await chatApi.create(title, job.kbIds)
+        if (askJobs.get(job.key) !== job) return
+        job.targetId = created.id
+        job.initialDetail = { ...created, messages: [] }
+        if (session !== getToken()) {
+          job.error = '登录状态已更改，请重新登录后恢复提问。'
+          job.ambiguous = false
+          job.phase = 'error'
+          publishJob('change', job)
+          return
+        }
+        job.phase = 'asking'
+        publishJob('list', job)
+        if (isCurrentView(visit, null) && viewRef.current?.intent === originIntent) {
+          navigate(`/chat/${created.id}`, { replace: true })
+        }
       }
-
-      const res: AskResponse = await chatApi.ask(targetId, text, selectedKbs)
+      // A create may have finished after logout; never submit with a different session's token.
+      if (session !== getToken()) {
+        job.error = '登录状态已更改，请重新登录后恢复提问。'
+        job.ambiguous = false
+        job.phase = 'error'
+        publishJob('change', job)
+        return
+      }
+      const res = await chatApi.ask(job.targetId, text, job.kbIds)
+      if (askJobs.get(job.key) !== job || session !== getToken()) {
+        forgetJob(job)
+        return
+      }
+      job.response = res
+      job.phase = 'success'
       if (res.denied && res.denied.length > 0) {
         push(
           `以下知识库本次被跳过：${res.denied.map((d) => `${d.kb_name}（${d.reason}）`).join('；')}`,
           'error',
         )
       }
-      setDetail((prev) => {
-        const base: ConversationDetail =
-          prev && prev.id === targetId
-            ? prev
-            : {
-                id: targetId as number,
-                title: text.slice(0, 28),
-                kb_ids: selectedKbs,
-                message_count: 0,
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-                messages: [],
-              }
-        const userMsg: ChatMessage = {
-          id: -Date.now(),
-          role: 'user',
-          content: text,
-          kb_ids: selectedKbs,
-          created_at: new Date().toISOString(),
-        }
-        const assistant: ChatMessage = {
-          ...res.message,
-          evidence: res.evidence,
-          route: res.route,
-          latency_ms: res.usage?.latency_ms ?? null,
-          kb_ids: selectedKbs,
-          insufficient: res.insufficient,
-          usage: res.usage,
-        }
-        return {
-          ...base,
-          messages: [...base.messages, userMsg, assistant],
-          message_count: base.messages.length + 2,
-        }
-      })
-      setPending(null)
-      void loadConversations()
+      publishJob('settled', job)
+      retainSettledJob(job)
     } catch (err) {
-      setAskError(errorText(err))
-      setPending(null)
-      setQuestion(text)
-    } finally {
-      setAsking(false)
+      if (askJobs.get(job.key) !== job) return
+      // request() clears the token before throwing 401; that rejection is pre-write.
+      if (err instanceof ApiError && err.status === 401) {
+        job.error = errorText(err)
+        job.ambiguous = false
+        job.phase = 'error'
+        publishJob('change', job)
+        return
+      }
+      const sameSession = session === getToken()
+      job.error = errorText(err)
+      job.ambiguous = job.phase === 'asking' && !(err instanceof ApiError && [403, 404, 422].includes(err.status))
+      job.phase = 'error'
+      publishJob(sameSession ? 'settled' : 'change', job)
     }
   }
 
   const doRename = async () => {
     if (!renameTarget) return
+    const targetId = renameTarget.id
     const title = renameText.trim()
     if (!title) return
     setRenameBusy(true)
     try {
-      await chatApi.update(renameTarget.id, { title })
-      await loadConversations()
-      if (detail?.id === renameTarget.id) setDetail({ ...detail, title })
-      setRenameTarget(null)
+      await chatApi.update(targetId, { title })
+      if (session !== getToken()) return
+      publishList(userId, session)
+      const view = viewRef.current
+      if (view?.id === targetId && isCurrentView(view.visit, targetId)) {
+        setDetail((previous) => previous?.id === targetId ? { ...previous, title } : previous)
+        void loadDetail(targetId, true, true)
+      }
+      if (mountedRef.current) setRenameTarget(null)
       push('会话已重命名', 'success')
     } catch (err) {
-      push(errorText(err), 'error')
+      if (session === getToken()) push(errorText(err), 'error')
     } finally {
-      setRenameBusy(false)
+      if (mountedRef.current && session === getToken()) setRenameBusy(false)
     }
   }
 
   const doDelete = async () => {
     if (!deleteTarget) return
+    const targetId = deleteTarget.id
     setDeleteBusy(true)
     try {
-      await chatApi.remove(deleteTarget.id)
+      await chatApi.remove(targetId)
+      if (session !== getToken()) return
+      for (const job of askJobs.values()) {
+        if (jobMatchesSession(job, userId) && job.targetId === targetId) forgetJob(job)
+      }
+      publishList(userId, session)
       push('会话已删除', 'success')
-      const wasActive = detail?.id === deleteTarget.id
-      setDeleteTarget(null)
-      await loadConversations()
-      if (wasActive) navigate('/chat', { replace: true })
+      if (mountedRef.current) setDeleteTarget(null)
+      const view = viewRef.current
+      if (view?.id === targetId && isCurrentView(view.visit, targetId)) {
+        detailSequence.current += 1
+        navigate('/chat', { replace: true })
+      }
     } catch (err) {
-      push(errorText(err), 'error')
+      if (session === getToken()) push(errorText(err), 'error')
     } finally {
-      setDeleteBusy(false)
+      if (mountedRef.current && session === getToken()) setDeleteBusy(false)
     }
   }
 
@@ -301,36 +646,16 @@ export default function ChatPage() {
     navigate(`/kbs/${kbId}?tab=wiki&slug=${encodeURIComponent(slug)}`)
   }
 
-  const messages = detail?.messages ?? []
-  /**
-   * 服务端仍在生成中的回答（status='pending'）。
-   * 问答的生成在后端跑：用户离开页面再回来时，会话里已经有一条「提问 + 待完成回答」，
-   * 靠这个标记把「正在生成」画出来，并继续轮询到回答写完。
-   */
-  const pendingMessage =
-    messages.find((m) => m.role === 'assistant' && m.status === 'pending') ?? null
-  // 本页刚发出的提问（asking）与服务端还在生成的回答都算「忙」：输入框要锁住，
-  // 否则同一会话会并发写出两轮问答。
-  const busy = asking || Boolean(pendingMessage)
   const visibleKbs = kbs
 
-  /** 静默刷新会话（不显示骨架屏），只用于「回答还在生成」时的轮询。 */
-  const refreshDetail = useCallback(async (id: number) => {
-    try {
-      const data = await chatApi.get(id)
-      setDetail((prev) => (prev && prev.id === id ? data : prev))
-    } catch {
-      /* 轮询失败保持当前画面，下一轮再试 */
-    }
-  }, [])
-
+  // A pending server message also covers a page reload or an HTTP timeout.
   useEffect(() => {
-    if (!activeId || !Number.isFinite(activeId) || !pendingMessage) return
+    if (!activeId || !pendingMessage) return
     const timer = window.setInterval(() => {
-      void refreshDetail(activeId)
+      void loadDetail(activeId, true)
     }, 2000)
     return () => window.clearInterval(timer)
-  }, [activeId, pendingMessage?.id, refreshDetail])
+  }, [activeId, visit, pendingMessage?.id, loadDetail])
 
   return (
     <>
@@ -361,15 +686,16 @@ export default function ChatPage() {
             </button>
           </div>
           <div className="conv-list">
-            {convLoading ? (
+            {convError ? (
+              <div className="tiny" style={{ padding: 10, color: 'var(--c-danger)' }}>
+                会话列表加载失败 <button type="button" className="btn-link" onClick={() => void loadConversations()}>重试会话列表</button>
+              </div>
+            ) : null}
+            {convLoading && !convLoaded ? (
               <div style={{ padding: 8 }}>
                 <SkeletonLines rows={4} />
               </div>
-            ) : convError ? (
-              <div className="tiny" style={{ padding: 10, color: 'var(--c-danger)' }}>
-                会话列表加载失败
-              </div>
-            ) : conversations.length === 0 ? (
+            ) : !convLoaded && convError ? null : conversations.length === 0 ? (
               <div className="tiny muted" style={{ padding: 12, textAlign: 'center' }}>
                 还没有会话，点上方新建
               </div>
@@ -382,6 +708,7 @@ export default function ChatPage() {
                     title={c.title}
                     aria-current={activeId === c.id ? 'page' : undefined}
                     onClick={() => {
+                      if (viewRef.current && activeId !== c.id) viewRef.current.intent += 1
                       if (sidebarOpen) closeSidebar()
                     }}
                   >
@@ -466,8 +793,9 @@ export default function ChatPage() {
                   <button
                     key={k.id}
                     type="button"
-                    className={`kb-pick ${selectedKbs.includes(k.id) ? 'on' : ''}`}
-                    aria-pressed={selectedKbs.includes(k.id)}
+                    className={`kb-pick ${shownSelectedKbs.includes(k.id) ? 'on' : ''}`}
+                    aria-pressed={shownSelectedKbs.includes(k.id)}
+                    disabled={!detailReady}
                     onClick={() => toggleKb(k.id)}
                     title={`${k.name} · ${k.mode_label}`}
                   >
@@ -478,7 +806,7 @@ export default function ChatPage() {
               )}
             </div>
             <div className="spacer" />
-            {selectedKbs.length > 0 ? (
+            {shownSelectedKbs.length > 0 ? (
               <button type="button" className="btn-link" onClick={clearKbSelection}>
                 清空选择
               </button>
@@ -487,22 +815,25 @@ export default function ChatPage() {
 
           <div className="chat-scroll">
             <div className="chat-thread">
-              {detailLoading ? (
+              {currentDetailError && visibleDetail && !detailLoading ? (
+                <ErrorState error={currentDetailError} onRetry={() => activeId && void loadDetail(activeId)} />
+              ) : null}
+              {detailLoading || (activeId && detailVisit !== visit && !currentDetailError) ? (
                 <div className="card card-pad">
                   <SkeletonLines rows={5} />
                 </div>
-              ) : detailError ? (
-                <ErrorState error={detailError} onRetry={() => activeId && void loadDetail(activeId)} />
+              ) : currentDetailError && !visibleDetail ? (
+                <ErrorState error={currentDetailError} onRetry={() => activeId && void loadDetail(activeId)} />
               ) : messages.length === 0 && !pending ? (
                 <div className="chat-empty">
                   <div className="chat-empty-icon">✦</div>
                   <div className="chat-empty-title">向知识库提问</div>
                   <div className="chat-empty-hint">
-                    {selectedKbs.length === 0
+                    {shownSelectedKbs.length === 0
                       ? '先在上方选择要检索的知识库，然后输入问题。'
-                      : `已选择 ${selectedKbs.length} 个知识库。回答会附带证据原文、文档版本与页码，可点开核对。`}
+                      : `已选择 ${shownSelectedKbs.length} 个知识库。回答会附带证据原文、文档版本与页码，可点开核对。`}
                   </div>
-                  {selectedKbs.length > 0 ? (
+                  {shownSelectedKbs.length > 0 ? (
                     <div className="chat-samples">
                       {SAMPLE_QUESTIONS.map((q) => (
                         <button
@@ -549,16 +880,57 @@ export default function ChatPage() {
           </div>
 
           <div className="chat-composer">
-            {askError ? (
-              <div
-                style={{
-                  maxWidth: 900,
-                  margin: '0 auto 8px',
-                  color: 'var(--c-danger)',
-                  fontSize: 12.5,
-                }}
-              >
-                {askError}
+            {askError || capacityBlocked ? (
+              <div style={{ maxWidth: 900, margin: '0 auto 8px', color: 'var(--c-danger)', fontSize: 12.5 }}>
+                {askError || '待处理提问过多，请先处理已有问题或等待其他提问完成。'}
+              </div>
+            ) : null}
+            {errorJobs.length ? (
+              <div aria-label="待处理的提问" style={{
+                maxWidth: 900, margin: '0 auto 8px', background: 'var(--c-surface-alt)',
+                border: '1px solid var(--c-border)', borderRadius: 8,
+              }}>
+                <div style={{
+                  padding: '8px 12px', borderBottom: '1px solid var(--c-border)',
+                  color: 'var(--c-text-secondary)', fontSize: 12, fontWeight: 600,
+                }}>待处理的提问</div>
+                <div style={{ maxHeight: 'min(230px, 25vh)', overflowY: 'auto', padding: '0 10px 10px' }}>
+                  {errorJobs.map((job) => (
+                    <div key={job.key} role="group" aria-label={`待处理提问：${job.text}`}
+                      style={{
+                        marginTop: 8, padding: '9px 10px', border: '1px solid var(--c-border)',
+                        borderRadius: 6, background: 'var(--c-surface)', fontSize: 12.5,
+                      }}>
+                      <div style={{ color: 'var(--c-text-secondary)', lineHeight: 1.5, overflowWrap: 'anywhere' }}>
+                        <span>{job.ambiguous ? '提问结果尚未确认，请先核对会话记录。' : '这次提问未发送。'}</span>{' '}
+                        {!job.matchingTurnSeen ? <span style={{ color: 'var(--c-danger)' }}>{job.error}</span> : null}
+                        {job.matchingTurnSeen ? <span> 会话中有相同提问，请核对后再重试。</span> : null}
+                      </div>
+                      <div style={{
+                        color: 'var(--c-text)', lineHeight: 1.5, marginTop: 6,
+                        whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+                      }}>{job.text}</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', marginTop: 7 }}>
+                        {job.targetId && job.targetId !== activeId ? (
+                          <button type="button" className="btn-link" aria-label={`查看会话中的提问：${job.text}`}
+                            onClick={() => {
+                              if (viewRef.current) viewRef.current.intent += 1
+                              navigate(`/chat/${job.targetId}`)
+                            }}>查看会话</button>
+                        ) : (
+                          <button type="button" className="btn-link" aria-label={`恢复未发送的问题：${job.text}`}
+                            onClick={() => {
+                              restoredDrafts.current.add(job.key)
+                              recoveredJobKey.current = job.key
+                              setQuestion(job.text)
+                            }}>恢复未发送的问题</button>
+                        )}
+                        <button type="button" className="btn-link" aria-label={`忽略这条提问：${job.text}`}
+                          onClick={() => forgetJob(job)}>忽略这条提问</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : null}
             <div className="composer-inner">
@@ -566,9 +938,12 @@ export default function ChatPage() {
                 className="composer-input"
                 aria-label="提问输入框"
                 value={question}
-                onChange={(e) => setQuestion(e.target.value)}
+                onChange={(e) => {
+                  if (recoveredJobKey.current !== null) restoredDrafts.current.delete(recoveredJobKey.current)
+                  setQuestion(e.target.value)
+                }}
                 placeholder={
-                  selectedKbs.length === 0
+                  shownSelectedKbs.length === 0
                     ? '请先在上方选择知识库…'
                     : '输入你的问题，Enter 发送，Shift+Enter 换行'
                 }
@@ -584,7 +959,7 @@ export default function ChatPage() {
               />
               <Button
                 variant="primary"
-                loading={busy}
+                loading={asking || Boolean(pendingMessage)}
                 disabled={busy || !question.trim()}
                 onClick={() => void ask()}
                 style={{ height: 44, minWidth: 84 }}
@@ -593,9 +968,10 @@ export default function ChatPage() {
               </Button>
             </div>
             <div className="composer-hint">
-              <span>已选 {selectedKbs.length} 个知识库</span>
+              {reconciling ? <span>正在核对本次提问…</span> : null}
+              <span>已选 {shownSelectedKbs.length} 个知识库</span>
               <span>回答基于检索到的证据，可能不完整，请核对来源</span>
-              {detail ? <span>会话 #{detail.id}</span> : null}
+              {visibleDetail ? <span>会话 #{visibleDetail.id}</span> : null}
             </div>
           </div>
         </section>
