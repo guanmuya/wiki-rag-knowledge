@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useToast } from '../auth'
 import { chatApi, kbApi } from '../api'
@@ -18,6 +18,7 @@ export default function SearchPage() {
   const [kbsLoading, setKbsLoading] = useState(true)
   const [kbsError, setKbsError] = useState<unknown>(null)
   const [selected, setSelected] = useState<number[]>([])
+  const defaultsApplied = useRef(false)
 
   const [query, setQuery] = useState('')
   const [result, setResult] = useState<SearchPreviewResponse | null>(null)
@@ -30,7 +31,15 @@ export default function SearchPage() {
     setKbsLoading(true)
     try {
       const data = await kbApi.list()
-      setKbs(data.items ?? [])
+      const items = data.items ?? []
+      // 首次出现可用库时全选；之后刷新只移除失效的选择，保留用户主动清空的范围。
+      const applyDefaults = !defaultsApplied.current && items.length > 0
+      if (applyDefaults) defaultsApplied.current = true
+      const availableIds = new Set(items.map((k) => k.id))
+      setKbs(items)
+      setSelected((previous) =>
+        applyDefaults ? items.map((k) => k.id) : previous.filter((id) => availableIds.has(id)),
+      )
       setKbsError(null)
     } catch (err) {
       setKbsError(err)
@@ -43,12 +52,7 @@ export default function SearchPage() {
     void loadKbs()
   }, [loadKbs])
 
-  useEffect(() => {
-    // 首次加载后默认全选，便于一次跑通
-    if (kbs.length > 0 && selected.length === 0) {
-      setSelected(kbs.map((k) => k.id))
-    }
-  }, [kbs, selected.length])
+  const allSelected = kbs.length > 0 && kbs.every((k) => selected.includes(k.id))
 
   const toggle = (id: number) => {
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
@@ -128,32 +132,27 @@ export default function SearchPage() {
           ) : (
             <>
               <div className="field">
-                <span className="field-label">检索范围</span>
-                <div className="kb-selector">
+                <span className="field-label" id="search-scope-label">检索范围</span>
+                <div className="kb-selector" role="group" aria-labelledby="search-scope-label">
                   {kbs.map((k) => (
-                    <span
+                    <button
                       key={k.id}
+                      type="button"
                       className={`kb-pick ${selected.includes(k.id) ? 'on' : ''}`}
+                      aria-pressed={selected.includes(k.id)}
                       onClick={() => toggle(k.id)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') toggle(k.id)
-                      }}
                       title={`${k.name} · ${k.mode_label}`}
                     >
                       {k.name}
                       <span className="lv">{k.mode === 'wiki' ? 'wiki' : 'basic'}</span>
-                    </span>
+                    </button>
                   ))}
                   <button
                     type="button"
                     className="btn-link"
-                    onClick={() =>
-                      setSelected(selected.length === kbs.length ? [] : kbs.map((k) => k.id))
-                    }
+                    onClick={() => setSelected(allSelected ? [] : kbs.map((k) => k.id))}
                   >
-                    {selected.length === kbs.length ? '取消全选' : '全选'}
+                    {allSelected ? '取消全选' : '全选'}
                   </button>
                 </div>
               </div>
@@ -428,9 +427,11 @@ function EvidenceRow({
           <Badge tone={isWiki ? 'info' : 'muted'}>{isWiki ? 'Wiki' : '分块'}</Badge>
         </td>
         <td>
-          <div className="coverage-bar" title={`查询词覆盖率 ${(coverage * 100).toFixed(1)}%`}>
-            <div className="coverage-bar-fill" style={{ width: `${Math.min(100, coverage * 100)}%` }} />
-            <span>{coverage.toFixed(3)}</span>
+          <div title={`查询词覆盖率 ${(coverage * 100).toFixed(1)}%`}>
+            <span className="mono small">{coverage.toFixed(3)}</span>
+            <div className="coverage-bar" aria-hidden="true">
+              <div className="coverage-bar-fill" style={{ width: `${Math.max(0, Math.min(100, coverage * 100))}%` }} />
+            </div>
           </div>
         </td>
         <td className="mono small">{item.score?.toFixed(4)}</td>

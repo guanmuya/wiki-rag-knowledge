@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { docApi, taskApi } from '../api'
 import type { ChunkPreview, DocumentItem, KnowledgeBase, Task } from '../types'
 import {
@@ -23,6 +23,9 @@ import {
 } from '../components/ui'
 import TaskList from '../components/TaskList'
 
+const ACCEPTED_FILE_TYPES = ['pdf', 'docx', 'xlsx', 'pptx', 'md', 'markdown', 'txt', 'log']
+const ACCEPTED_FILE_EXTENSIONS = ACCEPTED_FILE_TYPES.map((type) => `.${type}`).join(',')
+
 export default function DocumentsTab({
   kb,
   canManage,
@@ -46,6 +49,7 @@ export default function DocumentsTab({
   const [uploadFiles, setUploadFiles] = useState<File[]>([])
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const uploadHintId = useId()
 
   const [deleting, setDeleting] = useState<DocumentItem | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
@@ -266,8 +270,11 @@ export default function DocumentsTab({
     <>
       {canManage ? (
         <div style={{ marginBottom: 18 }}>
-          <div
+          <button
+            type="button"
             className={`dropzone ${dragging ? 'dragging' : ''}`}
+            aria-label="选择文件上传"
+            aria-describedby={uploadHintId}
             onClick={() => inputRef.current?.click()}
             onDragOver={(e) => {
               e.preventDefault()
@@ -280,22 +287,23 @@ export default function DocumentsTab({
               if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files)
             }}
           >
-            <div className="dropzone-title">
+            <span className="dropzone-title">
               {uploading ? '正在上传…' : '点击选择文件，或把文件拖到这里'}
-            </div>
-            <div className="dropzone-hint">
-              支持多选；格式：pdf / docx / xlsx / pptx / md / txt / csv / json / html / log
-            </div>
-            <input
-              ref={inputRef}
-              type="file"
-              multiple
-              hidden
-              onChange={(e) => {
-                if (e.target.files) addFiles(e.target.files)
-              }}
-            />
-          </div>
+            </span>
+            <span id={uploadHintId} className="dropzone-hint">
+              支持多选；格式：{ACCEPTED_FILE_TYPES.join(' / ')}
+            </span>
+          </button>
+          <input
+            ref={inputRef}
+            type="file"
+            accept={ACCEPTED_FILE_EXTENSIONS}
+            multiple
+            hidden
+            onChange={(e) => {
+              if (e.target.files) addFiles(e.target.files)
+            }}
+          />
 
           {uploadFiles.length > 0 ? (
             <>
@@ -622,6 +630,7 @@ export default function DocumentsTab({
         <input
           ref={versionInputRef}
           type="file"
+          accept={ACCEPTED_FILE_EXTENSIONS}
           onChange={(e) => setVersionFile(e.target.files?.[0] ?? null)}
         />
         {versionFile ? (
