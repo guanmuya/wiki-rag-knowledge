@@ -37,7 +37,7 @@ const PURPOSE_LABEL: Record<ModelPurpose, string> = {
 
 const PURPOSE_ORDER: ModelPurpose[] = ['llm', 'embedding', 'vision']
 
-/** 供应商协议中文短名，表格里用；完整说明在弹窗里由 PROTOCOL_OPTIONS 提供。 */
+/** 供应商协议中文短名，表格里用。 */
 const PROTOCOL_SHORT: Record<ProviderProtocol, string> = {
   openai: 'OpenAI 兼容',
   'openai-responses': 'Responses',
@@ -45,9 +45,30 @@ const PROTOCOL_SHORT: Record<ProviderProtocol, string> = {
 }
 
 const PROTOCOL_HINT: Record<ProviderProtocol, string> = {
-  openai: '/chat/completions + /embeddings，兼容绝大多数中转与自建网关。',
-  'openai-responses': '/responses 新协议；不支持 Embedding。',
-  anthropic: '/messages，system 独立字段；不支持 Embedding。',
+  openai: '适用于 OpenAI 和兼容协议的直连 API；支持的接口因供应商而异。',
+  'openai-responses': '适用于支持 /responses 的直连 API；不支持 Embedding。',
+  anthropic: 'Anthropic 直连 API 使用 /v1/messages；不支持 Embedding。',
+}
+
+const PROVIDER_PRESETS: Array<{ name: string; baseUrl: string; protocol: ProviderProtocol }> = [
+  { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', protocol: 'openai' },
+  { name: 'Anthropic', baseUrl: 'https://api.anthropic.com', protocol: 'anthropic' },
+  { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', protocol: 'openai' },
+  { name: 'Kimi（中国区）', baseUrl: 'https://api.moonshot.cn/v1', protocol: 'openai' },
+  { name: 'Kimi（国际区）', baseUrl: 'https://api.moonshot.ai/v1', protocol: 'openai' },
+  { name: 'Qwen（中国区）', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', protocol: 'openai' },
+  { name: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', protocol: 'openai' },
+]
+
+function normalizedProviderBase(value: string): string {
+  const trimmed = value.trim()
+  try {
+    const url = new URL(trimmed)
+    url.pathname = url.pathname.replace(/\/+$/, '') || '/'
+    return url.href
+  } catch {
+    return trimmed.replace(/\/+$/, '')
+  }
 }
 
 function protocolOf(p: Provider): ProviderProtocol {
@@ -79,9 +100,11 @@ export default function ModelsPage() {
   const [kbs, setKbs] = useState<KnowledgeBase[]>([])
 
   const [providerModal, setProviderModal] = useState<'create' | Provider | null>(null)
+  const [pPreset, setPPreset] = useState('')
   const [pName, setPName] = useState('')
   const [pBase, setPBase] = useState('')
   const [pKey, setPKey] = useState('')
+  const [pKeyNotice, setPKeyNotice] = useState('')
   const [pEnabled, setPEnabled] = useState(true)
   const [pProtocol, setPProtocol] = useState<ProviderProtocol>('openai')
   const [pBusy, setPBusy] = useState(false)
@@ -194,6 +217,8 @@ export default function ModelsPage() {
   const openProvider = (target: 'create' | Provider) => {
     setProviderModal(target)
     setPError('')
+    setPPreset('')
+    setPKeyNotice('')
     if (target === 'create') {
       setPName('')
       setPBase('')
@@ -393,11 +418,11 @@ export default function ModelsPage() {
       const res = await settingsApi.discoverModels(p.id)
       setDiscoverSource(res.source)
       setDiscoverError(res.error || '')
-      // 已导入的默认不勾选：避免用户「全选导入」后看到一堆「已存在」跳过项
+      // 模型列表可能包括语音、审核等无法用于问答的模型；让用户确认用途后再导入。
       setDiscoverRows(
         (res.items ?? []).map((item) => ({
           ...item,
-          checked: !item.already_imported,
+          checked: false,
           purpose: item.purpose_hint,
         })),
       )
@@ -607,7 +632,7 @@ export default function ModelsPage() {
               {providers.length === 0 ? (
                 <EmptyState
                   title="还没有配置供应商"
-                  hint="先添加 OpenAI 兼容的 API 供应商（base_url + API Key），再添加具体模型。"
+                  hint="先添加供应商的 API 地址和 Key，再添加具体模型。"
                   action={
                     <Button size="sm" variant="primary" onClick={() => openProvider('create')}>
                       添加供应商
@@ -1010,10 +1035,42 @@ export default function ModelsPage() {
         }
       >
         {pError ? <div className="login-error">{pError}</div> : null}
+        {providerModal === 'create' ? (
+          <Field label="供应商预设" hint="直连供应商 API，填入后仍可修改；模型列表取决于供应商。">
+            <Select
+              value={pPreset}
+              onChange={(e) => {
+                const preset = PROVIDER_PRESETS.find((item) => item.name === e.target.value)
+                setPPreset(e.target.value)
+                if (preset) {
+                  const oldBase = normalizedProviderBase(pBase)
+                  const newBase = normalizedProviderBase(preset.baseUrl)
+                  if (oldBase && oldBase !== newBase && pKey) {
+                    setPKey('')
+                    setPKeyNotice('供应商地址已更换，请重新填写 API Key。')
+                  }
+                  setPName(preset.name)
+                  setPBase(preset.baseUrl)
+                  setPProtocol(preset.protocol)
+                }
+              }}
+            >
+              <option value="">自定义</option>
+              {PROVIDER_PRESETS.map((preset) => (
+                <option key={preset.name} value={preset.name}>
+                  {preset.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        ) : null}
         <Field label="名称" required>
           <TextInput
             value={pName}
-            onChange={(e) => setPName(e.target.value)}
+            onChange={(e) => {
+              setPName(e.target.value)
+              setPPreset('')
+            }}
             placeholder="例如：OpenAI"
             autoFocus
           />
@@ -1021,7 +1078,10 @@ export default function ModelsPage() {
         <Field label="Base URL" required hint="接口根地址，例如 https://api.openai.com/v1">
           <TextInput
             value={pBase}
-            onChange={(e) => setPBase(e.target.value)}
+            onChange={(e) => {
+              setPBase(e.target.value)
+              setPPreset('')
+            }}
             placeholder="https://api.openai.com/v1"
             className="mono"
           />
@@ -1029,7 +1089,10 @@ export default function ModelsPage() {
         <Field label="API 协议" required hint={PROTOCOL_HINT[pProtocol]}>
           <Select
             value={pProtocol}
-            onChange={(e) => setPProtocol(e.target.value as ProviderProtocol)}
+            onChange={(e) => {
+              setPProtocol(e.target.value as ProviderProtocol)
+              setPPreset('')
+            }}
           >
             {PROTOCOL_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -1041,15 +1104,18 @@ export default function ModelsPage() {
         <Field
           label="API Key"
           hint={
-            providerModal !== 'create' && providerModal?.has_key
+            pKeyNotice || (providerModal !== 'create' && providerModal?.has_key
               ? `当前：${providerModal.api_key_masked || '已配置'}，留空表示不修改`
-              : '留空表示不设置'
+              : '留空表示不设置')
           }
         >
           <TextInput
             type="password"
             value={pKey}
-            onChange={(e) => setPKey(e.target.value)}
+            onChange={(e) => {
+              setPKey(e.target.value)
+              setPKeyNotice('')
+            }}
             placeholder={providerModal !== 'create' ? '留空不修改' : 'sk-...'}
             autoComplete="new-password"
           />
@@ -1124,6 +1190,9 @@ export default function ModelsPage() {
               />
             ) : (
               <>
+                <p className="small muted" style={{ marginBottom: 10 }}>
+                  供应商列表可能包含不支持问答或向量的模型，请核对用途后勾选。若当前用途未设置默认模型，导入的新模型可能自动用于后续请求；可先关闭此窗口并设置默认模型。
+                </p>
                 <div className="row" style={{ gap: 10, marginBottom: 8 }}>
                   <button
                     type="button"

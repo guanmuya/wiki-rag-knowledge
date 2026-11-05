@@ -10,11 +10,12 @@
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 from typing import Iterable
 
-from sqlalchemy import select
+from sqlalchemy import insert, literal, select
 from sqlalchemy.orm import Session
 
 from .. import models
@@ -95,6 +96,63 @@ def record(db: Session, *, kb_id: int | None, kind: str, stats: llm.CallStats | 
     )
     db.add(row)
     return row
+
+
+def preserve_legacy_before_retry(db: Session, task: models.Task) -> None:
+    """Persist an uncovered legacy snapshot before requeue clears its result.
+
+    The insert and task update share the caller's transaction. A conditional
+    insert keeps retries idempotent, while pending rows in this session also
+    count as coverage even when autoflush is disabled.
+    """
+    if task.id is None or task.kb_id is None:
+        return
+    try:
+        result = json.loads(task.result or "{}")
+    except (TypeError, ValueError, RecursionError):
+        return
+    usage = result.get("usage") if isinstance(result, dict) else None
+    if not isinstance(usage, dict):
+        return
+
+    # Match the dashboard's non-negative integer policy, and reject numbers
+    # that the database integer columns cannot store instead of failing retry.
+    bits = 63 if db.get_bind().dialect.name == "sqlite" else 31
+    max_counter = (1 << bits) - 1
+    counters = {
+        field: value for field in _STAT_FIELDS
+        if type(value := usage.get(field)) is int and 0 <= value <= max_counter
+    }
+    timestamp = task.finished_at or task.created_at
+    if not counters or timestamp is None:
+        return
+    # Database DateTime columns are naive UTC. Preserve the UTC instant when
+    # legacy rows happen to contain an explicit offset.
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.astimezone(dt.timezone.utc).replace(tzinfo=None)
+    if any(isinstance(row, models.CostRecord) and row.source in (None, "task")
+           and row.source_id == task.id for row in db.new):
+        return
+
+    def recorded_mode(field: str) -> str:
+        mode = usage.get(field)
+        return mode if isinstance(mode, str) and mode in ("live", "offline") else ""
+
+    values = {
+        "kb_id": task.kb_id, "kind": task.kind, "source": "task", "source_id": task.id,
+        "doc_id": task.doc_id, "created_at": timestamp,
+        "mode": recorded_mode("mode"), "embed_mode": recorded_mode("embed_mode"),
+        **{field: counters.get(field, 0) for field in _STAT_FIELDS},
+    }
+    covered = select(models.CostRecord.id).where(
+        models.CostRecord.source == "task", models.CostRecord.source_id == task.id
+    ).exists()
+    statement = insert(models.CostRecord).from_select(
+        list(values), select(*(literal(value) for value in values.values())).where(~covered)
+    )
+    # This write is part of the retry transaction; do not flush unrelated work.
+    with db.no_autoflush:
+        db.execute(statement)
 
 
 def record_phases(db: Session, *, kb_id: int | None, task_kind: str,

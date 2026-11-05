@@ -125,6 +125,83 @@ def test_openai_chat_payload_unchanged(db_session, make_provider, captured, clea
     assert "input" not in payload, "openai 协议不得发 input 字段"
 
 
+@pytest.mark.parametrize("model", ["o1", "o1-preview", "o3-mini", "o4-mini-2025-04-16"])
+def test_official_openai_reasoning_chat_uses_completion_limit(
+        db_session, make_provider, captured, clean_models, model):
+    provider = make_provider("官方推理模型", base_url="https://api.openai.com/v1")
+    cfg = _add_model(db_session, provider, "llm", model,
+                     params=json.dumps({"temperature": 0.7, "max_tokens": 41}))
+    captured["response"] = {"choices": [{"message": {"content": "OK"}}]}
+
+    assert llm.chat(db_session, [{"role": "user", "content": "hi"}],
+                    max_tokens=24, cfg_override=cfg) == "OK"
+    call = captured["calls"][0]
+    assert call["url"] == "https://api.openai.com/v1/chat/completions"
+    assert call["payload"] == {
+        "model": model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_completion_tokens": 41,
+    }
+
+    llm.chat(db_session, [{"role": "user", "content": "hi"}],
+             max_tokens=0, cfg_override=cfg)
+    assert "max_completion_tokens" not in captured["calls"][1]["payload"]
+    assert "temperature" not in captured["calls"][1]["payload"]
+
+
+@pytest.mark.parametrize(("base_url", "model"), [
+    ("https://api.openai.com/v1", "gpt-4o-mini"),
+    ("https://api.openai.com/v1", "o30-mini"),
+    ("https://api.openai.com/v1", "o2"),
+    ("https://api.openai.com.evil.test/v1", "o3-mini"),
+    ("https://example.test/v1", "o3-mini"),
+    ("http://api.openai.com/v1", "o3-mini"),
+    ("https://api.openai.com:8443/v1", "o3-mini"),
+])
+def test_other_openai_chat_requests_keep_existing_fields(
+        db_session, make_provider, captured, clean_models, base_url, model):
+    provider = make_provider("其他兼容模型", base_url=base_url)
+    cfg = _add_model(db_session, provider, "llm", model)
+    captured["response"] = {"choices": [{"message": {"content": "OK"}}]}
+
+    llm.chat(db_session, [{"role": "user", "content": "hi"}],
+             temperature=0.7, max_tokens=24, cfg_override=cfg)
+    payload = captured["calls"][0]["payload"]
+    assert payload["temperature"] == 0.7
+    assert payload["max_tokens"] == 24
+    assert "max_completion_tokens" not in payload
+
+
+@pytest.mark.parametrize(("protocol", "response", "token_field"), [
+    ("openai-responses", {"output_text": "OK"}, "max_output_tokens"),
+    ("anthropic", {"content": [{"type": "text", "text": "OK"}]}, "max_tokens"),
+])
+def test_other_protocols_keep_their_own_fields_for_reasoning_names(
+        db_session, make_provider, captured, clean_models, protocol, response, token_field):
+    provider = make_provider("其他协议推理名称", protocol, base_url="https://api.openai.com/v1")
+    cfg = _add_model(db_session, provider, "llm", "o3-mini")
+    captured["response"] = response
+
+    assert llm.chat(db_session, [{"role": "user", "content": "hi"}], temperature=0.7,
+                    max_tokens=24, cfg_override=cfg) == "OK"
+    payload = captured["calls"][0]["payload"]
+    assert payload["temperature"] == 0.7
+    assert payload[token_field] == 24
+    assert "max_completion_tokens" not in payload
+
+
+def test_official_openai_reasoning_vision_uses_completion_limit(
+        db_session, make_provider, captured, clean_models):
+    provider = make_provider("官方推理视觉模型", base_url="https://api.openai.com/v1")
+    _add_model(db_session, provider, "vision", "o3")
+    captured["response"] = {"choices": [{"message": {"content": "描述"}}]}
+
+    assert llm.describe_image(db_session, b"image", "image/png", "test.png") == "描述"
+    payload = captured["calls"][0]["payload"]
+    assert payload["max_completion_tokens"] == 500
+    assert "max_tokens" not in payload and "temperature" not in payload
+
+
 def test_openai_embed_payload(db_session, make_provider, captured, clean_models):
     provider = make_provider("协议测试-openai-emb", "openai")
     _add_model(db_session, provider, "embedding", "text-embedding-3-small")
@@ -138,6 +215,127 @@ def test_openai_embed_payload(db_session, make_provider, captured, clean_models)
     assert len(vecs) == 1
     assert captured["calls"][0]["url"] == "http://127.0.0.1:9/v1/embeddings"
     assert captured["calls"][0]["payload"]["input"] == ["连接测试"]
+
+
+@pytest.mark.parametrize("model", ["text-embedding-v3", "text-embedding-v4"])
+@pytest.mark.parametrize("count", [11, 23])
+def test_dashscope_embedding_batches_preserve_order_and_usage(
+        db_session, make_provider, monkeypatch, clean_models, model, count):
+    provider = make_provider("百炼中国区", base_url=(
+        "https://dashscope.aliyuncs.com/compatible-mode/v1/"))
+    cfg = _add_model(db_session, provider, "embedding", model,
+                     params=json.dumps({"dimensions": 2}))
+    texts = [str(i) for i in range(count)]
+    calls = []
+
+    def fake_post(url, payload, actual_provider, protocol=None):
+        calls.append((url, payload, actual_provider, protocol))
+        batch = payload["input"]
+        rows = [{"index": i, "embedding": [float(text) + 1.0, 1.0]}
+                for i, text in enumerate(batch)]
+        return {"data": list(reversed(rows)), "usage": {"total_tokens": len(batch) * 3}}
+
+    monkeypatch.setattr(llm, "_post", fake_post)
+    stats = llm.CallStats()
+    vectors = llm.embed(db_session, texts, stats=stats, cfg_override=cfg)
+
+    assert [len(call[1]["input"]) for call in calls] == (
+        [10, 1] if count == 11 else [10, 10, 3])
+    assert [text for call in calls for text in call[1]["input"]] == texts
+    assert all(call[0] == "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
+               and call[1]["model"] == model and call[1]["dimensions"] == 2
+               and call[2] == provider and call[3] == "openai" for call in calls)
+    assert len(vectors) == count
+    for i, vector in enumerate(vectors):
+        assert vector == pytest.approx(llm.normalize([float(i) + 1.0, 1.0]))
+    assert stats.calls == stats.embed_calls == stats.live_calls == len(calls)
+    assert stats.offline_calls == 0
+    assert stats.embed_texts == count and stats.embed_tokens == count * 3
+    assert cfg.embed_dim == 2
+    assert cfg.embed_signature == llm.embed_signature(cfg, provider, 2)
+
+
+@pytest.mark.parametrize("invalid", ["count", "dimensions", "empty", "index", "request"])
+def test_dashscope_invalid_later_batch_preserves_earlier_stats(
+        db_session, make_provider, monkeypatch, clean_models, invalid):
+    provider = make_provider("百炼批次失败", base_url=(
+        "https://dashscope.aliyuncs.com/compatible-mode/v1"))
+    cfg = _add_model(db_session, provider, "embedding", "text-embedding-v3")
+    calls = []
+
+    def fake_post(url, payload, actual_provider, protocol=None):
+        calls.append(payload["input"])
+        if len(calls) == 2 and invalid == "request":
+            raise llm.ModelUnavailable("供应商返回错误")
+        rows = [{"index": i, "embedding": [float(i) + 1.0, 1.0]}
+                for i in range(len(payload["input"]))]
+        if len(calls) == 2:
+            if invalid == "count":
+                rows.pop()
+            elif invalid == "dimensions":
+                rows[-1]["embedding"] = [1.0, 2.0, 3.0]
+            elif invalid == "empty":
+                rows[-1]["embedding"] = []
+            elif invalid == "index":
+                rows[-1]["index"] = 0
+        return {"data": rows, "usage": {"prompt_tokens": 7}}
+
+    monkeypatch.setattr(llm, "_post", fake_post)
+    stats = llm.CallStats()
+    with pytest.raises(llm.ModelUnavailable):
+        llm.embed(db_session, [str(i) for i in range(21)], stats=stats, cfg_override=cfg)
+
+    assert [len(batch) for batch in calls] == [10, 10]
+    assert stats.calls == stats.embed_calls == stats.live_calls == 1
+    assert stats.embed_texts == 10 and stats.embed_tokens == 7
+    assert cfg.embed_dim == 0 and cfg.embed_signature == ""
+
+
+@pytest.mark.parametrize(("base_url", "model"), [
+    ("https://other.example/v1", "text-embedding-v3"),
+    ("https://dashscope.aliyuncs.com/compatible-mode/v1", "text-embedding-v2"),
+    ("https://dashscope.aliyuncs.com/compatible-mode/v1", "text-embedding-v4-extra"),
+    ("https://dashscope.aliyuncs.com/other/v1", "text-embedding-v4"),
+    ("https://dashscope.aliyuncs.com.evil.test/compatible-mode/v1", "text-embedding-v3"),
+    ("http://dashscope.aliyuncs.com/compatible-mode/v1", "text-embedding-v3"),
+])
+def test_other_embedding_providers_keep_a_single_request(
+        db_session, make_provider, monkeypatch, clean_models, base_url, model):
+    provider = make_provider("其他向量模型", base_url=base_url)
+    cfg = _add_model(db_session, provider, "embedding", model)
+    calls = []
+
+    def fake_post(url, payload, actual_provider, protocol=None):
+        calls.append(payload["input"])
+        return {"data": [{"index": i, "embedding": [1.0, 0.0]}
+                         for i in range(len(payload["input"]))],
+                "usage": {"prompt_tokens": 12}}
+
+    monkeypatch.setattr(llm, "_post", fake_post)
+    stats = llm.CallStats()
+    texts = [str(i) for i in range(16)]
+    assert len(llm.embed(db_session, texts, stats=stats, cfg_override=cfg)) == 16
+    assert calls == [texts]
+    assert stats.calls == stats.embed_calls == stats.live_calls == 1
+    assert stats.embed_texts == 16 and stats.embed_tokens == 12
+
+
+def test_gemini_openai_compatible_base_is_used_directly(
+        db_session, make_provider, captured, clean_models):
+    """Gemini 兼容地址已有 /v1beta/openai；不能在中间再插入 /v1。"""
+    provider = make_provider("协议测试-gemini", "openai",
+                             base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+    cfg = _add_model(db_session, provider, "llm", "gemini-test")
+    captured["response"] = {"choices": [{"message": {"content": "OK"}}]}
+    captured["get_response"] = {"data": [{"id": "gemini-test"}]}
+
+    assert llm.chat(db_session, [{"role": "user", "content": "hi"}], cfg_override=cfg) == "OK"
+    assert captured["calls"][0]["url"] == (
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+    assert llm.discover_models(db_session, provider)["items"][0]["model"] == "gemini-test"
+    assert captured["calls"][1]["url"] == (
+        "https://generativelanguage.googleapis.com/v1beta/openai/models")
+    assert llm._join("https://example.test", "models") == "https://example.test/v1/models"
 
 
 # --------------------------------------------------------------- 协议：responses
@@ -325,6 +523,36 @@ def test_test_model_targets_the_clicked_model(db_session, make_provider, capture
     # 不能顺手把默认模型改掉
     db_session.refresh(target)
     assert target.is_default is False
+
+
+def test_official_openai_reasoning_connection_test_allows_reasoning_tokens(
+        db_session, make_provider, monkeypatch, clean_models):
+    provider = make_provider("官方推理连接测试", base_url="https://api.openai.com/v1")
+    cfg = _add_model(db_session, provider, "llm", "o3-mini")
+    calls = []
+
+    def fake_post(url, payload, actual_provider, protocol=None):
+        calls.append(payload)
+        # 16 个 token 可以全部被推理消耗，模拟此时没有可见输出。
+        text = "OK" if payload.get("max_completion_tokens", 0) > 16 else ""
+        return {"choices": [{"message": {"content": text}}]}
+
+    monkeypatch.setattr(llm, "_post", fake_post)
+    result = llm.test_model(db_session, cfg)
+
+    assert result["ok"] is True
+    assert calls[0]["max_completion_tokens"] == 2048
+    assert "max_tokens" not in calls[0] and "temperature" not in calls[0]
+
+
+def test_other_connection_test_keeps_small_budget(
+        db_session, make_provider, captured, clean_models):
+    provider = make_provider("普通连接测试", base_url="https://api.openai.com/v1")
+    cfg = _add_model(db_session, provider, "llm", "gpt-4o-mini")
+    captured["response"] = {"choices": [{"message": {"content": "OK"}}]}
+
+    assert llm.test_model(db_session, cfg)["ok"] is True
+    assert captured["calls"][0]["payload"]["max_tokens"] == 16
 
 
 def test_test_model_reports_protocol(db_session, make_provider, captured, clean_models):

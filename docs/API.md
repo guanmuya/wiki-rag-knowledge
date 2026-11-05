@@ -265,6 +265,16 @@
 - `by_mode` 用于剔除离线演示的假开销：只报 `live` 才是真实费用。
 - `legacy_records`：升级前的老任务没有成本流水，从 `Task.result["usage"]` 回读的条数。
 
+## 7.2 已记录用量概览（admin）
+
+`GET /api/usage?days=30` 汇总全局已记录用量，仅管理员可访问。`days` 可为 `7`、`30`（默认）或 `0`（全部），其他值返回 422。7/30 天以 UTC 当日为末日，按 UTC 日期补齐无记录的日期。
+
+响应为 `{period_days, timezone, totals, daily, by_source}`；`timezone` 为 `UTC`，`daily` 是带 `date` 的每日汇总，`by_source` 的 `source` 为 `processing`（知识库处理）或 `chat`（问答）。各汇总包含 `calls`、`live_calls`、`offline_calls`、`chat_calls`、`embed_calls`、`vision_calls`、`prompt_tokens`、`completion_tokens`、`embed_tokens`、`total_tokens`、`latency_ms` 和 `record_count`。`total_tokens` 为前三类 Token 之和。
+
+知识库处理使用成本流水；缺少流水的旧任务回退到任务结果，同一任务已有流水时不会重复计数。问答使用成功保存的助手消息，每条消息只计一次。处理按流水入账时间统计，旧任务按完成时间（无完成时间则创建时间），问答按消息创建时间统计。删除知识库或会话会同时删除其关联记录。
+
+该接口不包括检索调试、连接测试、未保存或失败的问答；供应商可能不返回 Token 数，失败或中断的调用也可能产生未记录用量。历史流水没有供应商、模型、价格或余额信息，响应不能作为账单或完整用量。
+
 ## 8. 模型设置（admin）
 
 | 方法 | 路径 | 说明 |

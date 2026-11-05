@@ -11,6 +11,7 @@ import KbDetailPage from './pages/KbDetailPage'
 import ChatPage from './pages/ChatPage'
 import UsersPage from './pages/UsersPage'
 import ModelsPage from './pages/ModelsPage'
+import UsagePage from './pages/UsagePage'
 import TasksPage from './pages/TasksPage'
 import SearchPage from './pages/SearchPage'
 import AboutPage from './pages/AboutPage'
@@ -74,6 +75,14 @@ export default function App() {
             element={
               <RequireAdmin>
                 <UsersPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/usage"
+            element={
+              <RequireAdmin>
+                <UsagePage />
               </RequireAdmin>
             }
           />

@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import models
+from . import cost
 
 log = logging.getLogger("wrk.taskflow")
 
@@ -72,6 +73,7 @@ def requeue(db: Session, task: models.Task, *, reason: str = "已重新排队") 
     task.stage = "排队中"
     task.progress = 0
     task.error = ""
+    cost.preserve_legacy_before_retry(db, task)
     task.result = "{}"
     task.attempts = 0
     task.started_at = None

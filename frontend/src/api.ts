@@ -407,6 +407,34 @@ export const metaApi = {
   health: () => request<HealthInfo>('/health'),
 }
 
+// ---------------------------------------------------------------- 已记录用量（管理员）
+export interface UsageTotals {
+  calls: number
+  live_calls: number
+  offline_calls: number
+  chat_calls: number
+  embed_calls: number
+  vision_calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  embed_tokens: number
+  total_tokens: number
+  latency_ms: number
+  record_count: number
+}
+
+export interface UsageSummary {
+  period_days: number
+  timezone: 'UTC'
+  totals: UsageTotals
+  daily: Array<UsageTotals & { date: string }>
+  by_source: Array<UsageTotals & { source: 'processing' | 'chat'; label: string }>
+}
+
+export const usageApi = {
+  summary: (days: 0 | 7 | 30) => request<UsageSummary>(`/usage${qs({ days })}`),
+}
+
 // ---------------------------------------------------------------- 首次初始化
 export const setupApi = {
   status: () => request<SetupStatus>('/setup/status'),
