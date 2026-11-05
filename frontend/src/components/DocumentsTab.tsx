@@ -47,6 +47,8 @@ export default function DocumentsTab({
 
   const [uploading, setUploading] = useState(false)
   const [uploadFiles, setUploadFiles] = useState<File[]>([])
+  const [uploadFailures, setUploadFailures] = useState<Map<File, string>>(new Map())
+  const uploadingRef = useRef(false)
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const uploadHintId = useId()
@@ -146,31 +148,61 @@ export default function DocumentsTab({
     if (list.length === 0) return
     setUploadFiles((prev) => {
       const names = new Set(prev.map((f) => `${f.name}:${f.size}`))
-      return [...prev, ...list.filter((f) => !names.has(`${f.name}:${f.size}`))]
+      const added = list.filter((f) => {
+        const key = `${f.name}:${f.size}`
+        if (names.has(key)) return false
+        names.add(key)
+        return true
+      })
+      return [...prev, ...added]
     })
   }
 
+  // 服务端按文件名返回结果，同名文件无法区分哪个成功、哪个失败。
+  const uploadNameCounts = new Map<string, number>()
+  uploadFiles.forEach((file) => uploadNameCounts.set(file.name, (uploadNameCounts.get(file.name) ?? 0) + 1))
+  const hasDuplicateUploadNames = [...uploadNameCounts.values()].some((count) => count > 1)
+
   const doUpload = async () => {
-    if (uploadFiles.length === 0) return
+    if (uploadFiles.length === 0 || uploadingRef.current || hasDuplicateUploadNames) return
+    const submitted = uploadFiles
+    uploadingRef.current = true
     setUploading(true)
     try {
-      const res = await docApi.upload(kb.id, uploadFiles)
-      const okCount = res.items?.length ?? 0
-      if (okCount > 0) onToast(`已上传 ${okCount} 个文档，正在后台解析入库`, 'success')
-      if (res.errors?.length) {
-        const text = res.errors
-          .map((e) => (typeof e === 'string' ? e : `${e.filename}：${e.error}`))
-          .join('；')
-        onToast(`部分文件未通过：${text}`, 'error')
-      }
-      setUploadFiles([])
-      if (inputRef.current) inputRef.current.value = ''
+      const res = await docApi.upload(kb.id, submitted)
+      const acceptedNames = new Set((res.items ?? []).map((item) => item.filename).filter(Boolean))
+      const errorsByName = new Map((res.errors ?? []).map((error) => [error.filename, error.error]))
+      const accepted = new Set(
+        submitted.filter((file) => acceptedNames.has(file.name) && !errorsByName.has(file.name)),
+      )
+      const remaining = submitted.filter((file) => !accepted.has(file))
+      setUploadFiles((prev) => prev.filter((file) => !accepted.has(file)))
+      setUploadFailures((prev) => {
+        const next = new Map(prev)
+        submitted.forEach((file) => next.delete(file))
+        remaining.forEach((file) => {
+          next.set(file, errorsByName.get(file.name) || '上传结果未确认，请先检查文档列表；重复上传会创建新版本')
+        })
+        return next
+      })
+      if (accepted.size > 0) onToast(`已上传 ${accepted.size} 个文档，正在后台解析入库`, 'success')
+      if (remaining.length > 0) onToast(`${remaining.length} 个文件上传失败或结果未确认，请查看文件列表`, 'error')
       await loadDocs()
       await loadTasks()
       onChanged()
     } catch (err) {
-      onToast(errorText(err), 'error')
+      // 请求中断不代表服务端没有保存文件；先刷新列表，避免把重试当成安全的首次上传。
+      setUploadFailures((prev) => {
+        const next = new Map(prev)
+        submitted.forEach((file) => next.set(file, '上传结果未确认，请先检查文档列表；重复上传会创建新版本'))
+        return next
+      })
+      onToast(`${errorText(err)}；请先检查文档列表中的上传结果`, 'error')
+      await loadDocs()
+      await loadTasks()
+      onChanged()
     } finally {
+      uploadingRef.current = false
       setUploading(false)
     }
   }
@@ -302,36 +334,53 @@ export default function DocumentsTab({
             hidden
             onChange={(e) => {
               if (e.target.files) addFiles(e.target.files)
+              // 允许移除后再次选择同一文件。
+              e.target.value = ''
             }}
           />
 
           {uploadFiles.length > 0 ? (
             <>
-              <div className="upload-list">
+              <div className="upload-list" aria-live="polite">
                 {uploadFiles.map((f, i) => (
                   <div className="upload-item" key={`${f.name}-${i}`}>
-                    <span className="truncate" style={{ flex: 1 }}>
-                      {f.name}
-                    </span>
+                    <div className="col" style={{ flex: 1, minWidth: 0 }}>
+                      <span className="truncate">{f.name}</span>
+                      {uploadFailures.get(f) ? <span className="tiny danger">{uploadFailures.get(f)}</span> : null}
+                    </div>
                     <span className="muted tiny nowrap">{formatBytes(f.size)}</span>
                     <button
                       type="button"
                       className="btn-link danger"
-                      onClick={() => setUploadFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                      aria-label={`移除 ${f.name}`}
+                      onClick={() => {
+                        setUploadFiles((prev) => prev.filter((file) => file !== f))
+                        setUploadFailures((prev) => {
+                          const next = new Map(prev)
+                          next.delete(f)
+                          return next
+                        })
+                      }}
                     >
                       移除
                     </button>
                   </div>
                 ))}
               </div>
+              {hasDuplicateUploadNames ? (
+                <div className="tiny danger" role="status" style={{ marginTop: 8 }}>
+                  存在同名文件，请先移除重复项，再上传
+                </div>
+              ) : null}
               <div className="row" style={{ marginTop: 10 }}>
-                <Button variant="primary" loading={uploading} onClick={() => void doUpload()}>
+                <Button variant="primary" loading={uploading} disabled={hasDuplicateUploadNames} onClick={() => void doUpload()}>
                   上传 {uploadFiles.length} 个文件
                 </Button>
                 <Button
                   variant="ghost"
                   onClick={() => {
                     setUploadFiles([])
+                    setUploadFailures(new Map())
                     if (inputRef.current) inputRef.current.value = ''
                   }}
                   disabled={uploading}
@@ -625,7 +674,7 @@ export default function DocumentsTab({
         }
       >
         <div className="confirm-text" style={{ marginBottom: 12 }}>
-          上传后生成新的版本记录，旧版本仍保留在版本历史中，可用于对比与回溯。
+          上传后生成新的版本记录，旧版本仍会保留。
         </div>
         <input
           ref={versionInputRef}

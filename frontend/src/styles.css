@@ -1402,11 +1402,11 @@ code {
   border-radius: var(--radius-lg);
 }
 .wiki-tree-title {
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--c-text-muted);
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+  color: inherit;
   padding: 6px 8px;
 }
 .wiki-tree-item {
@@ -1414,15 +1414,21 @@ code {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  width: 100%;
   padding: 7px 9px;
+  border: 0;
   border-radius: 8px;
+  background: transparent;
   font-size: 12.5px;
+  line-height: inherit;
+  text-align: left;
   color: var(--c-text-secondary);
   cursor: pointer;
   transition: background 0.14s ease, color 0.14s ease;
 }
 .wiki-tree-item:hover { background: #f5f6fa; color: var(--c-text); }
 .wiki-tree-item.active { background: var(--c-primary-soft); color: var(--c-primary); font-weight: 600; }
+.wiki-tree-item:disabled, .related-chips .chip:disabled { cursor: not-allowed; opacity: 0.6; }
 
 .wiki-main { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .wiki-doc {

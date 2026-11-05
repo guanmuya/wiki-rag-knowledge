@@ -228,7 +228,7 @@ export function Button({
     .filter(Boolean)
     .join(' ')
   return (
-    <button type="button" className={cls} disabled={rest.disabled || loading} {...rest}>
+    <button type="button" className={cls} {...rest} disabled={rest.disabled || loading}>
       {loading ? <Spinner size={14} /> : null}
       {children}
     </button>

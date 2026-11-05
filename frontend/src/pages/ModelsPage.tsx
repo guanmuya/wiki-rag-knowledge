@@ -377,6 +377,7 @@ export default function ModelsPage() {
     try {
       await settingsApi.updateModel(m.id, { enabled: !m.enabled })
       await load()
+      await loadEmbed()
     } catch (err) {
       push(errorText(err), 'error')
     }
@@ -537,13 +538,30 @@ export default function ModelsPage() {
     }
   }
 
-  const currentEmbed =
-    models.find((m) => m.purpose === 'embedding' && m.is_default) ??
-    models.find((m) => m.purpose === 'embedding')
+  const currentEmbedId = embedStatus?.current_model_config_id ?? null
+  const currentEmbed = models.find((m) => m.purpose === 'embedding' && m.id === currentEmbedId)
+  const currentEmbedName =
+    embedStatus?.current_label || currentEmbed?.label || embedStatus?.current_model || currentEmbed?.model ||
+    (currentEmbedId !== null ? `模型 #${currentEmbedId}` : '')
   const embeddingModels = models.filter((m) => m.purpose === 'embedding' && m.enabled)
-  const inconsistent =
-    embedStatus?.consistent === false ||
-    (embedStatus?.kbs ?? []).some((k) => k.consistent === false)
+  const embedKbs = (embedStatus?.kbs?.length ? embedStatus.kbs : kbs.map((kb) => ({
+    kb_id: kb.id,
+    kb_name: kb.name,
+    embed_signature: kb.embed_signature,
+    embed_dim: kb.embed_dim,
+    chunk_count: kb.stats?.chunk_count,
+  }))).map((kb) => ({
+    ...kb,
+    state: kb.chunk_count === 0
+      ? 'unindexed'
+      : !kb.embed_signature || !embedStatus?.current_signature
+        ? 'unknown'
+        : kb.embed_signature === embedStatus.current_signature ? 'consistent' : 'mismatch',
+  }))
+  const inconsistent = embedKbs.some((kb) => kb.state === 'mismatch')
+  const unknownConsistency = embedKbs.some((kb) => kb.state === 'unknown') ||
+    (embedKbs.length === 0 && embedStatus?.has_index === true)
+  const hasIndexedKb = embedKbs.some((kb) => kb.state === 'consistent' || kb.state === 'mismatch')
 
   return (
     <>
@@ -882,19 +900,16 @@ export default function ModelsPage() {
                   <dl className="info-list">
                     <dt>当前 Embedding</dt>
                     <dd>
-                      {embedStatus?.current_label || embedStatus?.current_model || currentEmbed?.label || currentEmbed?.model || (
-                        <span className="muted">未配置</span>
-                      )}
+                      {currentEmbedName || <span className="muted">未配置</span>}
                       {embedStatus?.current_provider ? (
                         <span className="tiny muted"> · {embedStatus.current_provider}</span>
                       ) : null}
+                      {embedStatus?.active?.offline ? <span className="tiny muted"> · 离线</span> : null}
                     </dd>
                     <dt>当前签名</dt>
                     <dd>
-                      {embedStatus?.current_signature || currentEmbed?.embed_signature ? (
-                        <span className="sig-box">
-                          {embedStatus?.current_signature || currentEmbed?.embed_signature}
-                        </span>
+                      {embedStatus?.current_signature ? (
+                        <span className="sig-box">{embedStatus.current_signature}</span>
                       ) : (
                         <span className="muted">—</span>
                       )}
@@ -903,8 +918,12 @@ export default function ModelsPage() {
                     <dd>
                       {inconsistent ? (
                         <Badge tone="warn">存在签名不一致的知识库</Badge>
-                      ) : (
+                      ) : unknownConsistency ? (
+                        <Badge tone="muted">无法判断</Badge>
+                      ) : hasIndexedKb ? (
                         <Badge tone="success">一致</Badge>
+                      ) : (
+                        <Badge tone="muted">暂无索引</Badge>
                       )}
                     </dd>
                     <dt>重建状态</dt>
@@ -917,54 +936,21 @@ export default function ModelsPage() {
                     </dd>
                   </dl>
 
-                  {(embedStatus?.kbs ?? []).length > 0 ? (
+                  {embedKbs.length > 0 ? (
                     <div className="embed-status-grid">
-                      {(embedStatus?.kbs ?? []).map((k) => (
-                        <div className={`embed-kb ${k.consistent ? '' : 'bad'}`} key={k.kb_id}>
+                      {embedKbs.map((kb) => (
+                        <div className={`embed-kb ${kb.state === 'mismatch' ? 'bad' : ''}`} key={kb.kb_id}>
                           <div className="row" style={{ gap: 6 }}>
                             <span className="truncate strong" style={{ fontSize: 12.5 }}>
-                              {k.kb_name}
+                              {kb.kb_name}
                             </span>
                             <span className="spacer" />
-                            <Badge tone={k.consistent ? 'success' : 'warn'}>
-                              {k.consistent ? '一致' : '需重建'}
+                            <Badge tone={kb.state === 'consistent' ? 'success' : kb.state === 'mismatch' ? 'warn' : 'muted'}>
+                              {kb.state === 'unindexed' ? '无索引' : kb.state === 'unknown' ? '无法判断' : kb.state === 'consistent' ? '一致' : '需重建'}
                             </Badge>
                           </div>
                           <div className="mono tiny muted" style={{ marginTop: 4 }}>
-                            {k.embed_signature || '未建立索引'} · {k.embed_dim || 0} 维
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : kbs.length > 0 ? (
-                    <div className="embed-status-grid">
-                      {kbs.map((kb) => (
-                        <div className="embed-kb" key={kb.id}>
-                          <div className="row" style={{ gap: 6 }}>
-                            <span className="truncate strong" style={{ fontSize: 12.5 }}>
-                              {kb.name}
-                            </span>
-                            <span className="spacer" />
-                            <Badge
-                              tone={
-                                !kb.embed_signature
-                                  ? 'muted'
-                                  : kb.embed_signature ===
-                                    (embedStatus?.current_signature ?? currentEmbed?.embed_signature)
-                                  ? 'success'
-                                  : 'warn'
-                              }
-                            >
-                              {!kb.embed_signature
-                                ? '无索引'
-                                : kb.embed_signature ===
-                                  (embedStatus?.current_signature ?? currentEmbed?.embed_signature)
-                                ? '一致'
-                                : '需重建'}
-                            </Badge>
-                          </div>
-                          <div className="mono tiny muted" style={{ marginTop: 4 }}>
-                            {kb.embed_signature || '未建立索引'} · {kb.embed_dim || 0} 维
+                            {kb.state === 'unindexed' ? '未建立索引' : kb.embed_signature || '签名未知'} · {kb.embed_dim || 0} 维
                           </div>
                         </div>
                       ))}
@@ -978,7 +964,7 @@ export default function ModelsPage() {
                   >
                     <div className="row row-wrap">
                       <Select
-                        value={String(currentEmbed?.id ?? '')}
+                        value={String(currentEmbedId ?? '')}
                         onChange={(e) => {
                           const target = embeddingModels.find((m) => String(m.id) === e.target.value)
                           if (target) {
@@ -988,11 +974,13 @@ export default function ModelsPage() {
                         }}
                         style={{ maxWidth: 320 }}
                       >
-                        <option value="">
-                          {currentEmbed ? `${currentEmbed.label || currentEmbed.model}（当前）` : '选择向量模型'}
+                        <option value={String(currentEmbedId ?? '')}>
+                          {currentEmbedName
+                            ? `${currentEmbedName}（当前${embedStatus?.active?.offline ? ' · 离线' : ''}）`
+                            : '选择向量模型'}
                         </option>
                         {embeddingModels
-                          .filter((m) => m.id !== currentEmbed?.id)
+                          .filter((m) => m.id !== currentEmbedId)
                           .map((m) => (
                             <option key={m.id} value={m.id}>
                               {m.label || m.model} · {m.provider_name} · {m.embed_dim || '?'} 维
