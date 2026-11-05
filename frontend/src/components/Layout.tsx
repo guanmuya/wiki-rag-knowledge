@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
-import { useEffect, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { useAuth } from '../auth'
 import { isDesktop, setupApi } from '../api'
 import OfflineBanner from './OfflineBanner'
@@ -117,14 +117,59 @@ export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const menuToggleRef = useRef<HTMLButtonElement>(null)
+  const menuCloseRef = useRef<HTMLButtonElement>(null)
+  const sidebarRef = useRef<HTMLElement>(null)
   const [appInfo, setAppInfo] = useState<{ version: string; dataDir: string } | null>(null)
   // 企业名在首次初始化时写入 app_settings，作为侧边栏标题展示；
   // 没设置就退回产品名，不让标题空着。
   const [orgName, setOrgName] = useState('')
 
+  const closeMobileMenu = useCallback(() => {
+    setMobileOpen(false)
+    menuToggleRef.current?.focus()
+  }, [])
+
   useEffect(() => {
     setMobileOpen(false)
   }, [location.pathname])
+
+  useEffect(() => {
+    const narrow = window.matchMedia('(max-width: 1024px)')
+    const onResize = () => {
+      if (!narrow.matches) setMobileOpen(false)
+    }
+    narrow.addEventListener('change', onResize)
+    return () => narrow.removeEventListener('change', onResize)
+  }, [])
+
+  useEffect(() => {
+    if (!mobileOpen) return
+    menuCloseRef.current?.focus()
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeMobileMenu()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const items = Array.from(sidebarRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled])',
+      ) ?? []).filter((item) => item.getClientRects().length > 0)
+      if (!items.length) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (event.shiftKey && (document.activeElement === first || !sidebarRef.current?.contains(document.activeElement))) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (document.activeElement === last || !sidebarRef.current?.contains(document.activeElement))) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [mobileOpen, closeMobileMenu])
 
   useEffect(() => {
     if (!isDesktop()) return
@@ -161,13 +206,38 @@ export default function Layout() {
 
   return (
     <div className="app-shell">
-      <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
+      {mobileOpen ? (
+        <button
+          type="button"
+          className="sidebar-backdrop mobile-only"
+          aria-label="关闭导航菜单"
+          tabIndex={-1}
+          onClick={closeMobileMenu}
+        />
+      ) : null}
+      <aside
+        id="primary-navigation"
+        ref={sidebarRef}
+        className={`sidebar ${mobileOpen ? 'open' : ''}`}
+        role={mobileOpen ? 'dialog' : undefined}
+        aria-modal={mobileOpen ? true : undefined}
+        aria-label="主导航"
+      >
         <div className="brand">
           <div className="brand-mark">知</div>
           <div className="brand-text">
             <strong>{orgName || '企业知识库'}</strong>
             <span>文档整理 · 智能问答</span>
           </div>
+          <button
+            type="button"
+            ref={menuCloseRef}
+            className="icon-btn sidebar-close mobile-only"
+            aria-label="关闭导航菜单"
+            onClick={closeMobileMenu}
+          >
+            ×
+          </button>
         </div>
 
         <nav className="nav">
@@ -178,6 +248,7 @@ export default function Layout() {
                 <NavLink
                   key={it.to}
                   to={it.to}
+                  onClick={() => { if (mobileOpen) closeMobileMenu() }}
                   className={({ isActive }) =>
                     `nav-item ${isActive || it.match?.(location.pathname) ? 'active' : ''}`
                   }
@@ -219,8 +290,11 @@ export default function Layout() {
           <button
             type="button"
             className="icon-btn mobile-only"
+            ref={menuToggleRef}
             onClick={() => setMobileOpen((v) => !v)}
             aria-label="切换菜单"
+            aria-controls="primary-navigation"
+            aria-expanded={mobileOpen}
           >
             ☰
           </button>
