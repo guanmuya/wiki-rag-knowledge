@@ -24,6 +24,7 @@ import {
   TextArea,
   TextInput,
 } from '../components/ui'
+import { IconChevronRight } from '../components/icons'
 
 /** 卡片视图图标：2×2 网格，和「卡片」的语义一致。 */
 function CardViewIcon() {
@@ -242,17 +243,17 @@ export default function KbListPage() {
                 </Badge>
               </div>
               <div className="kb-card-desc">{kb.description || '暂无描述'}</div>
-              <div className="row row-wrap" style={{ gap: 6 }}>
-                <Badge tone={kb.mode === 'wiki' ? 'info' : 'muted'}>
-                  {modeLabel(kb.mode, kb.mode_label)}
-                </Badge>
-                <Badge tone={kb.my_level === 'manage' ? 'success' : 'muted'}>
-                  {kb.my_level === 'manage' ? '可管理' : '可读'}
-                </Badge>
+              <div className="row row-wrap kb-card-meta">
+                <span>{modeLabel(kb.mode, kb.mode_label)}</span>
+                <span className="kb-meta-sep" aria-hidden="true" />
+                <span>{kb.my_level === 'manage' ? '可管理' : '可读'}</span>
                 {kb.mode === 'wiki' ? (
-                  <Badge tone={kb.wiki_ready ? 'success' : 'warn'}>
-                    {kb.wiki_ready ? 'Wiki 已就绪' : 'Wiki 未生成'}
-                  </Badge>
+                  <>
+                    <span className="kb-meta-sep" aria-hidden="true" />
+                    <span className={kb.wiki_ready ? 'kb-meta-ok' : 'kb-meta-warn'}>
+                      {kb.wiki_ready ? 'Wiki 已就绪' : 'Wiki 未生成'}
+                    </span>
+                  </>
                 ) : null}
               </div>
               <div className="kb-stats">
@@ -275,7 +276,7 @@ export default function KbListPage() {
               </div>
               {kb.status_detail ? <div className="tiny muted">{kb.status_detail}</div> : null}
               <div className="kb-card-actions">
-                <span className="tiny muted">进入详情 →</span>
+                <span className="tiny muted">进入详情 <IconChevronRight size={12} /></span>
                 {isAdmin ? (
                   <button
                     type="button"

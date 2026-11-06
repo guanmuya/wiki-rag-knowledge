@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { isDesktop } from '../api'
 import type { UpdateState } from '../types'
 import { Badge, Button, Spinner } from './ui'
+import { IconAlert } from './icons'
 
 /**
  * 关于页的「软件更新」卡片。
@@ -115,7 +116,7 @@ export default function UpdateCard() {
           className={status === 'error' ? 'insufficient-banner' : 'small muted'}
           style={{ marginTop: 12 }}
         >
-          {status === 'error' ? <span>⚠</span> : null}
+          {status === 'error' ? <span className="banner-icon"><IconAlert size={15} /></span> : null}
           <span style={{ flex: 1 }}>{message}</span>
         </div>
 

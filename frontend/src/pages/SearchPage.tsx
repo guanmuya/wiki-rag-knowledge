@@ -5,6 +5,7 @@ import { chatApi, kbApi } from '../api'
 import type { EvidenceItem, KbRoute, KnowledgeBase, RouteStats, SearchPreviewResponse } from '../types'
 import { errorText, formatMs, routeUsedLabel } from '../utils'
 import { Badge, Button, EmptyState, ErrorState, SkeletonLines, Spinner, TextInput } from '../components/ui'
+import { IconAlert } from '../components/icons'
 
 /**
  * 检索调试：不生成回答，只跑检索管线，把候选、覆盖率、排序与路由全部摊开。
@@ -215,7 +216,7 @@ export default function SearchPage() {
               {stats ? <StatsGrid stats={stats} avgCoverage={avgCoverage} count={evidence.length} /> : null}
               {stats?.embedding_ok === false ? (
                 <div className="insufficient-banner" style={{ marginTop: 12 }}>
-                  <span>⚠</span>
+                  <span className="banner-icon"><IconAlert size={15} /></span>
                   <div style={{ flex: 1 }}>
                     向量通道不可用{stats.embedding_error ? `：${stats.embedding_error}` : ''}，
                     本次结果仅由关键词通道产生。

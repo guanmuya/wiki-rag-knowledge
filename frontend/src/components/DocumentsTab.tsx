@@ -22,6 +22,7 @@ import {
   Spinner,
 } from '../components/ui'
 import TaskList from '../components/TaskList'
+import { IconAlert } from './icons'
 
 const ACCEPTED_FILE_TYPES = ['pdf', 'docx', 'xlsx', 'pptx', 'md', 'markdown', 'txt', 'log']
 const ACCEPTED_FILE_EXTENSIONS = ACCEPTED_FILE_TYPES.map((type) => `.${type}`).join(',')
@@ -428,7 +429,7 @@ export default function DocumentsTab({
             <>
               {error ? (
                 <div className="poll-notice" style={{ margin: '12px 16px 0' }} role="status">
-                  <span className="poll-notice-icon">⚠</span>
+                  <span className="poll-notice-icon"><IconAlert size={14} /></span>
                   <div className="poll-notice-body">
                     <strong>文档列表刷新失败，下方仍是上次获取到的数据</strong>
                     <div className="poll-notice-detail">{errorText(error)}</div>

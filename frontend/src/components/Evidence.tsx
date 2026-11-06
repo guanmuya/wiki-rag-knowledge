@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react'
 import type { EvidenceItem, KbRoute, RouteInfo, UsageInfo } from '../types'
 import { formatMs, routeUsedLabel, type BadgeTone } from '../utils'
 import { Badge } from './ui'
+import { IconAlert, IconChevronDown, IconChevronRight } from './icons'
 
 export function InsufficientNotice({ text }: { text?: string }) {
   return (
     <div className="insufficient-banner">
-      <span style={{ fontSize: 15, lineHeight: 1.3 }}>⚠</span>
+      <span style={{ display: 'inline-flex', paddingTop: 1 }}><IconAlert size={16} /></span>
       <div style={{ flex: 1 }}>
         <strong>证据不足</strong>
         <div style={{ marginTop: 2 }}>
@@ -201,7 +202,7 @@ export function MessageInsights({
       {insufficient ? <InsufficientNotice /> : null}
       <div className="row row-wrap" style={{ gap: 12 }}>
         <button type="button" className="evidence-toggle" onClick={() => setOpen((v) => !v)}>
-          {open ? '▾' : '▸'} 证据 {count} 条
+          {open ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />} 证据 {count} 条
         </button>
         {route?.kb_routes?.length ? (
           <button type="button" className="evidence-toggle" onClick={() => setOpen((v) => !v)}>

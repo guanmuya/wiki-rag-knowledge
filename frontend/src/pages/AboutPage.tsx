@@ -8,6 +8,7 @@ import { Badge, Button, ConfirmDialog, ErrorState, SkeletonLines, Spinner } from
 import UpdateCard from '../components/UpdateCard'
 import { errorText, formatMs } from '../utils'
 import { PROJECT_LICENSE, THIRD_PARTY_NOTICES } from './aboutInfo'
+import { IconAlert, IconClock } from '../components/icons'
 
 interface ProbeResult {
   ok: boolean
@@ -535,7 +536,7 @@ export default function AboutPage() {
                   {!probe.ok ? (
                     probe.busy ? (
                       <div className="task-hint" style={{ marginTop: 12 }}>
-                        <span className="task-hint-icon">⏳</span>
+                        <span className="task-hint-icon"><IconClock size={13} /></span>
                         <span>
                           后端仍在运行，只是暂时忙不过来（正在写入/向量化）。稍后会自动恢复，
                           可继续浏览其它页面；持续超过几分钟再考虑「重启后端」。
@@ -543,7 +544,7 @@ export default function AboutPage() {
                       </div>
                     ) : (
                       <div className="insufficient-banner" style={{ marginTop: 12 }}>
-                        <span>⚠</span>
+                        <span className="banner-icon"><IconAlert size={15} /></span>
                         <div style={{ flex: 1 }}>
                           后端不可用。浏览器模式请确认 uvicorn 已在 8000 端口启动；桌面版可点击「打开日志」查看
                           sidecar 报错，或在下方「后端诊断」里重启后端。

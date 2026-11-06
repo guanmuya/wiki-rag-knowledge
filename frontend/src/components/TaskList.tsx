@@ -8,6 +8,7 @@ import {
   taskStatusClass,
 } from '../utils'
 import { Badge, EmptyState, ProgressBar, Spinner } from './ui'
+import { IconAlert, IconClock } from './icons'
 
 /**
  * 「无进展」阈值：运行中任务的 stage/progress 超过这个时间都没变，
@@ -81,7 +82,7 @@ export default function TaskList({
     <div className="task-list">
       {error ? (
         <div className="poll-notice" role="status">
-          <span className="poll-notice-icon">⚠</span>
+          <span className="poll-notice-icon"><IconAlert size={14} /></span>
           <div className="poll-notice-body">
             <strong>本次刷新失败，下方仍是上次获取到的任务</strong>
             <div className="poll-notice-detail">
@@ -156,7 +157,7 @@ export default function TaskList({
             */}
             {isStale ? (
               <div className="task-hint" role="status">
-                <span className="task-hint-icon">⏳</span>
+                <span className="task-hint-icon"><IconClock size={13} /></span>
                 <span>{staleHintText(task.status)}</span>
               </div>
             ) : null}
