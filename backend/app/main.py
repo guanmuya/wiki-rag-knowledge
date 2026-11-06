@@ -31,7 +31,7 @@ logging.basicConfig(
 log = logging.getLogger("wrk")
 
 APP_NAME = "企业知识库文档整理与问答系统"
-VERSION = "1.0.13"
+VERSION = "1.0.14"
 
 
 def bootstrap_admin() -> None:
