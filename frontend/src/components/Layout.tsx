@@ -4,6 +4,7 @@ import { useAuth } from '../auth'
 import { isDesktop, setupApi } from '../api'
 import OfflineBanner from './OfflineBanner'
 import LockBanner from './LockBanner'
+import { IconClose, IconMenu } from './icons'
 
 interface NavItem {
   to: string
@@ -236,7 +237,7 @@ export default function Layout() {
             aria-label="关闭导航菜单"
             onClick={closeMobileMenu}
           >
-            ×
+            <IconClose size={16} />
           </button>
         </div>
 
@@ -296,7 +297,7 @@ export default function Layout() {
             aria-controls="primary-navigation"
             aria-expanded={mobileOpen}
           >
-            ☰
+            <IconMenu size={18} />
           </button>
           <div className="breadcrumb">
             <span>{orgName || '企业知识库'}</span>

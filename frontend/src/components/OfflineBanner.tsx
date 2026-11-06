@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { metaApi } from '../api'
 import { useAuth } from '../auth'
 import type { MetaInfo } from '../types'
+import { IconBolt } from './icons'
 
 const DISMISS_KEY = 'wrk_offline_banner_dismissed'
 
@@ -53,7 +54,7 @@ export default function OfflineBanner() {
 
   return (
     <div className="offline-banner" role="status">
-      <span className="offline-banner-icon">⚡</span>
+      <span className="offline-banner-icon"><IconBolt size={16} /></span>
       <div className="offline-banner-body">
         <strong>当前未配置模型，运行在离线演示模式</strong>
         <div className="offline-banner-detail">

@@ -8,6 +8,7 @@ import { Badge, Button, ErrorState, SkeletonLines, Tabs } from '../components/ui
 import DocumentsTab from '../components/DocumentsTab'
 import WikiTab from '../components/WikiTab'
 import SettingsTab from '../components/SettingsTab'
+import { IconArrowLeft, IconArrowRight } from '../components/icons'
 
 type TabKey = 'documents' | 'wiki' | 'settings'
 
@@ -88,17 +89,15 @@ export default function KbDetailPage() {
       <section className="card detail-hero">
       <div className="detail-head">
         <button type="button" className="back-link" onClick={() => navigate('/kbs')}>
-          ← 知识库
+          <IconArrowLeft size={12} /> 知识库
         </button>
         <div className="detail-title">
           <h1>{kb.name}</h1>
           <Badge tone={taskStatusClass(kb.status)}>
             {kbStatusLabel(kb.status, kb.status_label)}
           </Badge>
-          <Badge tone={kb.mode === 'wiki' ? 'info' : 'muted'}>
-            {modeLabel(kb.mode, kb.mode_label)}
-          </Badge>
-          <Badge tone={manage ? 'success' : 'muted'}>{manage ? '可管理' : '可读'}</Badge>
+          <span className="tiny muted">{modeLabel(kb.mode, kb.mode_label)}</span>
+          <span className="tiny muted">{manage ? '可管理' : '可读'}</span>
         </div>
         {kb.description ? (
           <div className="small muted" style={{ marginTop: 6 }}>
@@ -180,7 +179,7 @@ export default function KbDetailPage() {
 
       <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
         <Button size="sm" variant="ghost" onClick={() => navigate('/chat')}>
-          去问答 →
+          去问答 <IconArrowRight size={12} />
         </Button>
         {tab !== 'wiki' && (kb.stats?.wiki_page_count ?? 0) > 0 ? (
           <Button size="sm" variant="ghost" onClick={() => openWikiPage(slugParam ?? '')}>

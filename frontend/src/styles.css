@@ -148,6 +148,9 @@ code {
 .k { color: var(--c-text-muted); font-size: 11.5px; }
 .danger { color: var(--c-danger); }
 
+/* 线性图标统一尺寸与基线：颜色一律跟随所在文本角色 */
+.icon { display: inline-block; flex: 0 0 auto; vertical-align: -2px; }
+
 /* ---------------------------------------------------------------- 3 布局 */
 .app-shell {
   display: flex;
@@ -172,7 +175,7 @@ code {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 18px 16px 14px;
+  padding: 20px 16px 16px;
 }
 
 .brand-mark {
@@ -214,11 +217,11 @@ code {
   padding: 2px 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 
 .nav-group-label {
-  margin: 16px 10px 6px;
+  margin: 20px 10px 8px;
   font-size: 11px;
   font-weight: 600;
   color: var(--c-text-muted);
@@ -229,7 +232,7 @@ code {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 38px;
+  height: 36px;
   padding: 0 10px;
   border-radius: 8px;
   color: var(--c-text-secondary);
@@ -353,7 +356,7 @@ code {
   width: 100%;
   max-width: 1320px;
   margin: 0 auto;
-  padding: 22px 26px 44px;
+  padding: 24px 28px 44px;
   flex: 1;
   min-height: 0;
 }
@@ -584,7 +587,7 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 21px;
+  height: 20px;
   padding: 0 8px;
   border-radius: 999px;
   font-size: 11px;
@@ -667,8 +670,8 @@ code {
   min-height: 48px;
 }
 .card-head h3 { font-size: 13.5px; font-weight: 600; }
-.card-body { padding: 18px; }
-.card-pad { padding: 18px; }
+.card-body { padding: 20px; }
+.card-pad { padding: 20px; }
 .card-body-flush { padding: 0; }
 
 .panel {
@@ -865,12 +868,12 @@ code {
   color: var(--c-text-muted);
   font-weight: 600;
   background: var(--c-surface-alt);
-  padding: 9px 14px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--c-border);
   white-space: nowrap;
 }
 .table td {
-  padding: 11px 14px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--c-hairline);
   vertical-align: middle;
   color: var(--c-text-secondary);
@@ -936,6 +939,8 @@ code {
   line-height: 16px;
   font-variant-numeric: tabular-nums;
 }
+/* 库名与入选数之间留一点空隙，否则「人事制度库1」看起来像一个词 */
+.coverage-chip strong { margin-left: 4px; }
 
 /* ---------------------------------------------------------------- 11 弹窗 / Toast */
 .modal-mask {
@@ -1235,11 +1240,24 @@ code {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+.kb-card-meta {
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--c-text-muted);
+}
+/* 分隔符跟着后一项走，窄卡片换行时不会在行首留下一条孤立的竖线 */
+.kb-card-meta > span + span::before {
+  content: '·';
+  margin-right: 6px;
+  color: var(--c-border-strong);
+}
+.kb-meta-ok { color: var(--c-success); }
+.kb-meta-warn { color: var(--c-warn); }
 .kb-stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
-  padding: 11px 0;
+  padding: 12px 0;
   border-top: 1px dashed var(--c-hairline);
 }
 .kb-card-actions {
@@ -1457,7 +1475,7 @@ code {
   margin-bottom: 14px;
   line-height: 1.65;
 }
-.wiki-mark { font-size: 11px; color: var(--c-text-muted); }
+.wiki-mark { display: inline-grid; place-items: center; }
 .related-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 
 /* ---------------------------------------------------------------- 18 Markdown */
@@ -1717,6 +1735,7 @@ code {
   line-height: 1.6;
   margin: 8px 0;
 }
+.banner-icon { display: inline-flex; flex: 0 0 auto; padding-top: 1px; }
 
 .evidence-toggle {
   display: inline-flex;
@@ -1920,7 +1939,7 @@ code {
 
 /* ---------------------------------------------------------------- 23 响应式 */
 @media (max-width: 1180px) {
-  .content { padding: 18px 18px 36px; }
+  .content { padding: 20px 20px 36px; }
   .wiki-layout { grid-template-columns: 1fr; }
   .wiki-tree {
     position: static;
@@ -2025,7 +2044,7 @@ code {
 .detail-title h1 { font-size: 20px; }
 
 .card .state-block { padding: 26px 18px; }
-.card .state-icon { width: 34px; height: 34px; font-size: 13px; }
+.card .state-icon { width: 36px; height: 36px; font-size: 13px; }
 
 /* 登录页左侧：淡蓝纯色面板（不再使用渐变） */
 
@@ -2064,8 +2083,34 @@ code {
   white-space: nowrap;
   text-align: left;
 }
-.wiki-mark { width: 14px; text-align: center; color: #b6bccd; flex: 0 0 14px; font-size: 10px; }
+/* Wiki 目录状态：一个 6px 状态点，颜色只表达「已发布 / 待校对 / 草稿」 */
+.wiki-mark {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  display: grid;
+  place-items: center;
+  color: #b6bccd;
+}
+.wiki-mark::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+}
+.wiki-mark.published { color: var(--c-success); }
+.wiki-mark.published::before { opacity: 1; }
+/* 待校对用空心环：不靠颜色也能和「已发布」区分（色盲用户可辨） */
+.wiki-mark.review { color: var(--c-warn); }
+.wiki-mark.review::before {
+  opacity: 1;
+  background: transparent;
+  border: 1.5px solid currentColor;
+}
 .wiki-tree-item.active .wiki-mark { color: var(--c-primary); }
+.wiki-lock { display: inline-flex; color: var(--c-text-muted); flex: 0 0 auto; }
 
 /* 上传区收窄：原来是一大块空白的虚线框，占掉半屏 */
 .dropzone { padding: 16px 20px; }

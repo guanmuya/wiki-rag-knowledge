@@ -7,6 +7,7 @@ import type {
   WikiPageVersion,
 } from '../types'
 import { errorText, formatTime, taskStatusClass, wikiStatusLabel } from '../utils'
+import { IconArrowLeft, IconLock } from './icons'
 import {
   Badge,
   Button,
@@ -345,11 +346,13 @@ export default function WikiTab({
                 onClick={(e) => requestNavigation(p.slug, e.currentTarget)}
                 title={p.summary ? `${p.title} · ${p.summary}` : p.title}
               >
-                <span className={`wiki-mark ${markClass(p)}`} aria-hidden="true">
-                  {p.status === 'published' ? '●' : p.status === 'needs_review' ? '◐' : '○'}
-                </span>
+                <span className={`wiki-mark ${markClass(p)}`} aria-hidden="true" />
                 <span className="wiki-tree-title">{p.title}</span>
-                {p.human_locked ? <span title="人工锁定" aria-hidden="true">🔒</span> : null}
+                {p.human_locked ? (
+                  <span title="人工锁定" aria-hidden="true" className="wiki-lock">
+                    <IconLock size={12} />
+                  </span>
+                ) : null}
               </button>
             ))}
           </div>
@@ -541,7 +544,7 @@ export default function WikiTab({
           <>
             <div className="row" style={{ marginBottom: 10 }}>
               <Button size="sm" variant="ghost" onClick={() => setViewVersion(null)}>
-                ← 返回列表
+                <IconArrowLeft size={14} /> 返回列表
               </Button>
               <span className="small muted">
                 v{viewVersion.version_no} · {originLabel(viewVersion.origin)}
@@ -645,9 +648,9 @@ function groupPages(pages: WikiPage[]): Array<{ key: string; label: string; item
 }
 
 function markClass(p: WikiPage): string {
-  if (p.status === 'published') return 'test-ok'
-  if (p.status === 'needs_review') return 'test-fail'
-  return 'muted'
+  if (p.status === 'published') return 'published'
+  if (p.status === 'needs_review') return 'review'
+  return ''
 }
 
 function originLabel(origin: string | undefined): string {

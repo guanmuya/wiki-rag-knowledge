@@ -16,6 +16,13 @@ import type {
 import { AUDIT_ACTION_LABEL, PROTOCOL_OPTIONS } from '../types'
 import { errorText, formatMs, formatTime } from '../utils'
 import {
+  IconAlert,
+  IconCheck,
+  IconChevronDown,
+  IconChevronRight,
+  IconClose,
+} from '../components/icons'
+import {
   Badge,
   Button,
   ConfirmDialog,
@@ -832,7 +839,7 @@ export default function ModelsPage() {
                                             res.ok ? 'test-ok' : 'test-fail'
                                           }`}
                                         >
-                                          {res.ok ? '✓' : '✕'} {res.message}
+                                          {res.ok ? <IconCheck size={12} /> : <IconClose size={12} />} {res.message}
                                           {res.ok ? ` · ${formatMs(res.latency_ms)}` : ''}
                                         </span>
                                       ) : m.last_test_at ? (
@@ -842,7 +849,7 @@ export default function ModelsPage() {
                                           }`}
                                           title={m.last_test_message}
                                         >
-                                          {m.last_test_ok ? '✓' : '✕'} {formatTime(m.last_test_at)}
+                                          {m.last_test_ok ? <IconCheck size={12} /> : <IconClose size={12} />} {formatTime(m.last_test_at)}
                                         </span>
                                       ) : (
                                         <span className="tiny muted">未测试</span>
@@ -992,7 +999,7 @@ export default function ModelsPage() {
 
                   {inconsistent ? (
                     <div className="insufficient-banner">
-                      <span>⚠</span>
+                      <span className="banner-icon"><IconAlert size={15} /></span>
                       <div style={{ flex: 1 }}>
                         检测到部分知识库的向量签名与当前 Embedding 不一致，这些库的向量检索可能失效。
                         建议切换到目标模型时执行全量重建。
@@ -1153,7 +1160,7 @@ export default function ModelsPage() {
           <>
             {discoverError ? (
               <div className="insufficient-banner" style={{ marginBottom: 12 }}>
-                <span>⚠</span>
+                <span className="banner-icon"><IconAlert size={15} /></span>
                 <div style={{ flex: 1 }}>
                   探测失败：{discoverError}
                   <div className="tiny muted" style={{ marginTop: 4 }}>
@@ -1336,7 +1343,9 @@ export default function ModelsPage() {
             onClick={() => setMParamsOpen((v) => !v)}
             aria-expanded={mParamsOpen}
           >
-            <span className="params-caret">{mParamsOpen ? '▾' : '▸'}</span>
+            <span className="params-caret">
+              {mParamsOpen ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />}
+            </span>
             高级参数（JSON）
             {!mParamsOpen && mParams.trim() && mParams.trim() !== '{}' ? (
               <span className="tiny muted">已设置</span>
@@ -1465,7 +1474,7 @@ export default function ModelsPage() {
         </div>
         {switchConfirm ? (
           <div className="insufficient-banner" style={{ marginTop: 12 }}>
-            <span>⚠</span>
+            <span className="banner-icon"><IconAlert size={15} /></span>
             <div>
               {embedStatus?.has_index === false
                 ? '当前还没有任何分块索引，切换后无需重建，可立即生效。'

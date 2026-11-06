@@ -20,7 +20,7 @@ import logging
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import models
+from .. import models, serializers
 from . import cost
 
 log = logging.getLogger("wrk.taskflow")
@@ -64,7 +64,8 @@ def requeue(db: Session, task: models.Task, *, reason: str = "已重新排队") 
     hist["previous_attempts"] = int(hist.get("previous_attempts") or 0) + int(task.attempts or 0)
     if task.error:
         hist["last_error"] = task.error[:500]
-    hist["at"] = models.utcnow().isoformat(timespec="seconds")
+    # 和 API 输出同一个时间出口：重试历史里的时间也必须是带时区的 UTC
+    hist["at"] = serializers.iso(models.utcnow())
     hist["reason"] = reason
     payload["retry"] = hist
     _write_payload(task, payload)

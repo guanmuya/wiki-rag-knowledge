@@ -8,6 +8,7 @@ import {
   taskStatusClass,
 } from '../utils'
 import { Badge, EmptyState, ProgressBar, Spinner } from './ui'
+import { IconAlert, IconClock } from './icons'
 
 /**
  * 「无进展」阈值：运行中任务的 stage/progress 超过这个时间都没变，
@@ -81,7 +82,7 @@ export default function TaskList({
     <div className="task-list">
       {error ? (
         <div className="poll-notice" role="status">
-          <span className="poll-notice-icon">⚠</span>
+          <span className="poll-notice-icon"><IconAlert size={14} /></span>
           <div className="poll-notice-body">
             <strong>本次刷新失败，下方仍是上次获取到的任务</strong>
             <div className="poll-notice-detail">
@@ -138,10 +139,14 @@ export default function TaskList({
                 </div>
                 <span className="task-stage">
                   {task.stage ? `${task.stage}` : '处理中'} · {task.progress}%
-                  <span className="task-heartbeat">
-                    {' '}
-                    · {heartbeatLabel} {heartbeat}
-                  </span>
+                  {/* 排队中的任务还没开始跑：等待时长在行首右侧已经显示过一次，
+                      这里不再重复「已排队」，也不该说「已运行」。 */}
+                  {task.status === 'queued' ? null : (
+                    <span className="task-heartbeat">
+                      {' '}
+                      · {heartbeatLabel} {heartbeat}
+                    </span>
+                  )}
                 </span>
               </div>
             ) : null}
@@ -152,7 +157,7 @@ export default function TaskList({
             */}
             {isStale ? (
               <div className="task-hint" role="status">
-                <span className="task-hint-icon">⏳</span>
+                <span className="task-hint-icon"><IconClock size={13} /></span>
                 <span>{staleHintText(task.status)}</span>
               </div>
             ) : null}
@@ -271,10 +276,22 @@ function resultText(result: Record<string, unknown>): string {
     documents: '文档',
     kb_count: '知识库',
     vectors: '向量',
+    chars: '字符',
+    images: '图片',
+    embedding_mode: '向量模式',
+    embedding_signature: '向量签名',
+    wiki_error: 'Wiki 失败原因',
+    created: '新建页面',
+    updated: '更新页面',
+    skipped: '跳过页面',
+    sections: '章节',
   }
   Object.entries(result).forEach(([k, v]) => {
     if (typeof v === 'number' || typeof v === 'string') {
-      parts.push(`${map[k] ?? k}: ${v}`)
+      // 后端的 embedding_mode 只有 live / keyword-only 两种：live 表示「这次入库
+      // 产出了向量」（离线哈希向量也算），并不代表配置了在线向量模型，不能标成「在线模型」。
+      const text = k === 'embedding_mode' ? (v === 'live' ? '已向量化' : '仅关键词') : v
+      parts.push(`${map[k] ?? k}: ${text}`)
     }
   })
   return parts.join(' · ')

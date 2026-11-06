@@ -13,6 +13,7 @@ import { errorText, formatMs, formatTime } from '../utils'
 import { Button, ErrorState, Modal, SkeletonLines, Spinner, TextInput } from '../components/ui'
 import { Markdown } from '../components/Markdown'
 import { MessageInsights } from '../components/Evidence'
+import { IconClose, IconMenu, IconMessage } from '../components/icons'
 
 // Keep only this page's outstanding requests across an ordinary route unmount.
 // The server remains authoritative after a reload or in another browser tab.
@@ -682,7 +683,7 @@ export default function ChatPage() {
               onClick={closeSidebar}
               aria-label="关闭会话列表"
             >
-              ×
+              <IconClose size={16} />
             </button>
           </div>
           <div className="conv-list">
@@ -776,7 +777,7 @@ export default function ChatPage() {
               aria-controls="chat-conversation-sidebar"
               aria-expanded={sidebarOpen}
             >
-              ☰
+              <IconMenu size={18} />
             </button>
             <span className="tiny muted nowrap">知识库：</span>
             <div className="kb-selector">
@@ -826,7 +827,7 @@ export default function ChatPage() {
                 <ErrorState error={currentDetailError} onRetry={() => activeId && void loadDetail(activeId)} />
               ) : messages.length === 0 && !pending ? (
                 <div className="chat-empty">
-                  <div className="chat-empty-icon">✦</div>
+                  <div className="chat-empty-icon"><IconMessage size={22} /></div>
                   <div className="chat-empty-title">向知识库提问</div>
                   <div className="chat-empty-hint">
                     {shownSelectedKbs.length === 0

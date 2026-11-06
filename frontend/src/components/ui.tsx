@@ -8,6 +8,7 @@ import {
   type TextareaHTMLAttributes,
 } from 'react'
 import { errorText } from '../utils'
+import { IconAlert, IconClose, IconInbox } from './icons'
 
 export function Spinner({ size = 16 }: { size?: number }) {
   return (
@@ -50,7 +51,7 @@ export function EmptyState({
 }) {
   return (
     <div className="state-block empty">
-      <div className="state-icon">◌</div>
+      <div className="state-icon"><IconInbox size={18} /></div>
       <div className="state-title">{title}</div>
       {hint ? <div className="state-hint">{hint}</div> : null}
       {action ? <div className="state-action">{action}</div> : null}
@@ -61,7 +62,7 @@ export function EmptyState({
 export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   return (
     <div className="state-block error">
-      <div className="state-icon">!</div>
+      <div className="state-icon"><IconAlert size={18} /></div>
       <div className="state-title">{errorText(error)}</div>
       {onRetry ? (
         <div className="state-action">
@@ -154,7 +155,7 @@ export function Modal({
           <h3>{title}</h3>
           {dismissable ? (
             <button type="button" className="icon-btn" onClick={onClose} aria-label="关闭">
-              ×
+              <IconClose size={16} />
             </button>
           ) : null}
         </header>

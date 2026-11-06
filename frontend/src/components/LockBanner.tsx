@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { BACKEND_BUSY_CLEARED_EVENT, BACKEND_BUSY_EVENT, isDesktop } from '../api'
+import { IconClock } from './icons'
 
 /**
  * 全局「后端正在写入」横幅。
@@ -43,7 +44,7 @@ export default function LockBanner() {
 
   return (
     <div className="lock-banner" role="status" aria-live="polite">
-      <span className="lock-banner-icon">⏳</span>
+      <span className="lock-banner-icon"><IconClock size={16} /></span>
       <div className="lock-banner-body">
         <strong>后台正在写入，稍后自动恢复</strong>
         <div className="lock-banner-detail">

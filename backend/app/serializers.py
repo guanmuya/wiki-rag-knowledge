@@ -1,6 +1,8 @@
 """输出序列化：把 ORM 对象转成前端契约结构，集中一处避免字段漂移。"""
 from __future__ import annotations
 
+import datetime as dt
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -28,8 +30,24 @@ PROTOCOL_LABEL = {
 }
 
 
-def iso(dt) -> str | None:
-    return dt.isoformat() if dt else None
+def iso(value) -> str | None:
+    """统一输出带时区的 UTC 时间字符串。
+
+    SQLite 的 DATETIME 列不保存时区：`models.utcnow()` 写入的是 UTC，
+    读回来却是 naive 的（如 `2026-11-06T12:45:09.883980`）。直接 `.isoformat()`
+    交给浏览器，`new Date()` 会按**本地时间**解析，于是全站时间都差一个时区
+    （东八区差 8 小时），任务心跳一创建就显示「已运行 8 小时」。
+    这里显式补上 UTC 偏移，前端才能正确换算成本地时间。
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=dt.timezone.utc)
+    else:
+        # 契约是「UTC 且带 +00:00」：带其它偏移的输入先换算到 UTC，
+        # 否则同一个 API 会混出 +08:00 之类的字符串，前端与文档都会漂移。
+        value = value.astimezone(dt.timezone.utc)
+    return value.isoformat()
 
 
 # ------------------------------------------------------------------ wiki_ready 单一口径
