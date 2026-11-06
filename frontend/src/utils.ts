@@ -13,15 +13,18 @@ export function parseApiTime(value: string | null | undefined): Date | null {
   const text = value.trim()
   if (!text) return null
   const hasClock = /\d{1,2}:\d{2}/.test(text)
-  const hasZone =
-    /([zZ]|[+-]\d{2}:?\d{2})$/.test(text) || (hasClock && /[+-]\d{2}$/.test(text))
   if (!hasClock) {
-    // 纯日期（如用量统计的 `2026-11-06`）没有时间部分，按本地日历日解析，
+    // 纯日期（如用量统计的 `2026-11-06`）按本地日历日解析，
     // 不要拼 Z：`new Date("2026-11-06")` 在 UTC 负偏移时区会退到前一天。
-    const d = new Date(`${text}T00:00:00`)
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(text)
+      ? new Date(`${text}T00:00:00`)
+      : new Date(text)
     return Number.isNaN(d.getTime()) ? null : d
   }
-  const d = new Date(hasZone ? text : `${text}Z`)
+  // 只有小时的偏移（`+08`）先补成 `+08:00`，否则 Date 会判为非法
+  const normalized = /[+-]\d{2}$/.test(text) ? `${text}:00` : text
+  const hasZone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(normalized)
+  const d = new Date(hasZone ? normalized : `${normalized}Z`)
   return Number.isNaN(d.getTime()) ? null : d
 }
 

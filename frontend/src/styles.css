@@ -1245,7 +1245,12 @@ code {
   font-size: 11.5px;
   color: var(--c-text-muted);
 }
-.kb-meta-sep { width: 1px; height: 10px; background: var(--c-border); }
+/* 分隔符跟着后一项走，窄卡片换行时不会在行首留下一条孤立的竖线 */
+.kb-card-meta > span + span::before {
+  content: '·';
+  margin-right: 6px;
+  color: var(--c-border-strong);
+}
 .kb-meta-ok { color: var(--c-success); }
 .kb-meta-warn { color: var(--c-warn); }
 .kb-stats {
@@ -2097,8 +2102,13 @@ code {
 }
 .wiki-mark.published { color: var(--c-success); }
 .wiki-mark.published::before { opacity: 1; }
+/* 待校对用空心环：不靠颜色也能和「已发布」区分（色盲用户可辨） */
 .wiki-mark.review { color: var(--c-warn); }
-.wiki-mark.review::before { opacity: 1; }
+.wiki-mark.review::before {
+  opacity: 1;
+  background: transparent;
+  border: 1.5px solid currentColor;
+}
 .wiki-tree-item.active .wiki-mark { color: var(--c-primary); }
 .wiki-lock { display: inline-flex; color: var(--c-text-muted); flex: 0 0 auto; }
 

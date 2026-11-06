@@ -79,7 +79,7 @@ export function IconInbox(props: IconProps) {
 export function IconMessage(props: IconProps) {
   return (
     <Svg {...props}>
-      <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7a2.5 2.5 0 0 1-2.5 2.5H9l-4.2 3.2A.7.7 0 0 1 3.7 17V5.5Z" />
+      <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h10A2.5 2.5 0 0 1 19 5.5v7a2.5 2.5 0 0 1-2.5 2.5H9l-4.2 3.2A.7.7 0 0 1 3.7 17V5.5Z" />
     </Svg>
   )
 }

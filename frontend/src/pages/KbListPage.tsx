@@ -245,15 +245,11 @@ export default function KbListPage() {
               <div className="kb-card-desc">{kb.description || '暂无描述'}</div>
               <div className="row row-wrap kb-card-meta">
                 <span>{modeLabel(kb.mode, kb.mode_label)}</span>
-                <span className="kb-meta-sep" aria-hidden="true" />
                 <span>{kb.my_level === 'manage' ? '可管理' : '可读'}</span>
                 {kb.mode === 'wiki' ? (
-                  <>
-                    <span className="kb-meta-sep" aria-hidden="true" />
-                    <span className={kb.wiki_ready ? 'kb-meta-ok' : 'kb-meta-warn'}>
-                      {kb.wiki_ready ? 'Wiki 已就绪' : 'Wiki 未生成'}
-                    </span>
-                  </>
+                  <span className={kb.wiki_ready ? 'kb-meta-ok' : 'kb-meta-warn'}>
+                    {kb.wiki_ready ? 'Wiki 已就绪' : 'Wiki 未生成'}
+                  </span>
                 ) : null}
               </div>
               <div className="kb-stats">
