@@ -3,7 +3,7 @@
 - 前缀：`/api`
 - 认证：`Authorization: Bearer <token>`。免登录的只有 `POST /api/auth/login`、`GET /api/meta`、`GET /api/health` 与 `/api/setup/*`（首次初始化必须在无账号时可用）。
 - 错误：`{"detail": "中文错误信息"}`，HTTP 400/401/403/404/409/422。
-- 时间：ISO 8601 字符串。**真正分页的只有两个接口**：`GET /api/documents/{id}/chunks`（`?page=1&page_size=20`）与 `GET /api/settings/audit`（`?page=1&page_size=50`），返回 `{"items":[],"total":0,"page":1,"page_size":20}`；其余列表接口只返回 `{"items":[],"total":N}`，没有 `page`/`page_size` 字段（前端一次拿全量）。
+- 时间：ISO 8601 字符串，统一为 **UTC 且带 `+00:00` 偏移**（前端负责换算本地时区展示；不带偏移的字符串会被浏览器当成本地时间）。**真正分页的只有两个接口**：`GET /api/documents/{id}/chunks`（`?page=1&page_size=20`）与 `GET /api/settings/audit`（`?page=1&page_size=50`），返回 `{"items":[],"total":0,"page":1,"page_size":20}`；其余列表接口只返回 `{"items":[],"total":N}`，没有 `page`/`page_size` 字段（前端一次拿全量）。
 - 角色：`admin` | `employee`。知识库授权等级：`read` | `manage`（admin 隐式拥有全部知识库 manage）。
 
 ## 0. 首次初始化（免登录）

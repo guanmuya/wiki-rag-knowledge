@@ -936,6 +936,8 @@ code {
   line-height: 16px;
   font-variant-numeric: tabular-nums;
 }
+/* 库名与入选数之间留一点空隙，否则「人事制度库1」看起来像一个词 */
+.coverage-chip strong { margin-left: 4px; }
 
 /* ---------------------------------------------------------------- 11 弹窗 / Toast */
 .modal-mask {

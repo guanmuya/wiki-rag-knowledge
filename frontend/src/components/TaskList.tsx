@@ -97,7 +97,9 @@ export default function TaskList({
         // 现在后端 Task 还没这个字段，退回 started_at / created_at。
         const beatAt = task.updated_at ?? task.started_at ?? task.created_at
         const heartbeat = formatSince(beatAt, now)
-        const heartbeatLabel = task.updated_at ? '最近更新' : '已运行'
+        // 排队中的任务还没开始跑，说「已运行」会让人以为 worker 已经在处理它
+        const heartbeatLabel =
+          task.status === 'queued' ? '已排队' : task.updated_at ? '最近更新' : '已运行'
         const isStale = stale.has(task.id)
         return (
           <div className="task-item" key={task.id}>
@@ -271,10 +273,22 @@ function resultText(result: Record<string, unknown>): string {
     documents: '文档',
     kb_count: '知识库',
     vectors: '向量',
+    chars: '字符',
+    images: '图片',
+    embedding_mode: '向量模式',
+    embedding_signature: '向量签名',
+    wiki_error: 'Wiki 失败原因',
   }
   Object.entries(result).forEach(([k, v]) => {
     if (typeof v === 'number' || typeof v === 'string') {
-      parts.push(`${map[k] ?? k}: ${v}`)
+      // embedding_mode 是内部枚举值（live / keyword-only），直接展示英文没有意义
+      const text =
+        k === 'embedding_mode'
+          ? v === 'live'
+            ? '在线模型'
+            : '仅关键词'
+          : v
+      parts.push(`${map[k] ?? k}: ${text}`)
     }
   })
   return parts.join(' · ')

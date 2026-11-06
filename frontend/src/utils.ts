@@ -1,10 +1,28 @@
 import { useEffect, useRef } from 'react'
 
+/**
+ * 解析后端时间戳。
+ *
+ * 后端历史输出过**不带时区**的 UTC 字符串（如 `2026-11-06T12:45:09.883980`）。
+ * 按 ECMAScript 规范，这种字符串会被当作本地时间解析，于是东八区用户看到的
+ * 每个时间都差 8 小时，任务心跳还会一创建就显示「已运行 8 小时」。
+ * 后端已改为输出带偏移的 UTC，这里再兜一层：没有时区标识的时间按 UTC 处理。
+ */
+export function parseApiTime(value: string | null | undefined): Date | null {
+  if (!value) return null
+  const text = value.trim()
+  if (!text) return null
+  const hasZone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(text)
+  // 纯日期（如用量统计的 `2026-11-06`）没有时间部分，不能直接拼 Z
+  const hasClock = /\d{1,2}:\d{2}/.test(text)
+  const d = new Date(hasZone || !hasClock ? text : `${text}Z`)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
 /** 时间格式化：ISO → 本地 `YYYY-MM-DD HH:mm`。 */
 export function formatTime(value: string | null | undefined): string {
-  if (!value) return '—'
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return '—'
+  const d = parseApiTime(value)
+  if (!d) return '—'
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(
     d.getMinutes(),
@@ -32,10 +50,9 @@ export function elapsedSeconds(
   value: string | null | undefined,
   now: number = Date.now(),
 ): number | null {
-  if (!value) return null
-  const t = new Date(value).getTime()
-  if (Number.isNaN(t)) return null
-  return Math.max(0, Math.round((now - t) / 1000))
+  const d = parseApiTime(value)
+  if (!d) return null
+  return Math.max(0, Math.round((now - d.getTime()) / 1000))
 }
 
 /**

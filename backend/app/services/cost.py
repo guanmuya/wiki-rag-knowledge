@@ -18,7 +18,7 @@ from typing import Iterable
 from sqlalchemy import insert, literal, select
 from sqlalchemy.orm import Session
 
-from .. import models
+from .. import models, serializers
 from . import llm
 
 log = logging.getLogger("wrk.cost")
@@ -297,6 +297,6 @@ def kb_summary(db: Session, kb: models.KnowledgeBase) -> dict:
             "embed_tokens": r.embed_tokens, "embed_texts": r.embed_texts,
             "total_tokens": r.prompt_tokens + r.completion_tokens + r.embed_tokens,
             "latency_ms": r.latency_ms, "mode": r.mode, "embed_mode": r.embed_mode,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "created_at": serializers.iso(r.created_at),
         } for r in rows[-50:]][::-1],
     }
