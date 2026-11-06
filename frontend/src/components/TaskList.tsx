@@ -97,9 +97,7 @@ export default function TaskList({
         // 现在后端 Task 还没这个字段，退回 started_at / created_at。
         const beatAt = task.updated_at ?? task.started_at ?? task.created_at
         const heartbeat = formatSince(beatAt, now)
-        // 排队中的任务还没开始跑，说「已运行」会让人以为 worker 已经在处理它
-        const heartbeatLabel =
-          task.status === 'queued' ? '已排队' : task.updated_at ? '最近更新' : '已运行'
+        const heartbeatLabel = task.updated_at ? '最近更新' : '已运行'
         const isStale = stale.has(task.id)
         return (
           <div className="task-item" key={task.id}>
@@ -140,10 +138,14 @@ export default function TaskList({
                 </div>
                 <span className="task-stage">
                   {task.stage ? `${task.stage}` : '处理中'} · {task.progress}%
-                  <span className="task-heartbeat">
-                    {' '}
-                    · {heartbeatLabel} {heartbeat}
-                  </span>
+                  {/* 排队中的任务还没开始跑：等待时长在行首右侧已经显示过一次，
+                      这里不再重复「已排队」，也不该说「已运行」。 */}
+                  {task.status === 'queued' ? null : (
+                    <span className="task-heartbeat">
+                      {' '}
+                      · {heartbeatLabel} {heartbeat}
+                    </span>
+                  )}
                 </span>
               </div>
             ) : null}
@@ -278,16 +280,16 @@ function resultText(result: Record<string, unknown>): string {
     embedding_mode: '向量模式',
     embedding_signature: '向量签名',
     wiki_error: 'Wiki 失败原因',
+    created: '新建页面',
+    updated: '更新页面',
+    skipped: '跳过页面',
+    sections: '章节',
   }
   Object.entries(result).forEach(([k, v]) => {
     if (typeof v === 'number' || typeof v === 'string') {
-      // embedding_mode 是内部枚举值（live / keyword-only），直接展示英文没有意义
-      const text =
-        k === 'embedding_mode'
-          ? v === 'live'
-            ? '在线模型'
-            : '仅关键词'
-          : v
+      // 后端的 embedding_mode 只有 live / keyword-only 两种：live 表示「这次入库
+      // 产出了向量」（离线哈希向量也算），并不代表配置了在线向量模型，不能标成「在线模型」。
+      const text = k === 'embedding_mode' ? (v === 'live' ? '已向量化' : '仅关键词') : v
       parts.push(`${map[k] ?? k}: ${text}`)
     }
   })

@@ -174,7 +174,7 @@ export default function AboutPage() {
 
   // 桌面版由主进程上报（含安装包版本）；浏览器开发模式没有 wrkDesktop，
   // 退回 package.json 的版本号——原来硬编码 '1.0.0'，与 package.json 的 1.0.12 不一致。
-  const appVersion = desktopInfo?.version || packageVersion || '—'
+  const appVersion = desktopInfo?.version || packageVersion
   const electronVersion = desktopInfo?.electronVersion || ''
   const installDir = desktopInfo?.installDirExe || desktopInfo?.installDir || ''
   // 后端进程号：新版主进程会带上；旧版从日志兜底，两个都没有才说「未上报」

@@ -43,6 +43,10 @@ def iso(value) -> str | None:
         return None
     if value.tzinfo is None:
         value = value.replace(tzinfo=dt.timezone.utc)
+    else:
+        # 契约是「UTC 且带 +00:00」：带其它偏移的输入先换算到 UTC，
+        # 否则同一个 API 会混出 +08:00 之类的字符串，前端与文档都会漂移。
+        value = value.astimezone(dt.timezone.utc)
     return value.isoformat()
 
 
