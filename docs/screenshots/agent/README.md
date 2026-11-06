@@ -1,6 +1,7 @@
 # 个人 Agent 视觉证据
 
 同一台机器、同一套演示数据（`backend/scripts/seed_demo.py`）、1440×900 浅色主题、Chrome 无头浏览器。
+基线为独立 `master` worktree 的 `0292a7b`，改动为分支功能提交 `7f4708c`。
 
 | 文件 | 版本 | 场景 |
 | --- | --- | --- |
