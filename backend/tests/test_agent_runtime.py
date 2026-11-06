@@ -215,13 +215,13 @@ def test_employee_cannot_use_agent(app_client, db_session):
     username = f"agentuser{uuid.uuid4().hex[:6]}"
     db_session.add(models.User(
         username=username, display_name="Agent 员工",
-        password_hash=security.hash_password("AgentTest#2026"),
+        password_hash=security.hash_password("AgentUser#2026"),
         role=models.Role.employee.value, status=models.UserStatus.active.value,
         must_change_password=False,
     ))
     db_session.commit()
     login = app_client.post("/api/auth/login", json={
-        "username": username, "password": "AgentTest#2026"})
+        "username": username, "password": "AgentUser#2026"})
     assert login.status_code == 200, login.text
     headers = {"Authorization": f"Bearer {login.json()['token']}"}
     assert app_client.get("/api/agent/cores", headers=headers).status_code == 403
