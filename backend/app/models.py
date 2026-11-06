@@ -393,6 +393,61 @@ class Message(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class AgentSession(Base):
+    """本地个人 Agent 的一次会话。
+
+    核心（core_id）是会话级字段而不是全局开关：同一个会话里可以把
+    「知识库助手」换成 Claude Code，下一条消息就用新核心执行。
+    所有内置/插件核心都是「每轮无状态」的（CLI 用回放历史、知识库核心
+    单轮检索），所以切换不需要迁移任何进程内状态。
+    """
+
+    __tablename__ = "agent_sessions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(255), default="新会话")
+    core_id: Mapped[str] = mapped_column(String(64), default="kb")
+    model_config_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    kb_ids: Mapped[str] = mapped_column(Text, default="[]")
+    # CLI 核心的工作目录。默认是数据目录下的 agent_workspace，管理员可改成
+    # 某个项目目录；核心能读写这里，不能越出这个目录去「顺手改点别的」。
+    workspace: Mapped[str] = mapped_column(String(512), default="")
+    # idle / running / error：只用于界面提示，真正的执行态在内存里。
+    status: Mapped[str] = mapped_column(String(16), default="idle")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    messages: Mapped[list["AgentMessage"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan")
+
+
+class AgentMessage(Base):
+    """Agent 会话里的一条消息；assistant 的 pending 行同时充当「运行记录」。
+
+    为什么把 run_id 复用成 assistant 消息 id：一次执行的结果最终只会落成一条
+    消息，再建一张 runs 表既多一次关联，又要在两处同步状态。前端轮询
+    `/agent/runs/{id}/events` 时，id 就是那条 pending 消息的 id。
+    """
+
+    __tablename__ = "agent_messages"
+    __table_args__ = (Index("ix_agent_msg_session", "session_id", "id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_sessions.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(16))                 # user | assistant | system
+    content: Mapped[str] = mapped_column(Text, default="")
+    core_id: Mapped[str] = mapped_column(String(64), default="")
+    model_label: Mapped[str] = mapped_column(String(200), default="")
+    evidence: Mapped[str] = mapped_column(Text, default="[]")
+    meta: Mapped[str] = mapped_column(Text, default="{}")
+    # pending=执行中；ok=完成；failed=失败；stopped=用户停止。
+    status: Mapped[str] = mapped_column(String(16), default="ok")
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
+
+    session: Mapped[AgentSession] = relationship(back_populates="messages")
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id: Mapped[int] = mapped_column(primary_key=True)

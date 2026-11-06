@@ -18,8 +18,11 @@ from .services import threadpool
 
 threadpool.install()
 
-from .routers import auth, chat, diagnostics, kbs, settings, setup, usage, wiki  # noqa: E402
+from .routers import (  # noqa: E402
+    agent as agent_router, auth, chat, diagnostics, kbs, settings, setup, usage, wiki,
+)
 from .services import warmup, watchdog, worker  # noqa: E402
+from .services.agent import runtime as agent_runtime  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -100,6 +103,10 @@ async def lifespan(app: FastAPI):
         recovered_answers = chat.recover_pending_messages()
         if recovered_answers:
             log.info("已把 %d 条未完成的回答标记为失败（上次退出时仍在生成）", recovered_answers)
+        # 个人 Agent 的 pending 消息同理：进程没了就不可能再跑完。
+        recovered_agent = agent_runtime.recover_pending()
+        if recovered_agent:
+            log.info("已把 %d 条未完成的 Agent 执行标记为失败", recovered_agent)
         # 先回收上次被强杀留下的「处理中」任务，再启动 worker：
         # 否则这些任务永远不会被领取，用户看到文档一直卡在「处理中」。
         recovered = worker.recover_interrupted()
@@ -133,6 +140,9 @@ app.include_router(wiki.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(usage.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
+# 个人 Agent（可更换核心）：v1 仅管理员可用，见 routers/agent.py 顶部说明。
+if config.AGENT_ENABLED:
+    app.include_router(agent_router.router, prefix="/api")
 # 诊断接口（admin）：卡住时用来取证，见 routers/diagnostics.py
 app.include_router(diagnostics.router, prefix="/api")
 
@@ -165,6 +175,7 @@ def meta():
             "llm_configured": bool(has_llm),
             "embedding_configured": bool(has_embed),
             "worker_enabled": config.WORKER_ENABLED,
+            "agent_enabled": config.AGENT_ENABLED,
         },
     }
 

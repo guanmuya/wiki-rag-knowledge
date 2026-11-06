@@ -1,5 +1,12 @@
 // 统一 HTTP 封装：注入 Bearer 令牌、401 清空登录态、403 中文 toast。
 import type {
+  AgentCore,
+  AgentCoreList,
+  AgentModelOption,
+  AgentRunSnapshot,
+  AgentSession,
+  AgentSessionDetail,
+  AgentSessionPayload,
   AskResponse,
   AuditEntry,
   ChatMessage,
@@ -690,6 +697,50 @@ export const settingsApi = {
 
   audit: (page = 1, pageSize = 20) =>
     request<Paged<AuditEntry>>(`/settings/audit${qs({ page, page_size: pageSize })}`),
+}
+
+/**
+ * 个人 Agent：核心、会话与执行事件。
+ * 执行是后台线程 + 轮询事件，所以发消息接口只负责建 run，不等模型跑完。
+ */
+export const agentApi = {
+  cores: () => request<AgentCoreList>('/agent/cores'),
+  models: (coreId?: string) =>
+    request<{ items: AgentModelOption[]; core_id: string | null }>(
+      `/agent/models${qs({ core_id: coreId })}`,
+    ),
+  rescan: () => request<AgentCoreList>('/agent/plugins/rescan', { method: 'POST' }),
+  togglePlugin: (id: string, enabled: boolean) =>
+    request<AgentCore>(`/agent/plugins/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: { enabled },
+    }),
+  sessions: () => request<Paged<AgentSession>>('/agent/sessions'),
+  createSession: (payload: AgentSessionPayload) =>
+    request<AgentSession>('/agent/sessions', { method: 'POST', body: payload }),
+  session: (id: number) => request<AgentSessionDetail>(`/agent/sessions/${id}`),
+  updateSession: (id: number, payload: AgentSessionPayload) =>
+    request<AgentSession>(`/agent/sessions/${id}`, { method: 'PATCH', body: payload }),
+  deleteSession: (id: number) =>
+    request<{ ok: boolean }>(`/agent/sessions/${id}`, { method: 'DELETE' }),
+  send: (id: number, content: string) =>
+    request<{
+      run_id: number
+      user_message: import('./types').AgentMessage
+      assistant_message: import('./types').AgentMessage
+      session: AgentSession
+    }>(`/agent/sessions/${id}/messages`, {
+      method: 'POST',
+      body: { content },
+      // 只等到 run 建好；真正的执行在后台线程里。
+      timeoutMs: 30_000,
+    }),
+  events: (runId: number, after = 0) =>
+    request<AgentRunSnapshot>(`/agent/runs/${runId}/events${qs({ after })}`),
+  stop: (runId: number) =>
+    request<{ ok: boolean; run_id: number }>(`/agent/runs/${runId}/stop`, {
+      method: 'POST',
+    }),
 }
 
 /**

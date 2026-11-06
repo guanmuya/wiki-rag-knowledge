@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -298,4 +299,53 @@ def conversation_out(c: models.Conversation, *, message_count: int = 0) -> dict:
         "id": c.id, "title": c.title, "kb_ids": kb_ids,
         "message_count": message_count,
         "created_at": iso(c.created_at), "updated_at": iso(c.updated_at),
+    }
+
+
+# ------------------------------------------------------------------ 个人 Agent
+def _json_value(raw, default):
+    try:
+        value = json.loads(raw or "")
+    except (ValueError, TypeError):
+        return default
+    return value if isinstance(value, type(default)) else default
+
+
+def agent_message_out(m: models.AgentMessage, *, core_name: str = "") -> dict:
+    return {
+        "id": m.id,
+        "session_id": m.session_id,
+        "role": m.role,
+        "content": m.content,
+        "core_id": m.core_id,
+        "core_name": core_name,
+        "model_label": m.model_label,
+        "evidence": _json_value(m.evidence, []),
+        "meta": _json_value(m.meta, {}),
+        "status": m.status or "ok",
+        "latency_ms": m.latency_ms,
+        "created_at": iso(m.created_at),
+    }
+
+
+def agent_session_out(
+    s: models.AgentSession,
+    *,
+    message_count: int = 0,
+    core_name: str = "",
+    model_label: str = "",
+) -> dict:
+    return {
+        "id": s.id,
+        "title": s.title,
+        "core_id": s.core_id,
+        "core_name": core_name,
+        "model_config_id": s.model_config_id,
+        "model_label": model_label,
+        "kb_ids": _json_value(s.kb_ids, []),
+        "workspace": s.workspace,
+        "status": s.status or "idle",
+        "message_count": message_count,
+        "created_at": iso(s.created_at),
+        "updated_at": iso(s.updated_at),
     }

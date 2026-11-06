@@ -98,6 +98,7 @@ export interface MetaCapabilities {
   llm_configured: boolean
   embedding_configured: boolean
   worker_enabled: boolean
+  agent_enabled?: boolean
 }
 
 export interface MetaInfo {
@@ -692,4 +693,123 @@ export interface UpdateState {
   message?: string
   feed?: string
   checkedAt?: number
+}
+
+// ---------------------------------------------------------------- 个人 Agent
+export type AgentCoreKind = 'kb' | 'cli'
+export type AgentCoreSource = 'builtin' | 'plugin'
+
+export interface AgentCore {
+  id: string
+  name: string
+  description: string
+  kind: AgentCoreKind
+  source: AgentCoreSource
+  homepage: string
+  protocols: ProviderProtocol[]
+  protocol_labels: string[]
+  bins: string[]
+  installed: boolean
+  path: string
+  version: string
+  enabled: boolean
+  available: boolean
+  unavailable_reason: string
+  builtin: boolean
+  requires_workspace: boolean
+  timeout_seconds: number
+  output: string
+  manifest_path: string
+  compatible_model_count?: number
+  default_model_id?: number | null
+  model_ready?: boolean
+}
+
+export interface AgentPluginError {
+  file: string
+  error: string
+}
+
+export interface AgentCoreList {
+  items: AgentCore[]
+  errors: AgentPluginError[]
+  plugin_dir: string
+  schema: number
+  supported_protocols: Array<{ value: ProviderProtocol; label: string }>
+}
+
+export interface AgentModelOption {
+  id: number
+  model: string
+  label: string
+  provider_id: number
+  provider: string
+  protocol: ProviderProtocol
+  protocol_label: string
+  is_default: boolean
+  compatible: boolean
+  display: string
+}
+
+export interface AgentSession {
+  id: number
+  title: string
+  core_id: string
+  core_name: string
+  model_config_id: number | null
+  model_label: string
+  kb_ids: number[]
+  workspace: string
+  status: 'idle' | 'running' | 'error'
+  message_count: number
+  created_at: string | null
+  updated_at: string | null
+}
+
+export type AgentMessageRole = 'user' | 'assistant' | 'system'
+export type AgentMessageStatus = 'pending' | 'ok' | 'failed' | 'stopped'
+
+export interface AgentMessage {
+  id: number
+  session_id: number
+  role: AgentMessageRole
+  content: string
+  core_id: string
+  core_name: string
+  model_label: string
+  evidence: EvidenceItem[]
+  meta: Record<string, unknown>
+  status: AgentMessageStatus
+  latency_ms: number
+  created_at: string | null
+}
+
+export interface AgentSessionDetail extends AgentSession {
+  messages: AgentMessage[]
+  core: AgentCore | null
+  running: boolean
+}
+
+export interface AgentRunEvent {
+  seq: number
+  type: 'status' | 'text' | 'log' | 'evidence' | 'done' | 'error' | 'stopped'
+  data: Record<string, unknown>
+}
+
+export interface AgentRunSnapshot {
+  events: AgentRunEvent[]
+  next: number
+  status: 'running' | 'ok' | 'failed' | 'stopped'
+  error: string
+  message?: AgentMessage
+  run_id: number
+  session_id: number
+}
+
+export interface AgentSessionPayload {
+  title?: string
+  core_id?: string
+  model_config_id?: number | null
+  kb_ids?: number[]
+  workspace?: string
 }

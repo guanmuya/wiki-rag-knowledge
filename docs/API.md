@@ -292,6 +292,27 @@
 | GET | `/api/settings/embedding/status` | 当前 Embedding、各库签名是否一致、是否有重建进行中 |
 | GET | `/api/settings/audit?page=` | 审计日志 |
 
+## 8.1 个人 Agent（admin）
+
+v1 全部要求管理员令牌；CLI 核心以应用进程身份执行本机命令。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/agent/cores` | `{items, errors, plugin_dir, schema, supported_protocols}`；每项含 `installed/version/enabled/available/unavailable_reason/protocols/compatible_model_count` |
+| GET | `/api/agent/models?core_id=` | `{items, core_id}`；每项含 `protocol/compatible/display`，`compatible=false` 表示协议不匹配 |
+| POST | `/api/agent/plugins/rescan` | 清探测缓存并重新扫描插件目录，返回同 cores |
+| PATCH | `/api/agent/plugins/{id}` | `{enabled}`，返回单个核心 |
+| GET | `/api/agent/sessions` | 当前管理员的会话列表 |
+| POST | `/api/agent/sessions` | `{title,core_id,model_config_id,kb_ids,workspace}`；`core_id` 省略时优先内置知识库核心 |
+| GET | `/api/agent/sessions/{id}` | 会话 + `messages[]` + `core` + `running` |
+| PATCH | `/api/agent/sessions/{id}` | `{title,core_id,model_config_id,kb_ids,workspace}`；执行中 409；换核心会追加一条 `role=system` 消息 |
+| DELETE | `/api/agent/sessions/{id}` | 执行中 409 |
+| POST | `/api/agent/sessions/{id}/messages` | `{content}` → `{run_id, user_message, assistant_message, session}`；只建 run，不等执行结束 |
+| GET | `/api/agent/runs/{id}/events?after=` | `{events,next,status,error,message?,run_id,session_id}`；`status` 为 `running/ok/failed/stopped`；`run_id` 就是 pending assistant 消息 id |
+| POST | `/api/agent/runs/{id}/stop` | 终止子进程树；已结束 409 |
+
+事件 `type`：`status`（阶段文案）、`text`（正文增量）、`log`（CLI stderr/命令摘要）、`evidence`（知识库证据）、`done`、`error`、`stopped`。
+
 ## 9. 前端约定
 
 - 令牌存 `localStorage.wrk_token`；401 时清空并跳登录页。

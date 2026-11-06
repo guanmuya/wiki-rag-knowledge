@@ -138,3 +138,29 @@ class WikiPageUpdateIn(BaseModel):
 
 class RebuildIn(BaseModel):
     kind: Literal["chunk", "wiki"] = "chunk"
+
+
+# ---------------------------------------------------------------- 个人 Agent
+class AgentSessionIn(BaseModel):
+    title: str = "新会话"
+    core_id: str | None = None
+    model_config_id: int | None = None
+    kb_ids: list[int] = []
+    # 不传就用数据目录下的 agent_workspace；传了必须是已存在的目录。
+    workspace: str | None = None
+
+
+class AgentSessionUpdateIn(BaseModel):
+    title: str | None = None
+    core_id: str | None = None
+    model_config_id: int | None = None
+    kb_ids: list[int] | None = None
+    workspace: str | None = None
+
+
+class AgentMessageIn(BaseModel):
+    content: str = Field(min_length=1, max_length=8000)
+
+
+class AgentPluginToggleIn(BaseModel):
+    enabled: bool

@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { useAuth } from '../auth'
-import { isDesktop, setupApi } from '../api'
+import { isDesktop, metaApi, setupApi } from '../api'
 import OfflineBanner from './OfflineBanner'
 import LockBanner from './LockBanner'
 import { IconClose, IconMenu } from './icons'
@@ -14,7 +14,7 @@ interface NavItem {
   match?: (path: string) => boolean
 }
 
-type NavIconName = 'book' | 'chat' | 'search' | 'clock' | 'users' | 'settings' | 'info' | 'usage'
+type NavIconName = 'book' | 'chat' | 'agent' | 'search' | 'clock' | 'users' | 'settings' | 'info' | 'usage'
 
 /**
  * 导航图标用内联 SVG，而不是 ▤ ✦ ⌕ 这类字符。
@@ -26,6 +26,12 @@ const NAV_ICONS: Record<NavIconName, ReactElement> = {
   ),
   chat: (
     <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7a2.5 2.5 0 0 1-2.5 2.5H9l-4.2 3.2A.7.7 0 0 1 3.7 17V5.5Z" />
+  ),
+  agent: (
+    <>
+      <rect x="4" y="6" width="12" height="9" rx="2.5" />
+      <path d="M10 3v3M7.2 10v1.2M12.8 10v1.2M7.5 15v2M12.5 15v2" />
+    </>
   ),
   search: (
     <>
@@ -95,6 +101,7 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
     items: [
       { to: '/kbs', label: '知识库', icon: 'book', match: (p) => p.startsWith('/kbs') },
       { to: '/chat', label: '智能问答', icon: 'chat', match: (p) => p.startsWith('/chat') },
+      { to: '/agent', label: '个人 Agent', icon: 'agent', adminOnly: true, match: (p) => p.startsWith('/agent') },
       { to: '/search', label: '检索调试', icon: 'search', match: (p) => p.startsWith('/search') },
       { to: '/tasks', label: '任务中心', icon: 'clock', match: (p) => p.startsWith('/tasks') },
     ],
@@ -125,6 +132,9 @@ export default function Layout() {
   // 企业名在首次初始化时写入 app_settings，作为侧边栏标题展示；
   // 没设置就退回产品名，不让标题空着。
   const [orgName, setOrgName] = useState('')
+  // 个人 Agent 可以被 WRK_AGENT_ENABLED=0 整体关掉；关掉时连导航一起隐藏，
+  // 避免点进去只看到 404。
+  const [agentEnabled, setAgentEnabled] = useState(true)
 
   const closeMobileMenu = useCallback(() => {
     setMobileOpen(false)
@@ -194,11 +204,28 @@ export default function Layout() {
     }
   }, [])
 
+  useEffect(() => {
+    let alive = true
+    void metaApi
+      .get()
+      .then((meta) => {
+        if (alive && meta.capabilities?.agent_enabled === false) setAgentEnabled(false)
+      })
+      .catch(() => {
+        /* 读不到 meta 就按默认开启处理，不挡导航 */
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
   const groups = NAV_GROUPS.map((g) => ({
     label: g.label,
-    items: g.items.filter((it) => !it.adminOnly || isAdmin),
+    items: g.items.filter(
+      (it) => (!it.adminOnly || isAdmin) && (it.to !== '/agent' || agentEnabled),
+    ),
   })).filter((g) => g.items.length > 0)
-  const isFlush = location.pathname.startsWith('/chat')
+  const isFlush = location.pathname.startsWith('/chat') || location.pathname.startsWith('/agent')
 
   const handleLogout = async () => {
     await logout()
@@ -328,6 +355,7 @@ function currentTitle(path: string): string {
   if (path.startsWith('/kbs/')) return '知识库详情'
   if (path.startsWith('/kbs')) return '知识库'
   if (path.startsWith('/chat')) return '智能问答'
+  if (path.startsWith('/agent')) return '个人 Agent'
   if (path.startsWith('/search')) return '检索调试'
   if (path.startsWith('/tasks')) return '任务中心'
   if (path.startsWith('/about')) return '关于'
