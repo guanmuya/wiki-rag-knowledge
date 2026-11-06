@@ -165,3 +165,48 @@ export function IconLock(props: IconProps) {
     </Svg>
   )
 }
+
+export function IconAgent(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="4" y="6" width="12" height="9" rx="2.5" />
+      <path d="M10 3v3M7.2 10v1.2M12.8 10v1.2M7.5 15v2M12.5 15v2" />
+    </Svg>
+  )
+}
+
+export function IconPlug(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M7 3v4M13 3v4" />
+      <path d="M5 7h10v2.5A5 5 0 0 1 10 14.5 5 5 0 0 1 5 9.5V7Z" />
+      <path d="M10 14.5V17" />
+    </Svg>
+  )
+}
+
+export function IconStop(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="5.5" y="5.5" width="9" height="9" rx="1.5" />
+    </Svg>
+  )
+}
+
+export function IconRefresh(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M16.2 8.4A6.4 6.4 0 1 0 16 12" />
+      <path d="M16.4 4.4v4h-4" />
+    </Svg>
+  )
+}
+
+export function IconTerminal(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="2.8" y="4" width="14.4" height="12" rx="2" />
+      <path d="m6 8 2.4 2L6 12M10.4 12h3.6" />
+    </Svg>
+  )
+}

@@ -424,8 +424,12 @@ def _citation_check(answer: str, evidence: list[retrieval.Evidence]) -> dict:
 
 # ------------------------------------------------------------------ 主流程
 def answer(db: Session, question: str, kbs: list[models.KnowledgeBase], *,
-           top_k: int | None = None) -> dict:
+           top_k: int | None = None,
+           cfg_override: models.ModelConfig | None = None) -> dict:
     """生成回答并返回完整成本快照。
+
+    `cfg_override` 只给「个人 Agent」用：用户在 Agent 会话里选了一条模型，
+    这一轮回答就用它，而不是全局默认模型。检索与证据链不变。
 
     成本口径（修复后）：一次问答的成本 = 查询向量化 + 回答生成，两者累加到同一个
     CallStats 上。修复前查询向量化没有传 stats，导致「问答成本」少算一次 embed 调用，
@@ -462,7 +466,8 @@ def answer(db: Session, question: str, kbs: list[models.KnowledgeBase], *,
         text = llm.chat(db, [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
-        ], temperature=0.2, max_tokens=1500, stats=call_stats)
+        ], temperature=0.2, max_tokens=1500, stats=call_stats,
+            cfg_override=cfg_override)
     except llm.ModelUnavailable as exc:
         call_stats.mode = "offline"
         call_stats.add_note(f"生成模型不可用：{exc}")

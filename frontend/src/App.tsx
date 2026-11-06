@@ -9,6 +9,7 @@ import SetupPage from './pages/SetupPage'
 import KbListPage from './pages/KbListPage'
 import KbDetailPage from './pages/KbDetailPage'
 import ChatPage from './pages/ChatPage'
+import AgentPage from './pages/AgentPage'
 import UsersPage from './pages/UsersPage'
 import ModelsPage from './pages/ModelsPage'
 import UsagePage from './pages/UsagePage'
@@ -67,6 +68,14 @@ export default function App() {
           <Route path="/kbs/:id" element={<KbDetailPage />} />
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/chat/:conversationId" element={<ChatPage />} />
+          <Route
+            path="/agent"
+            element={
+              <RequireAdmin>
+                <AgentPage />
+              </RequireAdmin>
+            }
+          />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/tasks" element={<TasksPage />} />
           <Route path="/about" element={<AboutPage />} />

@@ -6,7 +6,7 @@
 
 - 应用名 `企业知识库文档整理与问答系统`，版本 `1.0.13`（`backend/app/main.py:31`；`frontend/package.json` 的 `version` 同为 `1.0.13`）
 - 安装包产品名 `企业知识库`，appId `com.wikiraq.knowledge`（`frontend/electron-builder.yml`）
-- 后端测试基线 **266 passed, 1 skipped**（`backend/tests/`，26 个文件；v1.0.13 全量回归）
+- 后端测试基线 **300 passed, 1 skipped**（`backend/tests/`，28 个文件；含个人 Agent 核心/插件回归）
 
 ---
 
@@ -26,6 +26,7 @@
 | 成本核算 | `CallStats` 分 chat/embed/vision 三通道，流水落 `cost_records` | `backend/app/services/llm.py:59`、`backend/app/services/cost.py` |
 | 三协议模型适配 | `openai` / `openai-responses` / `anthropic` | `backend/app/services/llm.py:4-6`、`backend/app/models.py:321` |
 | 首次启动引导 | 无管理员时前端走 `/setup` 建号，不再随机生成密码 | `backend/app/routers/setup.py`、`backend/app/main.py:27` |
+| 个人 Agent | 核心插件注册表（知识库 / 本机 CLI），会话内可换核心、复用已配置模型 | `backend/app/services/agent/`、`frontend/src/pages/AgentPage.tsx` |
 | 离线可跑 | 无模型时 LLM 抽取式、Embedding 256 维哈希向量 | `backend/app/services/llm.py:38-39`、`backend/app/services/llm.py:290` |
 
 ---
@@ -48,9 +49,9 @@
                 │ HTTP  /api/*（Bearer JWT）
 ┌───────────────▼──────────────────────────────────────────────┐
 │ Python 3.13 sidecar  FastAPI + Uvicorn                        │
-│  routers: auth setup kbs wiki chat settings                   │
+│  routers: auth setup kbs wiki chat settings agent              │
 │  services: parser chunking llm retrieval answering wiki cost   │
-│            ingest worker                                       │
+│            ingest worker agent（核心注册表 + 运行器）          │
 │  进程内 Worker 线程 ×2（WORKER_CONCURRENCY=2）轮询 tasks 表     │
 └───────────────┬──────────────────────────────────────────────┘
                 │
@@ -157,10 +158,10 @@ Wiki-Rag-Knowledge/
 │   │   ├── config.py             # 全部可调参数（环境变量覆盖）
 │   │   ├── main.py               # FastAPI 入口、引导管理员、/api/meta
 │   │   ├── desktop_entry.py      # sidecar 入口：动态端口 + WRK_READY
-│   │   ├── models.py             # 19 张表
+│   │   ├── models.py             # 21 张表
 │   │   ├── db.py                 # 引擎、WAL、老库补列自愈
 │   │   ├── deps.py               # 鉴权、库级授权、审计
-│   │   ├── routers/              # auth setup kbs wiki chat settings
+│   │   ├── routers/              # auth setup kbs wiki chat settings agent
 │   │   ├── services/
 │   │   │   ├── parser.py         # 六类格式 → ParsedBlock/TableData
 │   │   │   ├── chunking.py       # 文本块 / 表格行组 / 关键词抽取
@@ -170,10 +171,11 @@ Wiki-Rag-Knowledge/
 │   │   │   ├── answering.py      # 提示词、引用校验、拒答、建议
 │   │   │   ├── wiki.py           # Map-Reduce 主题归纳与页面生成
 │   │   │   ├── llm.py            # 三协议适配 + CallStats
+│   │   │   ├── agent/            # 个人 Agent：核心插件注册表 + 运行器
 │   │   │   └── cost.py           # 成本流水与聚合
 │   │   └── ...
 │   ├── scripts/                  # seed_demo seed_expanded inspect_chunks collect_metrics
-│   ├── tests/                    # 17 个文件，166 项
+│   ├── tests/                    # 28 个文件，300 项
 │   └── requirements.txt
 ├── frontend/
 │   ├── electron/main.cjs         # sidecar 生命周期、失败原因翻译、日志
@@ -292,7 +294,20 @@ Wiki-Rag-Knowledge/
 
 ---
 
-## 7. 接口速览
+## 7. 个人 Agent（可更换核心）
+
+管理员侧边栏的「个人 Agent」是一个本地 Agent 工作台：会话顶部随时换核心，每个核心都能复用「模型设置」里已配置的模型。
+
+- **知识库助手**（内置）：走现有 RAG 链路，检索知识库、带引用回答；没有模型时仍可抽取式回答。
+- **本机 CLI 核心**：内置 Claude Code、Codex CLI、Qwen Code、Aider、Goose 的适配器；本机装了对应命令就会显示为可用。应用按供应商协议把 `base_url` / `api_key` / `model` 注入子进程环境变量，**不改写这些 CLI 的配置文件**。
+- **插件核心**：把 JSON 清单放进数据目录的 `agent_plugins/`，点「重新扫描」即可接入任意 CLI Agent；应用不加载第三方代码。
+- **随时换核心**：会话按轮无状态，切核心后下一轮由新核心执行，历史保留并留一条切换提示。
+
+入口只对管理员开放（CLI 以应用进程身份执行本机命令）。完整的清单字段、占位符、协议与模型注入规则、安全边界见 **[docs/AGENT_PLUGINS.md](docs/AGENT_PLUGINS.md)**，可直接运行的示例见 [docs/examples/agent-plugin-echo.json](docs/examples/agent-plugin-echo.json)。
+
+---
+
+## 8. 接口速览
 
 完整契约见 [docs/API.md](docs/API.md)。前缀 `/api`，除登录与少量初始化接口外都要 `Authorization: Bearer <token>`。
 
@@ -305,12 +320,13 @@ Wiki-Rag-Knowledge/
 | Wiki | `GET /kbs/{id}/wiki/tree`、`PUT /kbs/{id}/wiki/pages/{slug}`（人工校对）、`POST .../unlock` |
 | 问答 | `POST /conversations/{id}/ask`、`POST /search/preview`（只检索不生成，实验用） |
 | 模型设置 | `GET/POST /settings/providers`、`POST /settings/providers/{id}/discover`、`POST /settings/embedding/switch` |
+| 个人 Agent（admin） | `GET /agent/cores`、`POST /agent/sessions`、`POST /agent/sessions/{id}/messages`、`GET /agent/runs/{id}/events`、`POST /agent/plugins/rescan` |
 
 `/api/meta` 与 `/api/health` 无需登录，分别用于前端判断 `needs_setup` / `offline_models` 与存活探测。
 
 ---
 
-## 8. 测试与验收
+## 9. 测试与验收
 
 ```bash
 # 全量后端测试（自带临时数据目录，不污染 data/）
@@ -320,7 +336,7 @@ Wiki-Rag-Knowledge/
 .venv/Scripts/python.exe -m pytest backend/tests/test_wiki_scale.py -q
 ```
 
-测试覆盖：入库流水线、表格分块、检索质量、权限、拒答判定、成本口径、模型协议、首次引导、失败语义、老库补列、Wiki 规模、**写锁韧性（`test_lock_resilience.py` / `test_responsive_during_embed.py`）**、**进程守护（`test_procguard.py`）**、**中断恢复与重试语义（`test_resume_and_locks.py` / `test_retry_semantics.py`）**。表格测试需要 `demo_data/fixtures/` 的样本，缺失时会 `pytest.skip` 并提示先跑 `python scripts/make_fixtures.py`。
+测试覆盖：入库流水线、表格分块、检索质量、权限、拒答判定、成本口径、模型协议、首次引导、失败语义、老库补列、Wiki 规模、**写锁韧性（`test_lock_resilience.py` / `test_responsive_during_embed.py`）**、**进程守护（`test_procguard.py`）**、**中断恢复与重试语义（`test_resume_and_locks.py` / `test_retry_semantics.py`）**、**Agent 插件与核心切换（`test_agent_plugins.py` / `test_agent_runtime.py`）**。表格测试需要 `demo_data/fixtures/` 的样本，缺失时会 `pytest.skip` 并提示先跑 `python scripts/make_fixtures.py`。
 
 前端类型检查与构建：
 
@@ -338,7 +354,7 @@ PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe backend/scripts/collect_metrics.
 
 ---
 
-## 9. 常见问题
+## 10. 常见问题
 
 **Q：`ELECTRON_RUN_AS_NODE` 导致窗口起不来 / `ipcMain` 是 undefined。**
 本机若全局设了该变量，Electron 会退化成纯 Node，`ipcMain.handle` 直接报错。`frontend/scripts/dev.mjs` 与 `frontend/scripts/build.mjs` 都会在 spawn 前删掉它；手工启动时要 `env -u ELECTRON_RUN_AS_NODE node_modules/.bin/electron .`。
@@ -366,12 +382,13 @@ git 里是删除状态。
 
 ---
 
-## 10. 文档索引
+## 11. 文档索引
 
 | 文件 | 内容 |
 | --- | --- |
 | [docs/DESIGN.md](docs/DESIGN.md) | 系统设计说明：分层、数据模型、分块、检索融合、证据链、权限、一致性 |
 | [docs/API.md](docs/API.md) | 接口契约 v1（请求/响应字段、`usage` 口径、成本聚合结构） |
 | [docs/EXPERIMENT.md](docs/EXPERIMENT.md) | 实验方案：数据集、四个对照实验、指标定义、公平性陷阱 |
+| [docs/AGENT_PLUGINS.md](docs/AGENT_PLUGINS.md) | 个人 Agent 核心、CLI 适配与插件清单规范 |
 | [docs/THESIS.md](docs/THESIS.md) | 论文可复用章节素材：设计、关键实现、实验方法、创新点与局限 |
 | [docs/HANDOFF.md](docs/HANDOFF.md) | 交接说明 |

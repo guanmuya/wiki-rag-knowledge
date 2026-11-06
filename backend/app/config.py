@@ -91,6 +91,24 @@ CORS_ORIGINS = [o for o in os.getenv(
     "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173",
 ).split(",") if o]
 
+# ---- 本地个人 Agent（可更换核心）
+# 插件目录：管理员把第三方 CLI Agent 的 JSON 清单放在这里，保存后即可在
+# 「个人 Agent → 核心管理」里看到。内置核心（知识库助手、Claude Code 等）
+# 写在代码里，不依赖这个目录。
+AGENT_ENABLED = os.getenv("WRK_AGENT_ENABLED", "1") == "1"
+AGENT_PLUGIN_DIR = Path(os.getenv("WRK_AGENT_PLUGIN_DIR", DATA_DIR / "agent_plugins"))
+# CLI 核心的默认工作目录。Agent 能读写这里的文件，所以不要指到仓库根目录。
+AGENT_WORKSPACE_DIR = Path(os.getenv("WRK_AGENT_WORKSPACE", DATA_DIR / "agent_workspace"))
+# 单轮 Agent 执行的硬超时。CLI 卡住时到点终止，避免线程永远挂着。
+AGENT_RUN_TIMEOUT_SECONDS = int(os.getenv("WRK_AGENT_RUN_TIMEOUT", "900"))
+# 一轮里最多回放多少条历史消息给 CLI 核心（知识库核心不用历史）。
+AGENT_HISTORY_MESSAGES = int(os.getenv("WRK_AGENT_HISTORY_MESSAGES", "12"))
+# 回放时单条消息的最大字符数，避免命令行长度超限。
+AGENT_HISTORY_CHARS = int(os.getenv("WRK_AGENT_HISTORY_CHARS", "1200"))
+
+for _d in (AGENT_PLUGIN_DIR, AGENT_WORKSPACE_DIR):
+    _d.mkdir(parents=True, exist_ok=True)
+
 # 调用供应商接口时是否继承系统代理环境变量。
 # 默认关闭：企业内网部署不应把 API Key 意外送进系统代理，也避免畸形 NO_PROXY 干扰。
 HTTP_TRUST_ENV = os.getenv("WRK_HTTP_TRUST_ENV", "0") == "1"

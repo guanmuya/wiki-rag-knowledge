@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "id": "echo-agent",
+  "name": "Echo Agent（示例）",
+  "description": "验证插件发现、环境变量注入与输出流：只回显提示词和模型，不调用模型。",
+  "kind": "cli",
+  "protocols": ["openai"],
+  "bins": ["python"],
+  "version_args": ["--version"],
+  "run_args": [
+    "-c",
+    "import os,sys; print('echo:', (sys.argv[1] if len(sys.argv)>1 else '')[-120:]); print('model:', os.environ.get('OPENAI_MODEL',''))",
+    "{prompt}"
+  ],
+  "env": {
+    "OPENAI_BASE_URL": "{base_url}",
+    "OPENAI_API_KEY": "{api_key}",
+    "OPENAI_MODEL": "{model}"
+  },
+  "output": "text",
+  "timeout_seconds": 60
+}
