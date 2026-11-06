@@ -8,6 +8,7 @@ import type {
   AgentSessionDetail,
   AgentSessionPayload,
   AskResponse,
+  AskStreamEvent,
   AuditEntry,
   ChatMessage,
   Conversation,
@@ -610,6 +611,113 @@ export const chatApi = {
       // 生成回答要等模型，本地 Ollama 可能很慢；给 180s，超时也要有明确报错
       timeoutMs: 180_000,
     }),
+  /**
+   * 流式问答：POST + fetch 读 SSE。EventSource 不能带 Authorization 头，
+   * 也不能发 POST body，所以这里手写 ReadableStream 解析。
+   * `onEvent` 会依次收到 step / answer / answer_replace 事件；返回最终结果。
+   */
+  askStream: async (
+    id: number,
+    question: string,
+    kb_ids: number[] | undefined,
+    onEvent: (event: AskStreamEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<AskResponse> => {
+    if (baseReady) await baseReady
+    const headers: Record<string, string> = {
+      Accept: 'text/event-stream',
+      'Content-Type': 'application/json',
+    }
+    const token = getToken()
+    if (token) headers.Authorization = `Bearer ${token}`
+
+    let res: Response
+    try {
+      res = await fetch(apiUrl(`/conversations/${id}/ask/stream`), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ question, kb_ids }),
+        signal,
+      })
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') throw err
+      throw new ApiError(0, BACKEND_OFFLINE_MESSAGE, 'offline')
+    }
+
+    if (res.status === 401) {
+      const detail = await parseError(res)
+      setToken(null)
+      onUnauthorized()
+      throw new ApiError(401, detail)
+    }
+    if (res.status === 403) {
+      const detail = await parseError(res)
+      onForbidden(detail || '没有操作权限')
+      throw new ApiError(403, detail)
+    }
+    if (!res.ok) {
+      const detail = await parseError(res)
+      throw new ApiError(res.status, detail,
+        looksLikeLockError(res.status, detail) ? 'busy' : 'http')
+    }
+    if (!res.body) {
+      throw new ApiError(0, '当前浏览器不支持流式读取，请升级浏览器后重试。', 'http')
+    }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let final: AskResponse | null = null
+
+    const consume = (block: string) => {
+      const data = block
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trimStart())
+        .join('\n')
+      if (!data) return
+      let event: AskStreamEvent
+      try {
+        event = JSON.parse(data) as AskStreamEvent
+      } catch {
+        return
+      }
+      if (event.type === 'done') {
+        final = event
+        onEvent(event)
+        return
+      }
+      if (event.type === 'error') {
+        throw new ApiError(500, event.message || '这次回答没有生成完成，可以重新提问。')
+      }
+      onEvent(event)
+    }
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+        let boundary = buffer.indexOf('\n\n')
+        while (boundary >= 0) {
+          const block = buffer.slice(0, boundary)
+          buffer = buffer.slice(boundary + 2)
+          consume(block)
+          boundary = buffer.indexOf('\n\n')
+        }
+      }
+      buffer += decoder.decode()
+      if (buffer.trim()) consume(buffer)
+    } catch (err) {
+      await reader.cancel().catch(() => {})
+      throw err
+    }
+
+    if (!final) {
+      throw new ApiError(0, '回答流意外结束，请重试。', 'offline')
+    }
+    return final
+  },
   preview: async (kb_ids: number[], query: string): Promise<SearchPreviewResponse> => {
     const raw = await request<SearchPreviewRaw>('/search/preview', {
       method: 'POST',

@@ -29,7 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import config, models
-from . import llm, retrieval
+from . import retrieval
 
 log = logging.getLogger("wrk.answer")
 
@@ -426,83 +426,24 @@ def _citation_check(answer: str, evidence: list[retrieval.Evidence]) -> dict:
 def answer(db: Session, question: str, kbs: list[models.KnowledgeBase], *,
            top_k: int | None = None,
            cfg_override: models.ModelConfig | None = None) -> dict:
-    """生成回答并返回完整成本快照。
+    """生成回答并返回完整成本快照（非流式入口）。
+
+    实际执行的是 `qa_pipeline.iter_run()` 的完整检索链路：意图分析 → 查询路由
+    → 多查询检索 → 覆盖度评估 → 缺失查询重写（最多 2 次）→ 回答生成。这里
+    消费掉链路事件，只返回最终结果，保持旧接口形状不变，Agent 运行器与既有
+    调用方不需要改动。
 
     `cfg_override` 只给「个人 Agent」用：用户在 Agent 会话里选了一条模型，
     这一轮回答就用它，而不是全局默认模型。检索与证据链不变。
 
-    成本口径（修复后）：一次问答的成本 = 查询向量化 + 回答生成，两者累加到同一个
-    CallStats 上。修复前查询向量化没有传 stats，导致「问答成本」少算一次 embed 调用，
-    模型调用量被系统性低估；论文要对比整理代价，这个数字必须是全的。
-
-    返回的 usage 里 chat_calls / embed_calls 分列，方便区分「生成花了多少」
-    和「检索花了多少」，而不是只看到一个笼统的 calls。
+    成本口径：一次问答的成本 = 分析节点 + 查询向量化 + 回答生成，全部累加到
+    同一个 CallStats 上；返回的 usage 里 chat_calls / embed_calls 分列。
 
     拒答时额外返回（只加字段不删）：
       suggestions     [{kb_name, kind, title, question?}]，语义见 SuggestionBlock；
       refusal_reason  判定为拒答的可读原因，便于排查「为什么这次判成证据不足」。
     """
-    call_stats = llm.CallStats()
-    evidence, routes, stats = retrieval.retrieve(db, kbs, question, top_k=top_k,
-                                                 stats=call_stats)
+    from . import qa_pipeline
 
-    # 无证据路径与模型拒答路径共用同一套文案结构，用户看到的东西保持一致。
-    if not evidence:
-        block = _suggestion_block(db, kbs, [], routes,
-                                  detail="\n".join(_route_notes(routes)),
-                                  question=question)
-        return {
-            "content": block.text, "evidence": [], "route": {
-                "kb_routes": [r.to_dict() for r in routes], "stats": stats},
-            "usage": call_stats.as_dict(), "insufficient": True,
-            "citations": {"cited": [], "invalid": [], "citation_ok": True},
-            "suggestions": block.items,
-            "refusal_reason": "检索没有命中任何证据",
-        }
-
-    context = retrieval.build_context(evidence)
-    prompt = f"资料：\n{context}\n\n问题：{question}\n\n请依据资料回答，并在结论后用 [编号] 标注依据。"
-    try:
-        text = llm.chat(db, [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ], temperature=0.2, max_tokens=1500, stats=call_stats,
-            cfg_override=cfg_override)
-    except llm.ModelUnavailable as exc:
-        call_stats.mode = "offline"
-        call_stats.add_note(f"生成模型不可用：{exc}")
-        text = _extractive_answer(question, evidence)
-
-    text = (text or "").strip()
-    if not text:
-        text = _extractive_answer(question, evidence)
-        call_stats.mode = "offline"
-        call_stats.add_note("生成结果为空，已回退抽取式回答")
-
-    citations = _citation_check(text, evidence)
-    refusal_reason = _refusal_verdict(text, citations)
-    insufficient = bool(refusal_reason)
-    suggestions: list[dict] = []
-
-    if insufficient:
-        # 模型自己说的「缺什么」保留下来（去掉重复的前置句），再拼统一结构的建议区块。
-        detail_parts = [_strip_refusal_lead(text)]
-        notes = _route_notes(routes)
-        if notes:
-            detail_parts.append("\n".join(notes))
-        block = _suggestion_block(db, kbs, evidence, routes,
-                                  detail="\n\n".join(p for p in detail_parts if p),
-                                  question=question)
-        text = block.text
-        suggestions = block.items
-
-    return {
-        "content": text,
-        "evidence": [ev.to_dict() for ev in evidence],
-        "route": {"kb_routes": [r.to_dict() for r in routes], "stats": stats},
-        "usage": call_stats.as_dict(),
-        "insufficient": insufficient,
-        "citations": citations,
-        "suggestions": suggestions,
-        "refusal_reason": refusal_reason,
-    }
+    return qa_pipeline.run(db, question, kbs, top_k=top_k,
+                           cfg_override=cfg_override)

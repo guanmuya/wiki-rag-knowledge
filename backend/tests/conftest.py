@@ -27,6 +27,9 @@ os.environ["WRK_ADMIN_USERNAME"] = "admin"
 os.environ["WRK_ADMIN_PASSWORD"] = "AdminTest#2026"
 os.environ["WRK_PBKDF2_ITER"] = "2000"     # 加速测试
 os.environ["WRK_RRF_K"] = "60"
+# 连接测试用例会连本机 9 端口；该端口若被系统 discard 服务占用，默认 120s
+# 读超时会让一条用例拖住两分钟。测试环境统一压到 2s，失败语义不变。
+os.environ["WRK_HTTP_TIMEOUT_READ"] = "2"
 
 ADMIN_PASSWORD = os.environ["WRK_ADMIN_PASSWORD"]
 

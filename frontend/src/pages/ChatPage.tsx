@@ -4,16 +4,19 @@ import { useAuth, useToast } from '../auth'
 import { ApiError, chatApi, getToken, kbApi } from '../api'
 import type {
   AskResponse,
+  AskStreamEvent,
   ChatMessage,
   Conversation,
   ConversationDetail,
   KnowledgeBase,
+  PipelineStep,
+  ThinkingStream,
 } from '../types'
 import { errorText, formatMs, formatTime } from '../utils'
 import { Button, ErrorState, Modal, SkeletonLines, Spinner, TextInput } from '../components/ui'
 import { Markdown } from '../components/Markdown'
 import { MessageInsights } from '../components/Evidence'
-import { IconClose, IconMenu, IconMessage } from '../components/icons'
+import { IconChevronDown, IconChevronRight, IconClose, IconMenu, IconMessage } from '../components/icons'
 
 // Keep only this page's outstanding requests across an ordinary route unmount.
 // The server remains authoritative after a reload or in another browser tab.
@@ -30,6 +33,8 @@ type AskJob = {
   initialDetail: ConversationDetail | null
   phase: 'creating' | 'asking' | 'success' | 'error'
   response?: AskResponse
+  /** 流式问答期间的思考步骤与答案增量；完成后清空，由最终消息接管。 */
+  stream?: ThinkingStream
   error?: string
   ambiguous?: boolean
   matchingTurnSeen?: boolean
@@ -115,6 +120,41 @@ function withJobAnswer(messages: ChatMessage[], job: AskJob): ChatMessage[] {
     created_at: assistant.created_at ?? new Date().toISOString(),
   }
   return [...messages, userMessage, assistant]
+}
+
+function upsertThinkingStep(steps: PipelineStep[], step: PipelineStep): PipelineStep[] {
+  const index = steps.findIndex((item) => item.id === step.id)
+  if (index < 0) return [...steps, step]
+  const next = [...steps]
+  next[index] = { ...next[index], ...step }
+  return next
+}
+
+/** 把一条 SSE 事件合并进当前提问的流式状态。 */
+function applyStreamEvent(job: AskJob, event: AskStreamEvent) {
+  const stream = job.stream ?? (job.stream = { steps: [], answer: '', phase: 'thinking' })
+  if (event.type === 'step') {
+    stream.steps = upsertThinkingStep(stream.steps, {
+      id: event.id,
+      title: event.title,
+      status: event.status,
+      detail: event.detail,
+    })
+    return
+  }
+  if (event.type === 'answer') {
+    stream.answer += event.delta
+    stream.phase = 'answering'
+    return
+  }
+  if (event.type === 'answer_replace') {
+    stream.answer = event.content
+    stream.phase = 'answering'
+    return
+  }
+  if (event.type === 'done') {
+    stream.phase = 'done'
+  }
 }
 
 export default function ChatPage() {
@@ -402,6 +442,14 @@ export default function ChatPage() {
   const messages = successfulJobs.reduce((items, job) => withJobAnswer(items, job), visibleDetail?.messages ?? [])
   const pendingMessage = messages.find((message) => message.role === 'assistant' && message.status === 'pending') ?? null
   const asking = Boolean(activeJob)
+  const streamingJob = activeJob && activeJob.stream ? activeJob : null
+  // 流式期间服务端已落库的 pending 占位不渲染，避免「正在生成」气泡和
+  // 思考面板同时出现；最终答案由 job.response 接管。
+  const displayedMessages = streamingJob
+    ? messages.filter((message) => !(message.role === 'assistant' && message.status === 'pending'))
+    : messages
+  const streamStepCount = streamingJob?.stream?.steps.length ?? 0
+  const streamAnswerBucket = Math.floor((streamingJob?.stream?.answer.length ?? 0) / 160)
   const pending = activeJob && !serverHasQuestion(messages, activeJob) ? activeJob.text : null
   const detailReady = !activeId || Boolean(loadedDetail && !detailLoading && !currentDetailError)
   const reconciling = reconcilingVisit === visit
@@ -435,6 +483,12 @@ export default function ChatPage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [messages.length, asking, pending])
+
+  // 流式回答逐段变长：每约 160 字跟一次底部，避免每个 token 都触发平滑滚动。
+  useEffect(() => {
+    if (!streamingJob) return
+    bottomRef.current?.scrollIntoView({ block: 'end' })
+  }, [streamStepCount, streamAnswerBucket])
 
   const toggleKb = (id: number) => {
     if (!detailReady) return
@@ -561,12 +615,21 @@ export default function ChatPage() {
         publishJob('change', job)
         return
       }
-      const res = await chatApi.ask(job.targetId, text, job.kbIds)
+      // 先把思考面板挂出来，再发请求：即使后端还在分析意图，用户也能看到
+      // 「正在理解问题」，而不是一个没有反馈的转圈。
+      job.stream = { steps: [], answer: '', phase: 'thinking' }
+      publishJob('change', job)
+      const res = await chatApi.askStream(job.targetId, text, job.kbIds, (event) => {
+        if (askJobs.get(job.key) !== job || session !== getToken()) return
+        applyStreamEvent(job, event)
+        publishJob('change', job)
+      })
       if (askJobs.get(job.key) !== job || session !== getToken()) {
         forgetJob(job)
         return
       }
       job.response = res
+      job.stream = undefined
       job.phase = 'success'
       if (res.denied && res.denied.length > 0) {
         push(
@@ -651,12 +714,12 @@ export default function ChatPage() {
 
   // A pending server message also covers a page reload or an HTTP timeout.
   useEffect(() => {
-    if (!activeId || !pendingMessage) return
+    if (!activeId || !pendingMessage || asking) return
     const timer = window.setInterval(() => {
       void loadDetail(activeId, true)
     }, 2000)
     return () => window.clearInterval(timer)
-  }, [activeId, visit, pendingMessage?.id, loadDetail])
+  }, [activeId, visit, pendingMessage?.id, asking, loadDetail])
 
   return (
     <>
@@ -825,7 +888,7 @@ export default function ChatPage() {
                 </div>
               ) : currentDetailError && !visibleDetail ? (
                 <ErrorState error={currentDetailError} onRetry={() => activeId && void loadDetail(activeId)} />
-              ) : messages.length === 0 && !pending ? (
+              ) : displayedMessages.length === 0 && !pending && !streamingJob ? (
                 <div className="chat-empty">
                   <div className="chat-empty-icon"><IconMessage size={22} /></div>
                   <div className="chat-empty-title">向知识库提问</div>
@@ -852,7 +915,7 @@ export default function ChatPage() {
                 </div>
               ) : (
                 <>
-                  {messages.map((m) => (
+                  {displayedMessages.map((m) => (
                     <MessageBubble
                       key={m.id}
                       message={m}
@@ -860,7 +923,22 @@ export default function ChatPage() {
                       userName={user?.display_name || user?.username || '我'}
                     />
                   ))}
-                  {pending ? (
+                  {streamingJob ? (
+                    <>
+                      {pending ? (
+                        <MessageBubble
+                          message={{
+                            id: -1,
+                            role: 'user',
+                            content: pending,
+                            created_at: new Date().toISOString(),
+                          }}
+                          userName={user?.display_name || user?.username || '我'}
+                        />
+                      ) : null}
+                      {streamingJob.stream ? <StreamingBubble stream={streamingJob.stream} /> : null}
+                    </>
+                  ) : pending ? (
                     <>
                       <MessageBubble
                         message={{
@@ -1049,6 +1127,56 @@ function GeneratingBubble() {
             <SkeletonLines rows={2} />
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+/** 流式问答：实时展示检索链路的每一步，答案增量直接渲染在下面。 */
+function StreamingBubble({ stream }: { stream: ThinkingStream }) {
+  const [open, setOpen] = useState(true)
+  const done = stream.phase === 'done'
+  return (
+    <div className="msg msg-assistant">
+      <div className="msg-avatar">AI</div>
+      <div className="msg-main">
+        <div className="thinking-card">
+          <button
+            type="button"
+            className="thinking-head"
+            onClick={() => setOpen((value) => !value)}
+            aria-expanded={open}
+          >
+            <span className={`thinking-pulse ${done ? 'done' : ''}`} />
+            <span className="thinking-title">{done ? '思考完成' : '正在思考'}</span>
+            <span className="tiny muted">{stream.steps.length} 个步骤</span>
+            <span className="spacer" />
+            {open ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />}
+          </button>
+          {open ? (
+            <div className="thinking-steps">
+              {stream.steps.map((step) => (
+                <div key={step.id} className={`thinking-step ${step.status}`}>
+                  <span className="thinking-dot" />
+                  <div style={{ minWidth: 0 }}>
+                    <div className="thinking-step-title">{step.title}</div>
+                    {step.detail ? <div className="thinking-step-detail">{step.detail}</div> : null}
+                  </div>
+                </div>
+              ))}
+              {stream.steps.length === 0 ? (
+                <div className="tiny muted">正在连接检索链路…</div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+        {stream.answer ? (
+          <div className="msg-bubble" style={{ marginTop: 10 }}>
+            <Markdown content={stream.answer} />
+          </div>
+        ) : !done ? (
+          <div className="tiny muted" style={{ marginTop: 8 }}>正在检索知识库并组织答案…</div>
+        ) : null}
       </div>
     </div>
   )

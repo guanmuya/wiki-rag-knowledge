@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { EvidenceItem, KbRoute, RouteInfo, UsageInfo } from '../types'
+import type { EvidenceItem, KbRoute, PipelineInfo, RouteInfo, UsageInfo } from '../types'
 import { formatMs, routeUsedLabel, type BadgeTone } from '../utils'
 import { Badge } from './ui'
 import { IconAlert, IconChevronDown, IconChevronRight } from './icons'
@@ -174,6 +174,53 @@ function EvidenceCard({
   )
 }
 
+/** 历史消息里的「思考过程」：默认折叠，展开后按步骤还原当时的检索链路。 */
+export function PipelinePanel({ pipeline }: { pipeline?: PipelineInfo }) {
+  const [open, setOpen] = useState(false)
+  const steps = pipeline?.steps ?? []
+  if (steps.length === 0) return null
+  const doneCount = steps.filter((step) => step.status === 'done').length
+  const intent = pipeline?.intent?.label ?? ''
+  const routeMode = pipeline?.route?.mode ?? ''
+  const rounds = pipeline?.rounds?.length ?? 0
+  const retries = pipeline?.retries ?? 0
+  const summary = [
+    intent,
+    routeMode,
+    rounds > 0 ? `${rounds} 轮检索` : '',
+    retries > 0 ? `重试 ${retries} 次` : '',
+  ].filter(Boolean).join(' · ')
+  return (
+    <div className="thinking-card">
+      <button
+        type="button"
+        className="thinking-head"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        <span className="thinking-title">思考过程</span>
+        {summary ? <span className="tiny muted">{summary}</span> : null}
+        <span className="spacer" />
+        <span className="tiny muted">{doneCount}/{steps.length}</span>
+        {open ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />}
+      </button>
+      {open ? (
+        <div className="thinking-steps">
+          {steps.map((step) => (
+            <div key={step.id} className={`thinking-step ${step.status}`}>
+              <span className="thinking-dot" />
+              <div style={{ minWidth: 0 }}>
+                <div className="thinking-step-title">{step.title}</div>
+                {step.detail ? <div className="thinking-step-detail">{step.detail}</div> : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 /** 问答消息里的证据/路由折叠区。 */
 export function MessageInsights({
   evidence,
@@ -199,6 +246,7 @@ export function MessageInsights({
 
   return (
     <div>
+      <PipelinePanel pipeline={route?.pipeline} />
       {insufficient ? <InsufficientNotice /> : null}
       <div className="row row-wrap" style={{ gap: 12 }}>
         <button type="button" className="evidence-toggle" onClick={() => setOpen((v) => !v)}>

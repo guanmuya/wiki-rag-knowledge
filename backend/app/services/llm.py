@@ -24,7 +24,7 @@ import math
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 from urllib.parse import urlsplit
 
 import httpx
@@ -674,6 +674,136 @@ def chat(
             latency_ms=elapsed,
         )
     return content or ""
+
+
+def chat_stream(
+    db: Session,
+    messages: list[dict[str, Any]],
+    *,
+    purpose: str = "llm",
+    temperature: float = 0.2,
+    max_tokens: int = 1600,
+    stats: CallStats | None = None,
+    cfg_override: models.ModelConfig | None = None,
+) -> Iterator[str]:
+    """流式生成：逐段产出文本增量。
+
+    为什么只有 OpenAI 兼容协议走原生流式：Responses / Anthropic 的流事件结构
+    完全不同，而这两个协议在本产品里属于少数配置。它们退化为「一次性调用后
+    整段产出」——界面仍能收到回答，只是没有逐字效果，不会因为协议差异报错。
+
+    失败语义与 `chat()` 一致：供应商不可用/返回异常一律抛 `ModelUnavailable`。
+    若流式请求在**尚未产出任何文本**时失败（例如部分中转不支持
+    `stream_options`），自动回退到 `chat()`，避免为了流式把可用供应商打死。
+    """
+    if cfg_override is not None:
+        cfg, provider = cfg_override, cfg_override.provider
+    else:
+        resolved = resolve_model(db, purpose)
+        if not resolved:
+            raise ModelUnavailable("未配置可用的对话模型")
+        cfg, provider = resolved
+    protocol = provider_protocol(provider)
+
+    if protocol != PROTOCOL_OPENAI:
+        text = chat(db, messages, purpose=purpose, temperature=temperature,
+                    max_tokens=max_tokens, stats=stats, cfg_override=cfg_override)
+        if text:
+            yield text
+        return
+
+    params = json.loads(cfg.params or "{}")
+    temp = params.get("temperature", temperature)
+    limit = int(params.get("max_tokens", max_tokens)) if max_tokens else 0
+    url = _join(provider.base_url, "chat/completions")
+    reasoning = _openai_reasoning_chat(provider, cfg.model)
+    payload: dict[str, Any] = {
+        "model": cfg.model,
+        "messages": messages,
+        "stream": True,
+        # 要求供应商在流末尾补 usage；不支持的中转会 400，由下面的回退兜住。
+        "stream_options": {"include_usage": True},
+    }
+    if not reasoning:
+        payload["temperature"] = temp
+    if limit:
+        payload["max_completion_tokens" if reasoning else "max_tokens"] = limit
+
+    started = time.time()
+    emitted = 0
+    usage: dict = {}
+    try:
+        with _client() as client:
+            with client.stream("POST", url, headers=_headers(provider, protocol),
+                               json=payload) as resp:
+                if resp.status_code >= 400:
+                    body = resp.read().decode("utf-8", "replace")[:600]
+                    raise ModelUnavailable(f"供应商返回 {resp.status_code}: {body}")
+                for line in resp.iter_lines():
+                    line = (line or "").strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    raw = line[5:].strip()
+                    if raw == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if isinstance(chunk.get("usage"), dict):
+                        usage = chunk["usage"]
+                    for choice in chunk.get("choices") or []:
+                        delta = (choice or {}).get("delta") or {}
+                        text = delta.get("content")
+                        if isinstance(text, list):
+                            text = _plain_text(text)
+                        if isinstance(text, str) and text:
+                            emitted += len(text)
+                            yield text
+    except ModelUnavailable:
+        if emitted:
+            # 已经吐出一部分再失败：不能静默重来，否则用户会看到重复内容。
+            raise
+        text = chat(db, messages, purpose=purpose, temperature=temperature,
+                    max_tokens=max_tokens, stats=stats, cfg_override=cfg_override)
+        if text:
+            yield text
+        return
+    except (httpx.InvalidURL, httpx.HTTPError) as exc:
+        # 流式路径没有经过 `_post()`，网络异常必须在这里归一成 ModelUnavailable
+        # 的语义，否则调用方（问答链路）只捕获 ModelUnavailable，会把连接失败
+        # 当成未处理异常，整条 SSE 直接中断。
+        if emitted:
+            raise ModelUnavailable(
+                f"网络请求失败：{exc.__class__.__name__}: {exc}") from exc
+        text = chat(db, messages, purpose=purpose, temperature=temperature,
+                    max_tokens=max_tokens, stats=stats, cfg_override=cfg_override)
+        if text:
+            yield text
+        return
+
+    elapsed = int((time.time() - started) * 1000)
+    if not emitted:
+        # 流正常结束却没有任何文本：回退一次普通调用，避免返回空回答。
+        text = chat(db, messages, purpose=purpose, temperature=temperature,
+                    max_tokens=max_tokens, stats=stats, cfg_override=cfg_override)
+        if text:
+            yield text
+        return
+
+    if stats:
+        prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        completion_tokens = int(usage.get("completion_tokens") or 0)
+        if not prompt_tokens and not completion_tokens:
+            # 供应商没有回 usage（或不支持 stream_options）：按字符数粗估，
+            # 并在 notes 里写明是估算值，避免把估算当成真实账单。
+            prompt_tokens = max(1, sum(
+                len(_plain_text(m.get("content"))) for m in messages) // 4)
+            completion_tokens = max(1, emitted // 4)
+            stats.add_note("流式调用未返回 usage，token 数按字符数估算")
+        stats.record_chat(prompt_tokens=prompt_tokens,
+                          completion_tokens=completion_tokens,
+                          latency_ms=elapsed)
 
 
 def _embed_dashscope_batches(texts: list[str], payload: dict, provider: models.Provider,
