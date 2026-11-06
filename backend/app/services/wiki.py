@@ -364,7 +364,8 @@ def _offline_page(title: str, summary: str, picked: list[models.Chunk]) -> str:
         if c.kind == "table":
             # 表格块必须保留换行：`re.sub(r"\s+", " ")` 会把 Markdown 表格压成
             # 一行竖线（实测页面正文就是这样），前端再也渲染不出表格。
-            # 表格块本身受 TABLE_CHUNK_BUDGET 限制，这里不再按 700 字截断。
+            # 表格块通常受 TABLE_CHUNK_BUDGET 限制（total<=3 的极小表可能略超），
+            # 这里不再按 700 字截断，避免截断半行表格。
             body = raw
         else:
             body = re.sub(r"\s+", " ", raw)

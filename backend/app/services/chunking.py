@@ -258,24 +258,31 @@ def split_blocks(blocks: list[ParsedBlock], *, size: int | None = None,
 
 
 def split_markdown(md: str, *, size: int | None = None) -> list[TextUnit]:
-    """Wiki 页面按章节切分，保留 heading_path 层级。"""
+    """Wiki 页面按章节切分，保留 heading_path 层级。
+
+    表格块整块保留：表头只出现在第一行，按字符数切会把表头留在上一节，
+    后续章节的表格行就失去列名（离线 Wiki 正文现在会保留 Markdown 表格，
+    这个约束才真正生效）。
+    """
     size = size or config.DEFAULT_CHUNK_SIZE
     units: list[TextUnit] = []
     stack: list[tuple[int, str]] = []
     buf: list[str] = []
     ordinal = 0
+    in_table = False
 
     def path() -> str:
         return " / ".join(t for _, t in stack)
 
     def flush() -> None:
-        nonlocal buf, ordinal
+        nonlocal buf, ordinal, in_table
         text = "\n".join(buf).strip()
         if len(text) >= 8:
             units.append(TextUnit(text=text, heading=path(),
                                   locator=f"章节 {ordinal + 1}", ordinal=ordinal))
             ordinal += 1
         buf = []
+        in_table = False
 
     for line in md.splitlines():
         m = re.match(r"^(#{1,6})\s+(.*)$", line.strip())
@@ -287,7 +294,14 @@ def split_markdown(md: str, *, size: int | None = None) -> list[TextUnit]:
                 stack.pop()
             stack.append((level, title))
             continue
+        is_table_line = line.lstrip().startswith("|")
+        if in_table and not is_table_line:
+            # 表格结束：整块一起 flush，避免表头与后续行被切到不同章节
+            flush()
         buf.append(line)
+        if is_table_line:
+            in_table = True
+            continue
         if sum(len(x) for x in buf) > size:
             flush()
     flush()
