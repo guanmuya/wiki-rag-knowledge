@@ -217,6 +217,7 @@ def requeue(db: Session, task: models.Task, *, reason: str = "已重新排队") 
     task.progress = 0
     task.wiki_active = False
     task.wiki_stop_requested = False
+    task.wiki_stop_requested_at = None
     # 重试复用任务 ID；新排队代次也必须与旧请求区分。
     task.run_token = uuid.uuid4().hex
     task.error = ""

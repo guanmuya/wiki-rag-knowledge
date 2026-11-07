@@ -259,6 +259,7 @@ class Task(Base):
     progress: Mapped[int] = mapped_column(Integer, default=0)
     wiki_active: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     wiki_stop_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    wiki_stop_requested_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     run_token: Mapped[str] = mapped_column(String(32), default="", server_default="")
     wiki_started_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     wiki_last_changed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)

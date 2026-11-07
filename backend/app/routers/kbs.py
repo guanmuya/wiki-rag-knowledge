@@ -749,7 +749,8 @@ def stop_task_wiki(task_id: int, run_token: str = Query(..., max_length=32),
             models.Task.kind == models.TaskKind.rebuild_wiki.value,
             models.Task.status == models.TaskStatus.queued.value,
         ).values(status=models.TaskStatus.stopped.value, stage="已停止",
-                 wiki_stop_requested=True, wiki_active=False, finished_at=models.utcnow())
+                 wiki_stop_requested=True, wiki_stop_requested_at=models.utcnow(),
+                 wiki_active=False, finished_at=models.utcnow())
     )
     if queued.rowcount:
         db.refresh(task)
@@ -761,7 +762,7 @@ def stop_task_wiki(task_id: int, run_token: str = Query(..., max_length=32),
                 models.Task.status == models.TaskStatus.running.value,
                 models.Task.wiki_active.is_(True),
                 models.Task.wiki_stop_requested.is_(False),
-            ).values(wiki_stop_requested=True)
+            ).values(wiki_stop_requested=True, wiki_stop_requested_at=models.utcnow())
         )
         if not running.rowcount:
             db.refresh(task)

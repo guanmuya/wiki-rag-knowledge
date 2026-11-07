@@ -98,7 +98,8 @@ def test_multiple_missing_columns_across_tables(tmp_path):
 
 def test_existing_task_gets_safe_wiki_stop_defaults(tmp_path):
     db_path, engine = _make_old_db(tmp_path, [
-        ("tasks", "wiki_active"), ("tasks", "wiki_stop_requested"), ("tasks", "run_token"),
+        ("tasks", "wiki_active"), ("tasks", "wiki_stop_requested"), ("tasks", "wiki_stop_requested_at"),
+        ("tasks", "run_token"),
         ("tasks", "wiki_last_changed_at"), ("tasks", "wiki_started_at"),
         ("knowledge_bases", "wiki_incomplete"), ("knowledge_bases", "wiki_stop_epoch"),
         ("knowledge_bases", "wiki_ready_started_at"),
@@ -110,14 +111,14 @@ def test_existing_task_gets_safe_wiki_stop_defaults(tmp_path):
             "('rebuild_wiki', 'queued', '排队中', 0, '', '{}', '{}', '', 0, '2026-01-01')"
         ))
     added = ensure_sqlite_columns(engine, models.Base.metadata)
-    assert {"tasks.wiki_active", "tasks.wiki_stop_requested", "tasks.run_token",
+    assert {"tasks.wiki_active", "tasks.wiki_stop_requested", "tasks.wiki_stop_requested_at", "tasks.run_token",
             "tasks.wiki_last_changed_at", "tasks.wiki_started_at", "knowledge_bases.wiki_incomplete",
             "knowledge_bases.wiki_stop_epoch", "knowledge_bases.wiki_ready_started_at"} <= set(added)
     with engine.begin() as conn:
         row = conn.execute(text(
-            "SELECT wiki_active, wiki_stop_requested, run_token, wiki_last_changed_at FROM tasks"
+            "SELECT wiki_active, wiki_stop_requested, run_token, wiki_last_changed_at, wiki_stop_requested_at FROM tasks"
         )).one()
-        assert row == (0, 0, "", None)
+        assert row == (0, 0, "", None, None)
     engine.dispose()
 
 

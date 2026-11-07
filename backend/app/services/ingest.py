@@ -37,7 +37,9 @@ def _initial_wiki_pending(db: Session, kb_id: int) -> bool:
 
 def _initial_wiki_defers_inline(db: Session, task: models.Task) -> bool:
     """让首次生成接管之前的工作，包括用户在排队期间停止该首次任务时。"""
-    initial_tasks = db.execute(select(models.Task.status, models.Task.finished_at).where(
+    initial_tasks = db.execute(select(
+        models.Task.status, models.Task.wiki_stop_requested_at, models.Task.finished_at,
+    ).where(
         models.Task.kb_id == task.kb_id,
         models.Task.dedupe_key == f"{models.WIKI_INITIAL_TASK_PREFIX}{task.kb_id}",
         or_(
@@ -57,7 +59,8 @@ def _initial_wiki_defers_inline(db: Session, task: models.Task) -> bool:
             retry_at = retry_at.replace(tzinfo=dt.timezone.utc)
     except (AttributeError, TypeError, ValueError):
         retry_at = None
-    for status, stopped_at in initial_tasks:
+    for status, requested_at, finished_at in initial_tasks:
+        stopped_at = requested_at or finished_at
         if status != models.TaskStatus.stopped.value or retry_at is None or stopped_at is None:
             return True
         if stopped_at.tzinfo is None:

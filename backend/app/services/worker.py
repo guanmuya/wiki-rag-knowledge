@@ -209,7 +209,8 @@ def run_once(worker_id: str = "inline") -> bool:
                     models.Chunk.kb_id == kb.id).limit(1)).first() if initial else True
                 skip_initial = initial and (
                     kb.mode != models.KbMode.wiki.value or not has_chunks or
-                    (has_pages and not payload.get("initial_wiki_started"))
+                    (has_pages and not payload.get("initial_wiki_started")
+                     and not taskflow.retry_history(task).get("count") and not kb.wiki_incomplete)
                 )
                 if skip_initial:
                     result = {"notes": ["无需首次生成 Wiki"]}
