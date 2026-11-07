@@ -2007,33 +2007,89 @@ code {
 }
 .grant-name { font-size: 12.5px; font-weight: 500; flex: 1; min-width: 0; }
 
-.model-group { display: flex; flex-direction: column; gap: 10px; }
+/* 模型按用途分组：每组是一张可折叠的卡片。刻意不用 overflow:hidden 收圆角，
+   否则会破坏 .table thead th 相对视口的 sticky 吸顶（见 9 表格的注释）。 */
+.model-group {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+}
+.model-group + .model-group { margin-top: 16px; }
 .model-group-title {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--c-text-muted);
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--c-hairline);
 }
-/* 分组标题本身是折叠开关：图标 + 用途名 + 数量，点标题收/展该用途的模型表。 */
+.model-group.is-collapsed .model-group-title { border-bottom: none; }
+/* 标题本身是折叠开关：箭头 / 用途图标 / 名称 / 数量按固定列对齐，三组之间不会错位。 */
 .model-group-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 10px;
+  min-width: 0;
   border: none;
   background: none;
   padding: 0;
-  font: inherit;
-  letter-spacing: inherit;
-  text-transform: inherit;
-  color: inherit;
+  color: var(--c-text);
+  text-align: left;
   cursor: pointer;
 }
-.model-group-toggle:hover { color: var(--c-text); }
-.model-group-toggle .icon { color: var(--c-text-muted); }
+.model-group-chevron { display: inline-flex; flex: 0 0 16px; color: var(--c-text-muted); }
+.model-group-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 8px;
+  background: var(--c-surface-sunken);
+  color: var(--c-text-secondary);
+}
+.model-group-name { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.model-group-count {
+  font-size: 12px;
+  color: var(--c-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.model-group-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-surface);
+  color: var(--c-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.model-group-add:hover {
+  background: var(--c-primary-soft);
+  border-color: var(--c-primary-soft-strong);
+  color: var(--c-primary-hover);
+}
+/* 展开时表格是卡片下半部分：去掉自己的外框，只留底部圆角。 */
+.model-group .table-wrap {
+  border: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.model-group .table-wrap .table thead tr:first-child th:first-child,
+.model-group .table-wrap .table thead tr:first-child th:last-child {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+.model-group .table tbody tr:last-child td:first-child { border-bottom-left-radius: calc(var(--radius) - 1px); }
+.model-group .table tbody tr:last-child td:last-child { border-bottom-right-radius: calc(var(--radius) - 1px); }
 /* 三个用途各一张表：固定布局 + 同一套 colgroup 宽度，跨表的列头才会纵向对齐。
    固定布局不再按内容撑列，长模型名/长测试信息靠换行兜住。
    末尾几列按视口宽度取 clamp：窗口从 1440 收到最小 1100 时它们一起收窄，
