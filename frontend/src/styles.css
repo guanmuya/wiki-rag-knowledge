@@ -882,6 +882,10 @@ code {
 .table tbody tr:hover td { background: #fafbff; }
 .table td strong, .table td .strong { color: var(--c-text); }
 .table td.actions { text-align: right; white-space: nowrap; }
+/* 表头自带底色，会盖住 .table-wrap 的圆角：首行两端跟着容器一起收角。
+   .table-wrap 有 1px 描边，所以内层圆角要减 1。 */
+.table-wrap .table thead tr:first-child th:first-child { border-top-left-radius: calc(var(--radius) - 1px); }
+.table-wrap .table thead tr:first-child th:last-child { border-top-right-radius: calc(var(--radius) - 1px); }
 
 .pager {
   display: flex;
@@ -1061,6 +1065,10 @@ code {
   line-height: 16px;
 }
 .tab.active .tab-badge { background: var(--c-primary-soft); color: var(--c-primary); }
+
+/* 页签放进卡片里时不要自带底色：卡片本身已是白底，子元素的不透明背景会盖住
+   卡片的圆角，四个角看起来就是方的（模型设置页的页签条就是这样）。 */
+.card > .tabs { background: transparent; }
 
 /* 卡片 / 表格视图切换：页头里的分段控件。
    不复用 .tabs —— 页签容器带 overflow-x: auto，放在这里会挤出横竖两条滚动条，
