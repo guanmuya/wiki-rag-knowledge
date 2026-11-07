@@ -310,6 +310,11 @@ code {
 
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
+/* 智能问答 / 个人 Agent 是整屏布局：main 必须有确定高度，content 的 flex:1 与
+   chat-shell 的 height:100% 才能把消息区约束在视口内。否则整页随会话一起变高，
+   flex:1 的消息区不会自己滚动，底部输入框会被顶到视口外面。 */
+.main-flush { height: 100vh; height: 100dvh; min-height: 0; }
+
 .topbar {
   height: var(--topbar-h);
   flex: 0 0 var(--topbar-h);
@@ -2107,6 +2112,9 @@ code {
 /* ---------------------------------------------------------------- 23 响应式 */
 @media (max-width: 1180px) {
   .content { padding: 20px 20px 36px; }
+  /* 问答 / Agent 是整屏布局，不能继承普通页面的内边距，否则底部输入框会被
+     这圈留白顶离视口底边，长会话时看起来仍「没有固定在最底下」。 */
+  .content.content-flush { padding: 0; }
   .wiki-layout { grid-template-columns: 1fr; }
   .wiki-tree {
     position: static;
