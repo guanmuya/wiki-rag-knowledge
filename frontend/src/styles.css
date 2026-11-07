@@ -5,12 +5,17 @@
    ========================================================================= */
 
 :root {
-  /* 画布与表面（淡蓝灰底，不用纯灰） */
-  --c-bg: #f4f7fb;
+  /* 画布：纯白底 + 22px 点阵，替代原先整片淡蓝灰的空白留白。
+     用一条变量统一 body / 应用外壳 / 启动页，避免三处各写一遍。 */
+  --c-bg: #ffffff;
   --c-bg-elevated: #ffffff;
   --c-surface: #ffffff;
   --c-surface-alt: #f8fafc;
   --c-surface-sunken: #edf2f8;
+
+  --c-dot: #d2ddec;
+  --canvas-bg: radial-gradient(circle, var(--c-dot) 1px, transparent 1.2px) 0 0 / 22px 22px,
+    var(--c-bg);
 
   /* 描边 */
   --c-border: #dce5ef;
@@ -70,7 +75,7 @@ html, body, #root { height: 100%; }
 
 body {
   margin: 0;
-  background: var(--c-bg);
+  background: var(--canvas-bg);
   color: var(--c-text);
   font-family: var(--font-sans);
   font-size: 14px;
@@ -155,7 +160,7 @@ code {
 .app-shell {
   display: flex;
   min-height: 100vh;
-  background: var(--c-bg);
+  background: var(--canvas-bg);
 }
 
 .sidebar {
@@ -791,7 +796,7 @@ code {
   min-height: 100vh;
   display: grid;
   place-items: center;
-  background: var(--c-bg);
+  background: var(--canvas-bg);
   padding: 32px;
 }
 .boot-screen .state-block { padding: 0; }
@@ -1579,8 +1584,9 @@ code {
   min-height: 0;
   background: var(--c-surface);
 }
-/* 右侧会话区收成圆角描边卡片：原先是一整块贴着窗口与侧栏边缘的方形白板。 */
-.chat-shell:not(.agent-shell) { background: var(--c-bg); }
+/* 右侧会话区收成圆角描边卡片：原先是一整块贴着窗口与侧栏边缘的方形白板。
+   外层沿用全局点阵画布，让圆角卡片落在点阵白底上，和其余内容页一致。 */
+.chat-shell:not(.agent-shell) { background: var(--canvas-bg); }
 .chat-sidebar {
   display: flex;
   flex-direction: column;
