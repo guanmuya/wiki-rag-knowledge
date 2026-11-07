@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useAuth, useToast } from '../auth'
 import { kbApi } from '../api'
@@ -23,13 +23,15 @@ export default function KbDetailPage() {
   const [kb, setKb] = useState<KnowledgeBase | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<unknown>(null)
+  const requestRef = useRef(0)
 
   const tabParam = searchParams.get('tab')
   const tab: TabKey =
     tabParam === 'wiki' || tabParam === 'settings' ? (tabParam as TabKey) : 'documents'
   const slugParam = searchParams.get('slug')
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (background = false) => {
+    const requestId = ++requestRef.current
     if (!Number.isFinite(kbId)) {
       setError(new Error('知识库 ID 不合法'))
       setLoading(false)
@@ -37,12 +39,14 @@ export default function KbDetailPage() {
     }
     try {
       const data = await kbApi.get(kbId)
+      if (requestId !== requestRef.current) return
       setKb(data)
       setError(null)
     } catch (err) {
-      setError(err)
+      // 轮询失败保留当前页面和未保存内容，下次轮询继续尝试。
+      if (requestId === requestRef.current && !background) setError(err)
     } finally {
-      setLoading(false)
+      if (requestId === requestRef.current) setLoading(false)
     }
   }, [kbId])
 
@@ -51,7 +55,7 @@ export default function KbDetailPage() {
     void load()
   }, [load])
 
-  usePolling(load, 2000, tab === 'wiki' && (kb?.index?.pending_tasks ?? 0) > 0)
+  usePolling(() => load(true), 2000, tab === 'wiki' && (kb?.index?.pending_tasks ?? 0) > 0)
 
   const setTab = (next: TabKey) => {
     const params = new URLSearchParams(searchParams)

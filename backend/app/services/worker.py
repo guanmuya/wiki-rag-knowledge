@@ -123,6 +123,25 @@ def _refresh_kb_after_rebuild(db, task: models.Task, result: dict) -> None:
     db.add(kb)
 
 
+def _retain_index_failures(db, kb: models.KnowledgeBase) -> None:
+    """首次生成 Wiki 不代表失败的文档或全库索引重建已恢复。"""
+    failed_doc = db.execute(select(models.Document).where(
+        models.Document.kb_id == kb.id, models.Document.deleted.is_(False),
+        models.Document.status == models.KbStatus.failed.value,
+    ).order_by(models.Document.id.desc()).limit(1)).scalars().first()
+    last_rebuild = db.execute(select(models.Task).where(
+        models.Task.kb_id == kb.id,
+        models.Task.kind.in_([models.TaskKind.reindex_kb.value, models.TaskKind.embedding_rebuild.value]),
+        models.Task.status.in_([models.TaskStatus.success.value, models.TaskStatus.failed.value]),
+    ).order_by(models.Task.finished_at.desc().nullslast(), models.Task.id.desc()).limit(1)).scalars().first()
+    if failed_doc:
+        kb.status = models.KbStatus.partial.value
+        kb.status_detail = f"Wiki 已生成；文档 {failed_doc.filename} 处理失败：{failed_doc.status_detail[:200]}"
+    elif last_rebuild and last_rebuild.status == models.TaskStatus.failed.value:
+        kb.status = models.KbStatus.partial.value
+        kb.status_detail = f"Wiki 已生成；分块索引重建失败：{(last_rebuild.error or '请重试')[:200]}"
+
+
 def run_once(worker_id: str = "inline") -> bool:
     """执行一个任务；返回是否真的处理了任务（供测试同步驱动）。"""
     # role="worker"：busy_timeout 提到 30s，且进度写撞锁不会让任务失败
@@ -169,6 +188,8 @@ def run_once(worker_id: str = "inline") -> bool:
                               "skipped": wres.pages_skipped, "sections": wres.sections,
                               "notes": wres.notes or []}
                     ingest._refresh_kb_status(db, kb, commit=False)
+                    if initial:
+                        _retain_index_failures(db, kb)
                 result["usage_by_phase"] = {task.kind: stats.as_dict()}
             elif task.kind == models.TaskKind.reindex_kb.value:
                 result = ingest.reindex_kb(db, task, stats=stats)

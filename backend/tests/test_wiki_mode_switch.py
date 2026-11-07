@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from datetime import timedelta
 from threading import Barrier
 from uuid import uuid4
 
@@ -92,9 +93,10 @@ def _task(sessions, kb_id, *, kind="ingest_document", status="queued", dedupe_ke
         return task.id
 
 
-def _ingest_task(sessions, kb_id, source):
-    source.write_text("# 住宿报销\n\n" + "住宿费由员工提交合规票据，主管审批后财务支付。" * 5,
-                      encoding="utf-8")
+def _ingest_task(sessions, kb_id, source, *, missing=False):
+    if not missing:
+        source.write_text("# 住宿报销\n\n" + "住宿费由员工提交合规票据，主管审批后财务支付。" * 5,
+                          encoding="utf-8")
     with sessions() as db:
         doc = models.Document(kb_id=kb_id, filename=source.name, suffix=".md", status="indexing")
         db.add(doc)
@@ -459,6 +461,125 @@ def test_switch_during_running_ingest_still_builds_first_pages(store, tmp_path, 
         assert init.status == models.TaskStatus.success.value, init.error
 
 
+@pytest.mark.parametrize("failure_before_switch", [True, False], ids=[
+    "failed-before-switch", "fails-while-init-waits",
+])
+def test_initial_build_preserves_ingest_failure(store, tmp_path, failure_before_switch):
+    kb_id = _kb(store, chunks=True)
+    ingest_id = _ingest_task(store, kb_id, tmp_path / "missing.md", missing=True)
+
+    if not failure_before_switch:
+        _switch(store, kb_id, "wiki")
+        init = _active_init(store, kb_id)
+        assert len(init) == 1
+        init_id = init[0].id
+
+    # The existing indexed document keeps the KB usable when this ingest fails.
+    assert worker.run_once("test")
+    with store() as db:
+        ingest_task = db.get(models.Task, ingest_id)
+        failed_doc_id = ingest_task.doc_id
+        assert ingest_task.status == models.TaskStatus.failed.value
+        assert "missing.md" in ingest_task.error
+        assert db.get(models.Document, failed_doc_id).status == models.KbStatus.failed.value
+        kb = db.get(models.KnowledgeBase, kb_id)
+        assert kb.status == models.KbStatus.partial.value
+        assert "missing.md" in kb.status_detail
+        if not failure_before_switch:
+            assert db.get(models.Task, init_id).status == models.TaskStatus.queued.value
+
+    if failure_before_switch:
+        _switch(store, kb_id, "wiki")
+        init = _active_init(store, kb_id)
+        assert len(init) == 1
+        init_id = init[0].id
+
+    assert worker.run_once("test")
+    with store() as db:
+        init_task = db.get(models.Task, init_id)
+        assert init_task.status == models.TaskStatus.success.value, init_task.error
+        assert serializers.wiki_ready(db, kb_id)
+        kb = db.get(models.KnowledgeBase, kb_id)
+        assert kb.status == models.KbStatus.partial.value
+        assert "失败" in kb.status_detail or "fail" in kb.status_detail.lower()
+        failed_doc = db.get(models.Document, failed_doc_id)
+        assert failed_doc.status == models.KbStatus.failed.value
+        assert "missing.md" in failed_doc.status_detail
+        assert db.execute(select(func.count(models.Chunk.id)).where(
+            models.Chunk.kb_id == kb_id)).scalar_one() > 0
+
+
+@pytest.mark.parametrize("kind", ["reindex_kb", "embedding_rebuild"])
+def test_initial_build_preserves_full_index_failure(store, monkeypatch, kind):
+    kb_id = _kb(store, chunks=True)
+    rebuild_id = _task(store, kb_id, kind=kind)
+
+    def fail_rebuild(db, task, *, stats):
+        raise RuntimeError("full index rebuild unavailable")
+
+    monkeypatch.setattr(worker.ingest, "reindex_kb", fail_rebuild)
+    assert worker.run_once("test")
+    with store() as db:
+        rebuild = db.get(models.Task, rebuild_id)
+        assert rebuild.status == models.TaskStatus.failed.value
+        assert rebuild.finished_at is not None
+        assert "full index rebuild unavailable" in rebuild.error
+        assert db.get(models.KnowledgeBase, kb_id).status == models.KbStatus.partial.value
+        docs = db.execute(select(models.Document).where(models.Document.kb_id == kb_id)).scalars().all()
+        assert docs and all(doc.status == models.KbStatus.ready.value for doc in docs)
+
+    _switch(store, kb_id, "wiki")
+    init = _active_init(store, kb_id)
+    assert len(init) == 1
+    assert worker.run_once("test")
+    with store() as db:
+        init_task = db.get(models.Task, init[0].id)
+        assert init_task.status == models.TaskStatus.success.value, init_task.error
+        assert serializers.wiki_ready(db, kb_id)
+        kb = db.get(models.KnowledgeBase, kb_id)
+        assert kb.status == models.KbStatus.partial.value
+        assert "失败" in kb.status_detail or "fail" in kb.status_detail.lower()
+        docs = db.execute(select(models.Document).where(models.Document.kb_id == kb_id)).scalars().all()
+        assert docs and all(doc.status == models.KbStatus.ready.value for doc in docs)
+
+
+@pytest.mark.parametrize(("failed_kind", "success_kind"), [
+    ("reindex_kb", "embedding_rebuild"),
+    ("embedding_rebuild", "reindex_kb"),
+])
+def test_initial_build_ignores_full_index_failure_superseded_by_success(
+    store, failed_kind, success_kind,
+):
+    kb_id = _kb(store, chunks=True)
+    # A retried older task can finish after a newer task, despite its lower ID.
+    success_id = _task(store, kb_id, kind=success_kind, status="success")
+    failed_id = _task(store, kb_id, kind=failed_kind, status="failed")
+    assert success_id < failed_id
+    finished_at = models.utcnow()
+    with store() as db:
+        failed = db.get(models.Task, failed_id)
+        failed.finished_at = finished_at - timedelta(minutes=5)
+        failed.error = "full index rebuild unavailable"
+        success = db.get(models.Task, success_id)
+        success.finished_at = finished_at
+        db.commit()
+
+    _switch(store, kb_id, "wiki")
+    init = _active_init(store, kb_id)
+    assert len(init) == 1
+    assert worker.run_once("test")
+    with store() as db:
+        failed = db.get(models.Task, failed_id)
+        success = db.get(models.Task, success_id)
+        assert failed.finished_at < success.finished_at
+        init_task = db.get(models.Task, init[0].id)
+        assert init_task.status == models.TaskStatus.success.value, init_task.error
+        assert serializers.wiki_ready(db, kb_id)
+        kb = db.get(models.KnowledgeBase, kb_id)
+        assert kb.status == models.KbStatus.ready.value
+        assert "full index rebuild unavailable" not in kb.status_detail
+
+
 def test_indexed_basic_kb_builds_wiki_offline_after_switch(store):
     kb_id = _kb(store, chunks=True)
     _switch(store, kb_id, "wiki")
@@ -471,6 +592,7 @@ def test_indexed_basic_kb_builds_wiki_offline_after_switch(store):
     with store() as db:
         task = db.get(models.Task, task_id)
         assert task.status == models.TaskStatus.success.value, task.error
+        assert db.get(models.KnowledgeBase, kb_id).status == models.KbStatus.ready.value
         assert serializers.wiki_ready(db, kb_id)
         assert db.execute(select(func.count(models.WikiSection.id)).where(
             models.WikiSection.kb_id == kb_id)).scalar_one() > 0

@@ -85,25 +85,29 @@ export default function WikiTab({
     setDetailLoading(Boolean(next))
   }, [])
 
-  const loadTree = useCallback(async () => {
+  const loadTree = useCallback(async (background = false) => {
     const requestId = ++treeRequestRef.current
     const isCurrent = () =>
       mountedRef.current && requestId === treeRequestRef.current && currentKbIdRef.current === kb.id
-    setTreeLoading(true)
-    setTreeError(null)
+    if (!background) {
+      setTreeLoading(true)
+      setTreeError(null)
+    }
     try {
       const data = await wikiApi.tree(kb.id)
       if (!isCurrent()) return
       const list = [...(data.pages ?? [])].sort((a, b) => a.order_index - b.order_index)
       setPages(list)
       const current = selectedSlugRef.current
-      if (!current || !list.some((p) => p.slug === current)) {
+      if ((!current || !list.some((p) => p.slug === current)) && (!background || !current)) {
         selectSlug(list[0]?.slug ?? null)
       }
     } catch (err) {
       if (!isCurrent()) return
-      setTreeError(err)
-      setPages([])
+      if (!background) {
+        setTreeError(err)
+        setPages([])
+      }
     } finally {
       if (isCurrent()) setTreeLoading(false)
     }
@@ -150,12 +154,34 @@ export default function WikiTab({
     void loadTree()
   }, [loadTree])
 
-  const pendingTasksRef = useRef(kb.index?.pending_tasks ?? 0)
+  const treeStateRef = useRef({
+    kbId: kb.id, pending: kb.index?.pending_tasks ?? 0,
+    count: kb.stats?.wiki_page_count ?? 0, refresh: false, refreshDetail: false,
+  })
   useEffect(() => {
     const pending = kb.index?.pending_tasks ?? 0
-    if (pendingTasksRef.current > 0 && pending === 0 && pages.length === 0) void loadTree()
-    pendingTasksRef.current = pending
-  }, [kb.id, kb.index?.pending_tasks, loadTree, pages.length])
+    const count = kb.stats?.wiki_page_count ?? 0
+    const previous = treeStateRef.current
+    if (previous.kbId !== kb.id) {
+      treeStateRef.current = { kbId: kb.id, pending, count, refresh: false, refreshDetail: false }
+      return
+    }
+    if ((previous.pending > 0 && pending === 0) || previous.count !== count) {
+      previous.refresh = true
+    }
+    previous.pending = pending
+    previous.count = count
+    // 编辑时仍更新目录，但保留选中页面与正文；详情等校对结束再刷新。
+    if (previous.refresh) {
+      previous.refresh = false
+      previous.refreshDetail = true
+      void loadTree(editing || saving)
+    }
+    if (previous.refreshDetail && !editing && !saving) {
+      previous.refreshDetail = false
+      if (selectedSlugRef.current) void loadPage(selectedSlugRef.current)
+    }
+  }, [kb.id, kb.index?.pending_tasks, kb.stats?.wiki_page_count, editing, saving, loadTree, loadPage])
 
   useEffect(() => {
     if (slug) void loadPage(slug)

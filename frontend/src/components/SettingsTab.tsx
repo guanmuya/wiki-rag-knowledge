@@ -31,7 +31,7 @@ export default function SettingsTab({
   isAdmin: boolean
   canManage: boolean
   onToast: (text: string, kind?: 'info' | 'success' | 'error') => void
-  onChanged: () => void
+  onChanged: (background?: boolean) => void | Promise<void>
 }) {
   const [name, setName] = useState(kb.name)
   const [description, setDescription] = useState(kb.description)
@@ -66,7 +66,7 @@ export default function SettingsTab({
   const hasRunning = tasks.some((t) => isRunningStatus(t.status))
   usePolling(async () => {
     await loadTasks()
-    onChanged()
+    await onChanged(true)
   }, 2000, hasRunning)
 
   const dirty = name !== kb.name || description !== kb.description || mode !== kb.mode
