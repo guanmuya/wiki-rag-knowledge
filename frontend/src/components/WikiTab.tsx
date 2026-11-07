@@ -59,6 +59,9 @@ export default function WikiTab({
   const previousInitialSlugRef = useRef(initialSlug)
   const deferredInitialSlugRef = useRef<string | null>(null)
   const deferredTreeSelectionRef = useRef(false)
+  const loadedWikiRef = useRef({
+    id: kb.id, readyAt: kb.wiki_ready_at, pending: kb.index?.pending_tasks ?? 0,
+  })
 
   const [versionsOpen, setVersionsOpen] = useState(false)
   const [versions, setVersions] = useState<WikiPageVersion[]>([])
@@ -149,6 +152,24 @@ export default function WikiTab({
   useEffect(() => {
     void loadTree()
   }, [loadTree])
+
+  useEffect(() => {
+    const previous = loadedWikiRef.current
+    const pending = kb.index?.pending_tasks ?? 0
+    const next = { id: kb.id, readyAt: kb.wiki_ready_at, pending }
+    if (previous.id !== kb.id) {
+      loadedWikiRef.current = next
+      return
+    }
+    const finished = (previous.pending > 0 && pending === 0) ||
+      (Boolean(kb.wiki_ready_at) && previous.readyAt !== kb.wiki_ready_at)
+    if (finished && (editing || saving)) return
+    loadedWikiRef.current = next
+    if (!finished) return
+    // 后台任务结束后刷新页面；编辑中的草稿等退出编辑后再刷新。
+    void loadTree()
+    if (slug) void loadPage(slug)
+  }, [kb.id, kb.wiki_ready_at, kb.index?.pending_tasks, editing, saving, slug, loadTree, loadPage])
 
   useEffect(() => {
     if (slug) void loadPage(slug)

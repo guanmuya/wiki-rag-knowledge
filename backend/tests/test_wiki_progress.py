@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import json
-from contextlib import contextmanager
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, contextmanager
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app import config, models
+from app import config, db as db_module, models
 from app.db import Base, WorkerSession
 from app.services import llm, wiki, worker
 
@@ -27,8 +30,9 @@ def wiki_db(tmp_path, monkeypatch):
 
     @contextmanager
     def session_scope(*, role):
-        assert role == "worker"
-        with worker_sessions() as db:
+        assert role in ("worker", "progress")
+        sessions = worker_sessions if role == "worker" else observer
+        with sessions() as db:
             try:
                 yield db
                 db.commit()
@@ -41,9 +45,40 @@ def wiki_db(tmp_path, monkeypatch):
     engine.dispose()
 
 
-def _prepare(session_factory, *, locked: bool = False) -> tuple[int, int, int | None]:
+@pytest.fixture
+def pool_db(tmp_path, monkeypatch):
+    """真实独立连接池：worker 默认容量 5+10、交互池容量 1、生产进度池。"""
+    url = f"sqlite:///{(tmp_path / 'wiki-pools.sqlite3').as_posix()}"
+    kwargs = {"connect_args": {"check_same_thread": False}}
+    worker_engine = create_engine(url, pool_size=5, max_overflow=10,
+                                  pool_timeout=0.2, **kwargs)
+    interactive_engine = create_engine(url, pool_size=1, max_overflow=0,
+                                       pool_timeout=2, **kwargs)
+    observer_engine = create_engine(url, **kwargs)
+    with observer_engine.begin() as conn:
+        conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+    Base.metadata.create_all(observer_engine)
+    observer = sessionmaker(bind=observer_engine, autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr(config, "DATABASE_URL", url)
+    monkeypatch.setattr(config, "BUSY_TIMEOUT_PROGRESS", 100)
+    progress_engine = db_module._make_engine("progress")
+    monkeypatch.setattr(db_module, "WorkerSessionLocal", sessionmaker(
+        bind=worker_engine, class_=WorkerSession, autoflush=False, expire_on_commit=False))
+    monkeypatch.setattr(db_module, "SessionLocal", sessionmaker(
+        bind=interactive_engine, autoflush=False, expire_on_commit=False))
+    monkeypatch.setattr(db_module, "ProgressSessionLocal", sessionmaker(
+        bind=progress_engine, autoflush=False, expire_on_commit=False))
+    yield observer, worker_engine, interactive_engine, progress_engine
+    worker_engine.dispose()
+    interactive_engine.dispose()
+    progress_engine.dispose()
+    observer_engine.dispose()
+
+
+def _prepare(session_factory, *, locked: bool = False,
+             name: str = "进度测试") -> tuple[int, int, int | None]:
     with session_factory() as db:
-        kb = models.KnowledgeBase(name="进度测试", mode="wiki", status="indexing")
+        kb = models.KnowledgeBase(name=name, mode="wiki", status="indexing")
         db.add(kb)
         db.flush()
         doc = models.Document(kb_id=kb.id, filename="a.md", suffix=".md", status="ready")
@@ -200,9 +235,9 @@ def test_progress_lock_does_not_commit_or_discard_locked_page(wiki_db, monkeypat
     real_commit = Session.commit
 
     def locked_progress_commit(db):
-        if isinstance(db, WorkerSession) and db._only_task_progress():
-            task = next(obj for obj in db.dirty if isinstance(obj, models.Task))
-            if task.stage == "Wiki 页面处理 1/2" and not state["raised"]:
+        for task in db.dirty:
+            if (isinstance(task, models.Task) and task.stage == "Wiki 页面处理 1/2"
+                    and not state["raised"]):
                 state["raised"] = True
                 raise OperationalError("UPDATE tasks", None, Exception("database is locked"))
         return real_commit(db)
@@ -223,6 +258,187 @@ def test_progress_lock_does_not_commit_or_discard_locked_page(wiki_db, monkeypat
         assert state["raised"]
         assert (task.status, task.progress) == ("success", 100), task.error
         assert db.get(models.WikiPage, page_id).status == "needs_review"
+
+
+def test_progress_with_all_default_worker_connections_checked_out(pool_db):
+    observer, worker_engine, _, _ = pool_db
+    records = [_prepare(observer, locked=True, name=f"进度测试{i}") for i in range(15)]
+    with observer() as db:
+        for _, task_id, _ in records:
+            db.get(models.Task, task_id).status = models.TaskStatus.running.value
+        db.commit()
+
+    ready = threading.Barrier(len(records) + 1)
+    reported = threading.Barrier(len(records) + 1)
+    release = threading.Event()
+    errors = []
+
+    def run_progress(task_id, page_id):
+        with db_module.session_scope(role="worker") as db:
+            page = db.get(models.WikiPage, page_id)
+            page.summary = "尚未提交的页面修改"
+            ready.wait(timeout=20)
+            error = None
+            try:
+                worker._report_wiki_progress(task_id, "topics", 1, 2)
+            except Exception as exc:
+                error = exc
+                errors.append(exc)
+            reported.wait(timeout=20)
+            assert release.wait(timeout=20)
+            db.rollback()
+            if error:
+                raise error
+
+    with ThreadPoolExecutor(max_workers=len(records)) as executor:
+        futures = [executor.submit(run_progress, task_id, page_id)
+                   for _, task_id, page_id in records]
+        try:
+            ready.wait(timeout=20)
+            assert worker_engine.pool.checkedout() == 15
+            reported.wait(timeout=20)
+            assert worker_engine.pool.checkedout() == 15
+            assert not errors, str(errors[0]) if errors else ""
+            with observer() as db:
+                for _, task_id, page_id in records:
+                    task = db.get(models.Task, task_id)
+                    assert (task.stage, task.progress) == ("Wiki 主题归纳 1/2", 22)
+                    assert db.get(models.WikiPage, page_id).summary == "原摘要"
+        finally:
+            release.set()
+        for future in futures:
+            future.result(timeout=20)
+
+
+def test_saturated_interactive_pool_does_not_delay_progress(pool_db):
+    observer, _, interactive_engine, _ = pool_db
+    _, task_id, _ = _prepare(observer)
+    with observer() as db:
+        db.get(models.Task, task_id).status = "running"
+        db.commit()
+
+    with interactive_engine.connect():
+        started = time.monotonic()
+        worker._report_wiki_progress(task_id, "topics", 1, 2)
+        elapsed = time.monotonic() - started
+    assert elapsed < 1.5
+    assert _snapshot(observer, task_id) == ("running", "Wiki 主题归纳 1/2", 22)
+
+
+def test_saturated_progress_pool_checkout_is_bounded_without_write_lock(pool_db, caplog):
+    observer, _, _, progress_engine = pool_db
+    _, task_id, _ = _prepare(observer)
+    with observer() as db:
+        task = db.get(models.Task, task_id)
+        task.status = "running"
+        task.stage = "原进度"
+        task.progress = 5
+        db.commit()
+
+    with ExitStack() as stack:
+        for _ in range(db_module.PROGRESS_POOL_SIZE):
+            stack.enter_context(progress_engine.connect())
+        assert progress_engine.pool.checkedout() == db_module.PROGRESS_POOL_SIZE
+        # 独立连接能写入，证明测试等待的是连接池而非 SQLite 写锁。
+        with observer() as db:
+            db.add(models.AppSetting(key="pool-saturation", value="write succeeds"))
+            db.commit()
+        started = time.monotonic()
+        worker._report_wiki_progress(task_id, "topics", 1, 2)
+        elapsed = time.monotonic() - started
+        assert db_module.PROGRESS_POOL_TIMEOUT_SECONDS * 0.8 <= elapsed < 1.5
+        assert _snapshot(observer, task_id) == ("running", "原进度", 5)
+    assert "Wiki 进度连接池等待超时" in caplog.text
+    worker._report_wiki_progress(task_id, "topics", 1, 2)
+    assert _snapshot(observer, task_id) == ("running", "Wiki 主题归纳 1/2", 22)
+
+
+def test_progress_engine_accepts_sqlite_memory_url(monkeypatch):
+    # SQLite 内存 URL 默认使用不接受 pool_timeout 的 SingletonThreadPool。
+    monkeypatch.setattr(config, "DATABASE_URL", "sqlite://")
+    engine = db_module._make_engine("progress")
+    try:
+        with engine.connect() as conn:
+            assert conn.exec_driver_sql("SELECT 1").scalar() == 1
+    finally:
+        engine.dispose()
+
+
+def test_exhausted_progress_pool_does_not_fail_wiki(pool_db, monkeypatch, caplog):
+    observer, _, _, progress_engine = pool_db
+    _, task_id, page_id = _prepare(observer, locked=True)
+    _two_shards(monkeypatch)
+    monkeypatch.setattr(wiki, "_map_topics", lambda db, entries, *, shard_no, **kwargs: [{
+        "title": "Locked" if shard_no == 1 else "New", "summary": "依据原文",
+        "chunk_ids": [entries[0][0]],
+    }])
+
+    def page_chat(db, messages, **kwargs):
+        # 所有进度取连接都超时，但外层页面修改依然没有被提前提交。
+        assert _snapshot(observer, task_id) == ("running", "处理中", 5)
+        with observer() as other:
+            assert other.get(models.WikiPage, page_id).status == "published"
+        return _model_text()
+
+    monkeypatch.setattr(llm, "chat", page_chat)
+    monkeypatch.setattr(llm, "embed", lambda *args, **kwargs: [])
+    with ExitStack() as stack:
+        for _ in range(db_module.PROGRESS_POOL_SIZE):
+            stack.enter_context(progress_engine.connect())
+        assert progress_engine.pool.checkedout() == db_module.PROGRESS_POOL_SIZE
+        assert worker.run_once("wiki-progress-pool-timeout")
+    assert "Wiki 进度连接池等待超时" in caplog.text
+    with observer() as db:
+        task = db.get(models.Task, task_id)
+        assert (task.status, task.stage, task.progress) == ("success", "完成", 100), task.error
+        assert db.get(models.WikiPage, page_id).status == "needs_review"
+
+
+def test_progress_retries_real_sqlite_lock_then_recovers(pool_db, monkeypatch, caplog):
+    observer, _, _, progress_engine = pool_db
+    _, task_id, _ = _prepare(observer)
+    with observer() as db:
+        task = db.get(models.Task, task_id)
+        task.status = "running"
+        task.stage = "原进度"
+        task.progress = 5
+        db.commit()
+    monkeypatch.setattr(config, "BUSY_TIMEOUT_PROGRESS", 20)
+    monkeypatch.setattr(config, "LOCK_RETRY_ATTEMPTS", 2)
+    updates = []
+
+    @event.listens_for(progress_engine, "before_cursor_execute")
+    def count_progress_updates(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("UPDATE TASKS"):
+            updates.append(statement)
+
+    with observer() as blocker:
+        blocker.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        worker._report_wiki_progress(task_id, "topics", 1, 2)
+        blocker.rollback()
+    assert len(updates) == 2
+    assert "Wiki 进度写入被锁挡住" in caplog.text
+    assert _snapshot(observer, task_id) == ("running", "原进度", 5)
+    worker._report_wiki_progress(task_id, "topics", 1, 2)
+    assert len(updates) == 3
+    assert _snapshot(observer, task_id) == ("running", "Wiki 主题归纳 1/2", 22)
+
+
+def test_unrelated_progress_database_errors_are_not_hidden(pool_db):
+    observer, _, _, progress_engine = pool_db
+    _, task_id, _ = _prepare(observer)
+    with observer() as db:
+        db.get(models.Task, task_id).status = "running"
+        db.commit()
+
+    @event.listens_for(progress_engine, "before_cursor_execute")
+    def fail_update(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith("UPDATE TASKS"):
+            raise OperationalError(statement, parameters, Exception("no such column: missing"))
+
+    with pytest.raises(OperationalError, match="no such column"):
+        worker._report_wiki_progress(task_id, "topics", 1, 2)
+    assert _snapshot(observer, task_id)[0] == "running"
 
 
 def test_invalid_evidence_skip_counts_as_processed(wiki_db, monkeypatch):

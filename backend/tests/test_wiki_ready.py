@@ -161,6 +161,28 @@ def test_mixed_pages_ready_when_any_page_qualifies(app_client, admin_headers, db
     assert serializers.wiki_published_count(db_session, kb_id) == 1
 
 
+def test_current_wiki_section_count_excludes_old_versions(app_client, admin_headers, db_session):
+    kb_id = _new_kb(app_client, admin_headers)
+    page = _page(db_session, kb_id, "published-with-old-sections",
+                 status=models.WikiPageStatus.published.value, with_version=True, sections=1)
+    current = models.WikiPageVersion(page_id=page.id, version_no=2,
+                                     content_md="当前页面正文", origin="generated")
+    db_session.add(current)
+    db_session.flush()
+    page.current_version_id = current.id
+    db_session.commit()
+
+    detail = app_client.get(f"/api/kbs/{kb_id}", headers=admin_headers).json()
+    assert detail["wiki_ready"] is True
+    assert detail["index"]["wiki_units"] == 1
+    assert detail["index"]["wiki_current_units"] == 0
+    db_session.add(models.WikiSection(kb_id=kb_id, page_id=page.id, page_version_id=current.id,
+                                      ordinal=0, heading_path="当前章节", text="当前正文"))
+    db_session.commit()
+    detail = app_client.get(f"/api/kbs/{kb_id}", headers=admin_headers).json()
+    assert detail["index"]["wiki_current_units"] == 1
+
+
 def test_real_wiki_build_reports_ready_everywhere(app_client, admin_headers, db_session):
     """真实生成一次 Wiki：三处口径必须同时为 True（避免只对造出来的数据成立）。"""
     kb = app_client.post("/api/kbs", headers=admin_headers,

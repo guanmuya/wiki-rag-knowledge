@@ -128,6 +128,32 @@ def test_wiki_rebuild_status_reports_available_chunks(db_session, app_client, ad
     db_session.commit()
 
 
+def test_auto_wiki_rebuild_reports_activity_on_ready_kb(db_session):
+    kb = _make_kb(db_session, "删除文档后", mode="wiki")
+    kb.status = models.KbStatus.ready.value
+    task = models.Task(kind="rebuild_wiki", status="running", kb_id=kb.id)
+    db_session.add_all([kb, task])
+    db_session.commit()
+    result = serializers.kb_out(db_session, kb)
+    assert result["status_label"] == "可用"
+    assert result["status_detail"] == "Wiki 生成中 · 分块检索可用"
+    db_session.delete(task)
+    db_session.commit()
+
+
+def test_auto_wiki_rebuild_preserves_partial_error(db_session):
+    kb = _make_kb(db_session, "部分可用", mode="wiki")
+    kb.status, kb.status_detail = "partial", "一个文档处理失败"
+    task = models.Task(kind="rebuild_wiki", status="queued", kb_id=kb.id)
+    db_session.add_all([kb, task])
+    db_session.commit()
+    result = serializers.kb_out(db_session, kb)
+    assert result["status_label"] == "部分可用"
+    assert result["status_detail"] == "一个文档处理失败；Wiki 排队中"
+    db_session.delete(task)
+    db_session.commit()
+
+
 def test_wiki_rebuild_does_not_mask_other_active_work(db_session):
     kb = _make_kb(db_session, "混合状态", mode="wiki")
     tasks = [

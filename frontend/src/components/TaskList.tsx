@@ -105,9 +105,11 @@ export default function TaskList({
           <div className="task-item" key={task.id}>
             <div className="task-head">
               <span className="task-kind">{task.kind_label || task.kind}</span>
-              <Badge tone={taskStatusClass(task.status)}>
-                {task.status_label || statusText(task.status)}
-              </Badge>
+              <span role={wikiRebuild ? 'status' : undefined}>
+                <Badge tone={taskStatusClass(task.status)}>
+                  {task.status_label || statusText(task.status)}
+                </Badge>
+              </span>
               {showKb && task.kb_name ? (
                 <span className="tiny muted">· {task.kb_name}</span>
               ) : null}
@@ -143,7 +145,8 @@ export default function TaskList({
                   </div>
                 )}
                 <span className="task-stage">
-                  {task.stage || '处理中'}{wikiRebuild ? null : ` · ${task.progress}%`}
+                  <span role={wikiRebuild ? 'status' : undefined}>{task.stage || '处理中'}</span>
+                  {wikiRebuild ? null : ` · ${task.progress}%`}
                   {/* 排队中的任务还没开始跑：等待时长在行首右侧已经显示过一次，
                       这里不再重复「已排队」，也不该说「已运行」。 */}
                   {task.status === 'queued' ? null : (
