@@ -38,7 +38,7 @@ from sqlalchemy.orm import Session
 
 log = logging.getLogger("wrk.retrieval")
 
-from .. import config, models
+from .. import config, models, wiki_visibility
 from . import llm
 from .chunking import extract_keywords
 
@@ -485,6 +485,7 @@ def search_wiki(db: Session, kb: models.KnowledgeBase, query: str, *,
             models.WikiPage.kb_id == kb.id,
             models.WikiPage.status != models.WikiPageStatus.draft.value,
             models.WikiPage.current_version_id.is_not(None),
+            wiki_visibility.visible_page(),
         )
     ).scalars().all()
     if not pages:
@@ -583,6 +584,7 @@ def plan_route(db: Session, kb: models.KnowledgeBase) -> tuple[str, str, bool]:
                 models.WikiPage.kb_id == kb.id,
                 models.WikiPage.status != models.WikiPageStatus.draft.value,
                 models.WikiPage.current_version_id.is_not(None),
+                wiki_visibility.visible_page(),
             ).limit(1)
         ).first()
         if wiki_count:
