@@ -189,7 +189,8 @@ def _mark_answer_failed(db: Session, answer_id: int, started: float,
     先 rollback：`answering.answer` 失败后会话可能停在「必须先回滚」的状态，
     不回滚的话这次收尾写也会失败，pending 就永远留在库里了。
     """
-    log.warning("回答生成失败（消息 #%s）：%s", answer_id, exc)
+    # 桌面日志也可由用户查看，显式选模型时不得记录可能包含私有配置的异常。
+    log.warning("回答生成失败（消息 #%s）：%s", answer_id, ASK_FAILED_TEXT if hide_details else exc)
     try:
         db.rollback()
         answer = db.get(models.Message, answer_id)
@@ -202,7 +203,7 @@ def _mark_answer_failed(db: Session, answer_id: int, started: float,
         db.add(answer)
         db.commit()
     except Exception:  # noqa: BLE001 - 收尾失败不能覆盖原始异常
-        log.warning("标记回答失败状态时又出错（忽略）", exc_info=True)
+        log.warning("标记回答失败状态时又出错（忽略）", exc_info=not hide_details)
         try:
             db.rollback()
         except Exception:  # pragma: no cover - 连接已坏
@@ -364,8 +365,12 @@ def ask(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
         extra = {"cfg_override": cfg} if cfg is not None else {}
         result = answering.answer(db, body.question, allowed, top_k=body.top_k, **extra)
     except BaseException as exc:      # 含客户端断开导致的取消：都要把占位收尾
-        _mark_answer_failed(db, answer_id, started, exc,
-                            hide_details=body.model_config_id is not None)
+        hide_details = body.model_config_id is not None
+        _mark_answer_failed(db, answer_id, started, exc, hide_details=hide_details)
+        if hide_details and isinstance(exc, Exception):
+            # 不把带私有配置的 traceback 交给服务器及桌面日志；保留明确的 HTTP 状态。
+            status = exc.status_code if isinstance(exc, HTTPException) else 500
+            raise HTTPException(status_code=status, detail=ASK_FAILED_TEXT) from None
         raise
 
     return _persist_result(db, answer_id, result, denied, started)

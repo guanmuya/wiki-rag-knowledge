@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 
+import httpx
 import pytest
 from sqlalchemy import delete
 
@@ -218,8 +220,12 @@ def test_model_revoked_before_generation_never_falls_back(
 @pytest.fixture()
 def private_chat_model(db_session, failure):
     secret = "provider-credential-for-test"
-    base_url = (f"https://test-user:{secret}@private.example:invalid/v1"
-                if failure == "invalid_url" else "http://127.0.0.1:9/v1")
+    if failure == "invalid_url":
+        base_url = f"https://test-user:{secret}@private.example:invalid/v1"
+    elif failure == "success":
+        base_url = f"https://test-user:{secret}@private.example/v1"
+    else:
+        base_url = "http://127.0.0.1:9/v1"
     provider = models.Provider(name=f"私有供应商-{uuid.uuid4().hex[:8]}",
                                base_url=base_url, enabled=True, protocol="openai")
     db_session.add(provider)
@@ -235,11 +241,8 @@ def private_chat_model(db_session, failure):
     db_session.commit()
 
 
-@pytest.mark.parametrize("endpoint", ["ask", "ask/stream"])
-@pytest.mark.parametrize("failure", ["invalid_url", "invalid_params"])
-def test_employee_ask_does_not_expose_provider_credentials(
-        app_client, admin_headers, model_set, private_chat_model, endpoint, failure):
-    model_id, secret = private_chat_model
+@pytest.fixture()
+def employee_chat(app_client, admin_headers):
     kb = app_client.post("/api/kbs", headers=admin_headers, json={
         "name": f"凭据保护库-{uuid.uuid4().hex[:8]}", "description": "", "mode": "basic"}).json()
     username = "emp_secure_" + uuid.uuid4().hex[:8]
@@ -251,26 +254,61 @@ def test_employee_ask_does_not_expose_provider_credentials(
     token = app_client.post("/api/auth/login", json={"username": username, "password": PASSWORD}).json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
     cid = app_client.post("/api/conversations", headers=headers, json={"kb_ids": [kb["id"]]}).json()["id"]
+    return headers, cid, kb["id"]
+
+
+@pytest.mark.parametrize("endpoint", ["ask", "ask/stream"])
+@pytest.mark.parametrize("failure", ["invalid_url", "invalid_params"])
+def test_employee_ask_does_not_expose_provider_credentials(
+        app_client, model_set, private_chat_model, employee_chat, endpoint, failure, caplog):
+    caplog.set_level(logging.WARNING, logger="wrk.chat")
+    model_id, secret = private_chat_model
+    headers, cid, _ = employee_chat
     def request():
         return app_client.post(f"/api/conversations/{cid}/{endpoint}", headers=headers,
                                json={"question": "hello", "model_config_id": model_id})
-    if failure == "invalid_params" and endpoint == "ask":
-        # TestClient 重新抛出未处理异常；真正的 HTTP 响应为通用 500。
-        with pytest.raises(ValueError):
-            request()
-        response_text = ""
-    else:
-        response = request()
-        assert response.status_code == 200, response.text
-        response_text = response.text
-        if failure == "invalid_url":
-            assert "供应商接口地址不合法" in response_text
-        else:
-            assert '"type": "error"' in response_text
+    response = request()
+    assert response.status_code == (500 if failure == "invalid_params" and endpoint == "ask" else 200)
+    response_text = response.text
+    if failure == "invalid_url":
+        assert "供应商接口地址不合法" in response_text
+    elif endpoint == "ask/stream":
+        assert '"type": "error"' in response_text
     history = app_client.get(f"/api/conversations/{cid}", headers=headers)
     assert history.status_code == 200
-    for data in (response_text, history.text):
+    for data in (response_text, history.text, caplog.text):
         assert secret not in data and "private.example" not in data
+
+
+@pytest.mark.parametrize("endpoint", ["ask", "ask/stream"])
+@pytest.mark.parametrize("failure", ["success"])
+def test_successful_selected_model_does_not_log_provider_url(
+        app_client, model_set, private_chat_model, employee_chat, endpoint, caplog, monkeypatch):
+    model_id, secret = private_chat_model
+    headers, cid, _ = employee_chat
+    transport = httpx.MockTransport(lambda request: httpx.Response(
+        200, json={"choices": [{"message": {"content": "你好"}}]}))
+    monkeypatch.setattr(llm, "_client", lambda: httpx.Client(transport=transport))
+    caplog.set_level(logging.INFO)
+    response = app_client.post(f"/api/conversations/{cid}/{endpoint}", headers=headers,
+                               json={"question": "hello", "model_config_id": model_id})
+    assert response.status_code == 200, response.text
+    assert secret not in caplog.text and "private.example" not in caplog.text
+
+
+def test_failed_answer_cleanup_does_not_log_private_details(caplog):
+    secret = "private-cleanup-error"
+
+    class BrokenSession:
+        def rollback(self):
+            pass
+
+        def get(self, *args):
+            raise RuntimeError(secret)
+
+    caplog.set_level(logging.WARNING, logger="wrk.chat")
+    chat_router._mark_answer_failed(BrokenSession(), 1, 0, ValueError(secret), hide_details=True)
+    assert secret not in caplog.text
 
 
 @pytest.fixture()
