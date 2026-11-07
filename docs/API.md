@@ -135,9 +135,12 @@
 | GET | `/api/conversations/{id}` | 含 `messages:[{id,role,content,kb_ids,evidence,route,latency_ms,status,created_at,insufficient,usage,suggestions,refusal_reason}]`（`serializers.message_out()`） |
 | PATCH | `/api/conversations/{id}` | 改标题 / 换知识库选择 / 置顶（`pinned: true/false`） |
 | DELETE | `/api/conversations/{id}` | 删除 |
-| POST | `/api/conversations/{id}/ask` | `{question,kb_ids?,top_k?}` → `{content, message, evidence, route, usage, insufficient, citations, suggestions, refusal_reason, denied}` |
+| POST | `/api/conversations/{id}/ask` | `{question,kb_ids?,top_k?,model_config_id?}` → `{content, message, evidence, route, usage, insufficient, citations, suggestions, refusal_reason, denied}` |
 | POST | `/api/conversations/{id}/ask/stream` | 同上请求体；SSE 流式推送思考步骤、答案增量与最终结果（见 7.1） |
+| GET | `/api/chat/models` | 问答页模型下拉：`{items:[{id,model,label,provider,is_default,display}],default_id}`；对所有登录用户开放，只列启用中的对话模型 |
 | POST | `/api/search/preview` | `{kb_ids,query}` → `{evidence, routes, stats, denied, context_preview, usage}`（不生成回答，用于调参/实验） |
+
+`model_config_id` 可选：指定本轮问答使用的对话模型（`cfg_override`），不传则沿用模型设置里解析出的默认模型；传了未启用、非 `llm` 用途或供应商已停用的 id 会先于落库返回 400。`default_id` 用与问答相同的 `llm.resolve_model()` 解析，因此下拉里标「默认」的那条就是未指定模型时实际会用的那条。
 
 `ask` 返回：
 ```json

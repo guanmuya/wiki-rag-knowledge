@@ -2767,6 +2767,33 @@ td .btn-link.danger { color: var(--c-danger); }
   overflow-x: auto;
 }
 
+/* ---------------------------------------------------------------- 智能问答：模型选择器 */
+.chat-model-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+.chat-model-picker > .tiny { white-space: nowrap; }
+.chat-model-picker .select {
+  height: 28px;
+  padding: 2px 30px 2px 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  max-width: 340px;
+  border-radius: 999px;
+  border-color: #c9dcf5;
+  background-color: var(--c-primary-soft);
+  color: var(--c-primary);
+  cursor: pointer;
+}
+.chat-model-picker .select:disabled { cursor: not-allowed; }
+
+@media (max-width: 720px) {
+  .chat-model-picker .select { max-width: 160px; }
+}
+
 @media (max-width: 1024px) {
   /* Agent 页的侧栏不能像问答页那样收成抽屉：这里没有额外的汉堡按钮。
      窄屏改为「上方一条会话带 + 下方对话区」，会话仍可切换。 */

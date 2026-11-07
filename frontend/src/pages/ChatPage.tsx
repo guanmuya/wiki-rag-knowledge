@@ -6,6 +6,7 @@ import type {
   AskResponse,
   AskStreamEvent,
   ChatMessage,
+  ChatModelOption,
   Conversation,
   ConversationDetail,
   KnowledgeBase,
@@ -13,7 +14,7 @@ import type {
   ThinkingStream,
 } from '../types'
 import { errorText, formatMs, formatTime, parseApiTime } from '../utils'
-import { Button, ErrorState, Modal, SkeletonLines, Spinner, TextInput } from '../components/ui'
+import { Button, ErrorState, Modal, Select, SkeletonLines, Spinner, TextInput } from '../components/ui'
 import { Markdown } from '../components/Markdown'
 import { MessageInsights } from '../components/Evidence'
 import { IconChevronDown, IconChevronRight, IconClose, IconMenu, IconMessage } from '../components/icons'
@@ -254,6 +255,14 @@ export default function ChatPage() {
   const [kbsLoading, setKbsLoading] = useState(true)
   const [kbsError, setKbsError] = useState<unknown>(null)
 
+  // 问答模型下拉：默认选中模型设置里解析出的默认模型，用户可临时改选。
+  const [modelOptions, setModelOptions] = useState<ChatModelOption[]>([])
+  const [modelDefaultId, setModelDefaultId] = useState<number | null>(null)
+  const [selectedModelId, setSelectedModelId] = useState<number | null>(null)
+  const [modelsLoading, setModelsLoading] = useState(true)
+  const [modelsError, setModelsError] = useState<unknown>(null)
+  const modelSequence = useRef(0)
+
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [convLoaded, setConvLoaded] = useState(false)
   const [convLoading, setConvLoading] = useState(true)
@@ -303,6 +312,11 @@ export default function ChatPage() {
     setKbsOwner(null)
     setKbsLoading(true)
     setKbsError(null)
+    setModelOptions([])
+    setModelDefaultId(null)
+    setSelectedModelId(null)
+    setModelsLoading(true)
+    setModelsError(null)
     setConversations([])
     setConvLoaded(false)
     setConvLoading(true)
@@ -359,10 +373,41 @@ export default function ChatPage() {
     }
   }, [])
 
+  const loadModels = useCallback(async () => {
+    const sequence = ++modelSequence.current
+    const requestSession = getToken()
+    const requestUser = viewRef.current?.userId
+    const current = () => mountedRef.current && sequence === modelSequence.current &&
+      requestSession === getToken() && requestUser === viewRef.current?.userId
+    setModelsLoading(true)
+    try {
+      const data = await chatApi.models()
+      if (!current()) return
+      const items = data.items ?? []
+      setModelOptions(items)
+      setModelDefaultId(data.default_id ?? null)
+      // 已选模型仍在列表里就保留；否则回到设置好的默认模型。
+      setSelectedModelId((previous) =>
+        previous !== null && items.some((m) => m.id === previous)
+          ? previous
+          : data.default_id ?? items[0]?.id ?? null)
+      setModelsError(null)
+    } catch (err) {
+      if (!current()) return
+      // 拉取失败（含旧版后端没有该接口）时降级：不指定模型，问答仍走全局默认。
+      setModelsError(err)
+      setModelOptions([])
+      setModelDefaultId(null)
+    } finally {
+      if (current()) setModelsLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     void loadKbs()
     void loadConversations()
-  }, [loadKbs, loadConversations, userId, session])
+    void loadModels()
+  }, [loadKbs, loadConversations, loadModels, userId, session])
 
   useEffect(() => {
     if (sidebarOpen) newConversationRef.current?.focus()
@@ -497,6 +542,10 @@ export default function ChatPage() {
   const capacityBlocked = userJobCount >= MAX_CHAT_JOBS && !retryCandidate
   const busy = !detailReady || reconciling || asking || Boolean(pendingMessage) || capacityBlocked
   const shownSelectedKbs = detailReady ? selectedKbs : []
+  // 选中的模型若被停用/删除，回退到设置里的默认模型；没有可选模型时为 null。
+  const effectiveModelId = modelOptions.some((m) => m.id === selectedModelId)
+    ? selectedModelId
+    : modelDefaultId ?? modelOptions[0]?.id ?? null
   const askError = validationError?.visit === visit ? validationError.text : ''
   const successfulJobKeys = successfulJobs.map((job) => job.key).join(',')
 
@@ -661,7 +710,7 @@ export default function ChatPage() {
         if (askJobs.get(job.key) !== job || session !== getToken()) return
         applyStreamEvent(job, event)
         publishJob('change', job)
-      })
+      }, effectiveModelId)
       if (askJobs.get(job.key) !== job || session !== getToken()) {
         forgetJob(job)
         return
@@ -948,6 +997,25 @@ export default function ChatPage() {
               )}
             </div>
             <div className="spacer" />
+            <label className="chat-model-picker">
+              <span className="tiny muted nowrap">模型：</span>
+              <Select
+                className="chat-model-select"
+                value={effectiveModelId ?? ''}
+                onChange={(e) => setSelectedModelId(e.target.value ? Number(e.target.value) : null)}
+                disabled={modelsLoading || modelOptions.length === 0}
+                aria-label="选择回答使用的模型"
+                title={modelsError ? '模型列表加载失败，将使用设置里的默认模型' : '选择本次回答使用的模型'}
+              >
+                {modelOptions.length === 0 ? (
+                  <option value="">{modelsLoading ? '加载中…' : '默认模型'}</option>
+                ) : modelOptions.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.display}{m.id === modelDefaultId ? '（默认）' : ''}
+                  </option>
+                ))}
+              </Select>
+            </label>
             {shownSelectedKbs.length > 0 ? (
               <button type="button" className="btn-link" onClick={clearKbSelection}>
                 清空选择

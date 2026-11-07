@@ -11,6 +11,7 @@ import type {
   AskStreamEvent,
   AuditEntry,
   ChatMessage,
+  ChatModelOptions,
   Conversation,
   ConversationDetail,
   CreateUserPayload,
@@ -598,16 +599,19 @@ export const wikiApi = {
 // ---------------------------------------------------------------- 会话
 export const chatApi = {
   conversations: () => request<Paged<Conversation>>('/conversations'),
+  /** 问答页模型下拉：对所有登录用户开放，只返回可用的对话模型。 */
+  models: () => request<ChatModelOptions>('/chat/models'),
   create: (title: string, kb_ids: number[]) =>
     request<Conversation>('/conversations', { method: 'POST', body: { title, kb_ids } }),
   get: (id: number) => request<ConversationDetail>(`/conversations/${id}`),
   update: (id: number, payload: { title?: string; kb_ids?: number[]; pinned?: boolean }) =>
     request<Conversation>(`/conversations/${id}`, { method: 'PATCH', body: payload }),
   remove: (id: number) => request<{ ok: boolean }>(`/conversations/${id}`, { method: 'DELETE' }),
-  ask: (id: number, question: string, kb_ids?: number[], top_k?: number) =>
+  ask: (id: number, question: string, kb_ids?: number[], top_k?: number,
+        model_config_id?: number | null) =>
     request<AskResponse>(`/conversations/${id}/ask`, {
       method: 'POST',
-      body: { question, kb_ids, top_k },
+      body: { question, kb_ids, top_k, model_config_id },
       // 生成回答要等模型，本地 Ollama 可能很慢；给 180s，超时也要有明确报错
       timeoutMs: 180_000,
     }),
@@ -621,6 +625,7 @@ export const chatApi = {
     question: string,
     kb_ids: number[] | undefined,
     onEvent: (event: AskStreamEvent) => void,
+    modelConfigId?: number | null,
     signal?: AbortSignal,
   ): Promise<AskResponse> => {
     if (baseReady) await baseReady
@@ -630,13 +635,16 @@ export const chatApi = {
     }
     const token = getToken()
     if (token) headers.Authorization = `Bearer ${token}`
+    const payload: Record<string, unknown> = { question, kb_ids }
+    // 不传时沿用模型设置里的默认模型；旧后端也会忽略这个新字段。
+    if (modelConfigId != null) payload.model_config_id = modelConfigId
 
     let res: Response
     try {
       res = await fetch(apiUrl(`/conversations/${id}/ask/stream`), {
         method: 'POST',
         headers,
-        body: JSON.stringify({ question, kb_ids }),
+        body: JSON.stringify(payload),
         signal,
       })
     } catch (err) {

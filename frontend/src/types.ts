@@ -583,6 +583,22 @@ export interface ModelConfig {
   last_test_message: string
 }
 
+/** 智能问答页的模型下拉项：只含展示所需字段，不含密钥与接口地址。 */
+export interface ChatModelOption {
+  id: number
+  model: string
+  label: string
+  provider: string
+  is_default: boolean
+  display: string
+}
+
+export interface ChatModelOptions {
+  items: ChatModelOption[]
+  /** 未指定模型时问答实际会用的模型（与后端 resolve_model 一致）。 */
+  default_id: number | null
+}
+
 export interface ModelTestResult {
   ok: boolean
   message: string
