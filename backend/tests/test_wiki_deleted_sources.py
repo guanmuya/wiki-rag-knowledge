@@ -254,6 +254,51 @@ def test_hidden_only_wiki_does_not_count_as_ready_or_route_to_wiki(
     assert retrieval.plan_route(db_session, kb)[0] == "none"
 
 
+def test_index_current_units_exclude_hidden_deleted_source_sections(
+    app_client, admin_headers, db_session, wiki_case,
+):
+    _delete_source(app_client, admin_headers, wiki_case)
+    db_session.expire_all()
+    # Keep one visible published page, but put its sections on an older version.
+    db_session.get(models.WikiPage, wiki_case["pages"]["review-unaffected"]["id"]).status = "draft"
+    visible = db_session.get(models.WikiPage, wiki_case["pages"]["unaffected"]["id"])
+    current = models.WikiPageVersion(page_id=visible.id, version_no=2,
+                                     content_md="当前页面尚无章节", origin="generated")
+    db_session.add(current)
+    db_session.flush()
+    visible.current_version_id = current.id
+    live = wiki_case["docs"]["live"]
+    db_session.add(models.WikiEvidence(
+        kb_id=wiki_case["kb"], page_version_id=current.id, chunk_id=live["chunk"],
+        doc_id=live["doc"], doc_version_id=live["version"], quote="有效来源", locator="第 1 段",
+    ))
+    db_session.commit()
+
+    hidden_ids = [wiki_case["pages"][slug]["id"]
+                  for slug in ("locked-old", "unlocked-old", "mixed-old")]
+    hidden_sections = db_session.execute(select(models.WikiSection).where(
+        models.WikiSection.page_id.in_(hidden_ids))).scalars().all()
+    assert len(hidden_sections) == 3
+    tree = _tree(app_client, wiki_case["headers"]["read"], wiki_case)
+    assert set(tree) == {"unaffected", "review-unaffected"}
+    assert tree["review-unaffected"]["status"] == "draft"
+    url = f"/api/kbs/{wiki_case['kb']}"
+    for headers in (wiki_case["headers"]["read"], admin_headers):
+        response = app_client.get(url, headers=headers)
+        assert response.status_code == 200, response.text
+        detail = response.json()
+        assert detail["wiki_ready"] is True
+        assert detail["index"]["wiki_current_units"] == 0
+
+    # A section on the visible current version must still count.
+    db_session.add(models.WikiSection(kb_id=wiki_case["kb"], page_id=visible.id,
+                                      page_version_id=current.id, ordinal=0,
+                                      heading_path="当前章节", text="当前正文"))
+    db_session.commit()
+    detail = app_client.get(url, headers=wiki_case["headers"]["read"]).json()
+    assert detail["index"]["wiki_current_units"] == 1
+
+
 def test_historical_deleted_source_version_is_not_exposed_after_regeneration(
     app_client, admin_headers, db_session, wiki_case,
 ):
@@ -376,9 +421,13 @@ def test_rebuild_does_not_overwrite_a_page_locked_during_generation(
         return "## 自动生成\n\n" + "生成内容不应覆盖并发的人工编辑。" * 5 + " [1]"
 
     monkeypatch.setattr(llm, "chat", edit_while_generating)
-    result = wiki.build_wiki(db_session, kb)
+    events = []
+    result = wiki.build_wiki(db_session, kb, on_progress=lambda *event: events.append(event))
     db_session.commit()
     assert called and result.pages_skipped == 1
+    assert [event for event in events if event[0] == "pages"] == [
+        ("pages", 0, 1), ("pages", 1, 1),
+    ]
     response = app_client.get(_page_url(wiki_case, "unlocked-old"), headers=admin_headers)
     assert response.status_code == 200
     assert response.json()["human_locked"] is True

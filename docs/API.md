@@ -54,7 +54,7 @@
 | GET | `/api/kbs` | 当前用户可见的知识库（admin 全部）。元素 = `serializers.kb_out()`（`serializers.py:85`），含 `my_level`；**列表不带 `index`** |
 | POST | `/api/kbs` | admin。`{name,description,mode}` mode=`basic`\|`wiki` |
 | GET | `/api/kbs/{id}` | 详情 = `kb_out()` + `index`（`kbs.py:67` 单独追加 `_index_status()`，`kbs.py:122`） |
-| PATCH | `/api/kbs/{id}` | admin。改名/描述/切换 mode（切到 wiki 不自动生成，需手动重建） |
+| PATCH | `/api/kbs/{id}` | admin。改名/描述/切换 mode；切到 wiki 时，没有 Wiki 页的知识库会在已有或正在入库的文档就绪后自动生成首次页面，已有页面可按需手动重建。 |
 | DELETE | `/api/kbs/{id}` | admin |
 | POST | `/api/kbs/{id}/rebuild` | manage。`{kind:"chunk"\|"wiki"}` → `{task_id}` |
 | GET | `/api/kbs/{id}/grants` | admin。`[{user_id,username,display_name,level}]` |
@@ -86,7 +86,7 @@
   "signature_mismatch": false, "pending_tasks": 0
 }
 ```
-`index.wiki_ready` 与顶层 `wiki_ready` 同源（`serializers.wiki_ready()`，`serializers.py:58`）；`wiki_current_units` 只统计非草稿页面当前版本的章节，`wiki_units` 仍包含历史章节。`signature_mismatch` / `active_embed_*` 用于判断「换 Embedding 后该库是否需要重建」，`pending_tasks` 是该库排队中与进行中的任务数。
+`index.wiki_ready` 与顶层 `wiki_ready` 同源（`serializers.wiki_ready()`，`serializers.py:58`）；`wiki_units` 与 `wiki_current_units` 均只统计可见、非草稿页面当前版本的章节。`signature_mismatch` / `active_embed_*` 用于判断「换 Embedding 后该库是否需要重建」，`pending_tasks` 是该库排队中与进行中的任务数。
 
 ## 5. 文档与任务
 
@@ -98,7 +98,7 @@
 | POST | `/api/documents/{id}/versions` | multipart `file` 上传新版本 → `{version_id,task_id}` |
 | GET | `/api/documents/{id}/download?version_id=` | 原文件下载（后端校验权限） |
 | GET | `/api/documents/{id}/chunks?page=` | 分块预览（含 locator/heading/向量维度） |
-| DELETE | `/api/documents/{id}` | 删除文档及其分块；Wiki 库触发重建任务 |
+| DELETE | `/api/documents/{id}` | 删除文档及其分块；Wiki 库触发重建任务。切换模式触发的首次 Wiki 生成排队或运行期间返回 409，待任务结束后可重试。 |
 | GET | `/api/tasks?status=&kb_id=` | 任务列表（轮询用） |
 | GET | `/api/tasks/{id}` | 单任务详情 |
 | POST | `/api/tasks/{id}/retry` | 失败任务重试 → `{task_id}` |

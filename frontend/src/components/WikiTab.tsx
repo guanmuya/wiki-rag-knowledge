@@ -59,9 +59,6 @@ export default function WikiTab({
   const previousInitialSlugRef = useRef(initialSlug)
   const deferredInitialSlugRef = useRef<string | null>(null)
   const deferredTreeSelectionRef = useRef(false)
-  const loadedWikiRef = useRef({
-    id: kb.id, readyAt: kb.wiki_ready_at, pending: kb.index?.pending_tasks ?? 0,
-  })
 
   const [versionsOpen, setVersionsOpen] = useState(false)
   const [versions, setVersions] = useState<WikiPageVersion[]>([])
@@ -88,25 +85,29 @@ export default function WikiTab({
     setDetailLoading(Boolean(next))
   }, [])
 
-  const loadTree = useCallback(async () => {
+  const loadTree = useCallback(async (background = false) => {
     const requestId = ++treeRequestRef.current
     const isCurrent = () =>
       mountedRef.current && requestId === treeRequestRef.current && currentKbIdRef.current === kb.id
-    setTreeLoading(true)
-    setTreeError(null)
+    if (!background) {
+      setTreeLoading(true)
+      setTreeError(null)
+    }
     try {
       const data = await wikiApi.tree(kb.id)
       if (!isCurrent()) return
       const list = [...(data.pages ?? [])].sort((a, b) => a.order_index - b.order_index)
       setPages(list)
       const current = selectedSlugRef.current
-      if (!current || !list.some((p) => p.slug === current)) {
+      if ((!current || !list.some((p) => p.slug === current)) && (!background || !current)) {
         selectSlug(list[0]?.slug ?? null)
       }
     } catch (err) {
       if (!isCurrent()) return
-      setTreeError(err)
-      setPages([])
+      if (!background) {
+        setTreeError(err)
+        setPages([])
+      }
     } finally {
       if (isCurrent()) setTreeLoading(false)
     }
@@ -153,23 +154,37 @@ export default function WikiTab({
     void loadTree()
   }, [loadTree])
 
+  const treeStateRef = useRef({
+    kbId: kb.id, pending: kb.index?.pending_tasks ?? 0, readyAt: kb.wiki_ready_at,
+    count: kb.stats?.wiki_page_count ?? 0, refresh: false, refreshDetail: false,
+  })
   useEffect(() => {
-    const previous = loadedWikiRef.current
     const pending = kb.index?.pending_tasks ?? 0
-    const next = { id: kb.id, readyAt: kb.wiki_ready_at, pending }
-    if (previous.id !== kb.id) {
-      loadedWikiRef.current = next
+    const count = kb.stats?.wiki_page_count ?? 0
+    const readyAt = kb.wiki_ready_at
+    const previous = treeStateRef.current
+    if (previous.kbId !== kb.id) {
+      treeStateRef.current = { kbId: kb.id, pending, count, readyAt, refresh: false, refreshDetail: false }
       return
     }
-    const finished = (previous.pending > 0 && pending === 0) ||
-      (Boolean(kb.wiki_ready_at) && previous.readyAt !== kb.wiki_ready_at)
-    if (finished && (editing || saving)) return
-    loadedWikiRef.current = next
-    if (!finished) return
-    // 后台任务结束后刷新页面；编辑中的草稿等退出编辑后再刷新。
-    void loadTree()
-    if (slug) void loadPage(slug)
-  }, [kb.id, kb.wiki_ready_at, kb.index?.pending_tasks, editing, saving, slug, loadTree, loadPage])
+    if ((previous.pending > 0 && pending === 0) || previous.count !== count ||
+        (Boolean(readyAt) && previous.readyAt !== readyAt)) {
+      previous.refresh = true
+    }
+    previous.pending = pending
+    previous.count = count
+    previous.readyAt = readyAt
+    // 编辑时仍更新目录，但保留选中页面与正文；详情等校对结束再刷新。
+    if (previous.refresh) {
+      previous.refresh = false
+      previous.refreshDetail = true
+      void loadTree(editing || saving)
+    }
+    if (previous.refreshDetail && !editing && !saving) {
+      previous.refreshDetail = false
+      if (selectedSlugRef.current) void loadPage(selectedSlugRef.current)
+    }
+  }, [kb.id, kb.index?.pending_tasks, kb.stats?.wiki_page_count, kb.wiki_ready_at, editing, saving, loadTree, loadPage])
 
   useEffect(() => {
     if (slug) void loadPage(slug)
@@ -325,15 +340,15 @@ export default function WikiTab({
     )
   }
 
-  if (pages.length === 0) {
+  if (pages.length === 0 && !(detail && (editing || saving))) {
     return (
       <div className="card">
         <EmptyState
-          title="该知识库还没有 Wiki 页面"
+          title="暂无可查看的 Wiki 页面"
           hint={
             kb.mode === 'wiki'
-              ? '文档入库完成后，在「设置」里点击「重建 Wiki」即可自动归纳生成页面。'
-              : '当前知识库为基础分块模式，切换到 Wiki 增强并重建后才会生成页面。'
+              ? '文档入库会触发 Wiki 生成；若页面暂不可用，请查看任务或联系管理员。'
+              : '当前为基础分块模式；切换到 Wiki 增强后可查看可用页面。'
           }
         />
       </div>

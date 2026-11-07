@@ -394,7 +394,7 @@ export default function KbListPage() {
           label="模式"
           hint={
             mode === 'wiki'
-              ? 'Wiki 增强：文档入库后需手动「重建 Wiki」，才会生成结构化页面。'
+              ? 'Wiki 增强：文档入库后自动生成结构化页面。'
               : '基础分块：只做解析与分块索引，问答按片段检索。'
           }
         >
