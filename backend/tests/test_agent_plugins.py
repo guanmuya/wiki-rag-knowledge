@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
+import time
 
 import pytest
 
@@ -111,6 +113,35 @@ def test_detection_reports_missing_binary(tmp_path, monkeypatch):
     result = plugins.detect(found[0])
     assert result["installed"] is False
     assert "未找到" in result["detect_error"]
+
+
+def test_version_probe_does_not_create_threads(monkeypatch):
+    """回归：探测版本不能靠新建线程。
+
+    v1.0.14 桌面版「正在加载 Agent 核心…」的根因：`subprocess.run(capture_output=True)`
+    要起读线程收输出，而当时预热线程正卡在 numpy 的 loader lock 上，`Thread.start()`
+    永远不返回，`GET /api/agent/cores` 跟着挂死。这里把 `Thread.start` 换成
+    「一调用就失败」，探测必须仍能正常返回。
+    """
+    started: list[object] = []
+
+    def _forbidden(self):            # pragma: no cover - 触发即说明回归
+        started.append(self)
+        raise AssertionError("版本探测不应创建线程")
+
+    monkeypatch.setattr(threading.Thread, "start", _forbidden)
+    assert plugins._run_version(
+        sys.executable, ("-c", "print('fake-agent 9.9')")) == "fake-agent 9.9"
+    assert started == []
+
+
+def test_version_probe_times_out_without_hanging(monkeypatch):
+    """CLI 卡住时必须按超时返回空串，而不是把请求线程一起拖住。"""
+    monkeypatch.setattr(plugins, "_VERSION_TIMEOUT_SECONDS", 0.3)
+    t0 = time.monotonic()
+    out = plugins._run_version(sys.executable, ("-c", "import time; time.sleep(30)"))
+    assert out == ""
+    assert time.monotonic() - t0 < 10
 
 
 def test_normalize_base_url():

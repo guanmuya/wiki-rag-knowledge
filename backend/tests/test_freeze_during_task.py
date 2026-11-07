@@ -258,3 +258,18 @@ def test_warmup_runs_in_background(monkeypatch):
 def test_warmup_disabled_by_env(isolated_env):
     """测试环境关掉预热（conftest 设了 WRK_WARMUP=0），避免后台线程干扰断言。"""
     assert warmup.ENABLED is False
+
+
+def test_warmup_does_not_touch_numpy_at_startup():
+    """回归：numpy / openpyxl 不能进预热名单。
+
+    v1.0.14 桌面版实测：后台线程加载 numpy 的 `_multiarray_umath.pyd` 会卡在
+    loader lock 上不返回，进程里所有 `Thread.start()`（CLI 版本探测、Agent 子
+    进程输出线程）跟着永久阻塞。numpy 只在 xlsx 解析 / 大库检索时才需要，
+    留在首次使用时加载。
+    """
+    assert "numpy" not in warmup.WARM_MODULES
+    assert "openpyxl" not in warmup.WARM_MODULES
+    # 解析库仍然要预热（上传 PDF/Word/PPT 的首次成本在这里消化）
+    assert "pypdf" in warmup.WARM_MODULES
+    assert "docx" in warmup.WARM_MODULES
