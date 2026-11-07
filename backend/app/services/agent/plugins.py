@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -320,18 +321,67 @@ def _command(path: str, args: tuple[str, ...] | list[str]) -> list[str]:
     return [path, *args]
 
 
-def _run_version(path: str, args: tuple[str, ...]) -> str:
-    kwargs: dict[str, Any] = dict(
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=6, cwd=str(config.AGENT_WORKSPACE_DIR),
-    )
+# 版本探测的硬超时（秒）。探测只是给界面显示一行版本号，不值得等太久。
+_VERSION_TIMEOUT_SECONDS = 6
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """结束探测进程及其子进程。
+
+    Windows 上 `cmd.exe /c claude.cmd` 会再拉起 node，只 kill cmd.exe 会把
+    node 留在后台；所以优先用 taskkill /T 杀整棵树。
+    """
     if os.name == "nt":
-        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
     try:
-        proc = subprocess.run(_command(path, list(args)), **kwargs)
+        proc.kill()
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=5)
     except (OSError, subprocess.SubprocessError):
-        return ""
-    raw = (proc.stdout or "") + "\n" + (proc.stderr or "")
+        pass
+
+
+def _run_version(path: str, args: tuple[str, ...]) -> str:
+    """探测 CLI 的版本行；失败/超时返回空串。
+
+    为什么不用 `subprocess.run(capture_output=True)`（v1.0.14 事故）：
+    Windows 上它靠两个读线程收 stdout/stderr，而 `Thread.start()` 要等
+    Windows 的 loader lock。打包版启动预热线程正在加载原生模块（numpy /
+    OpenBLAS）时，loader lock 被占住，这个探测线程就会**永久**卡在
+    `Thread.start()`，`GET /api/agent/cores` 永不返回，界面一直停在
+    「正在加载 Agent 核心…」。这里把输出重定向到临时文件，只用
+    `wait(timeout)` 等进程退出，全程不创建任何线程。
+    """
+    with tempfile.TemporaryFile() as sink:
+        kwargs: dict[str, Any] = dict(
+            stdin=subprocess.DEVNULL, stdout=sink, stderr=subprocess.STDOUT,
+            cwd=str(config.AGENT_WORKSPACE_DIR),
+        )
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            proc = subprocess.Popen(_command(path, list(args)), **kwargs)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        try:
+            proc.wait(timeout=_VERSION_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            return ""
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        sink.seek(0)
+        raw = sink.read().decode("utf-8", "replace")
     for line in raw.splitlines():
         line = line.strip()
         if line:

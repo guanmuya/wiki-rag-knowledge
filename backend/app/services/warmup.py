@@ -1,8 +1,8 @@
 """启动后台预热：把「首次 import 原生模块」的成本从用户任务里挪走。
 
 背景（同 `services/threadpool.py` 里的事故记录）：打包版第一次 import
-numpy / lxml / pypdf / docx / openpyxl / pptx 时要去加载 DLL，Windows 上
-必须拿 loader lock；杀软首次扫描新解压的 `_MEI` 目录时，这一步能拖到几十秒。
+lxml / pypdf / docx / pptx 时要去加载 DLL，Windows 上必须拿 loader lock；
+杀软首次扫描新解压的 `_MEI` 目录时，这一步能拖到几十秒。
 
 这段成本本身无法消除，但可以决定**由谁付**：
 
@@ -13,8 +13,8 @@ numpy / lxml / pypdf / docx / openpyxl / pptx 时要去加载 DLL，Windows 上
 所以这里在 lifespan 里起一个 daemon 线程做预热，**不阻塞启动**、不碰数据库、
 失败也只记一行日志 —— 它只是把首次成本提前，不影响任何功能。
 
-顺序按「用户最可能先碰到」排：解析库在前（任何一次上传都要用），
-向量库在后（只有真实 embedding / 大库检索才用 numpy）。
+注意：numpy / openpyxl **不在**预热名单里，原因见下面 WARM_MODULES 的注释
+（它们的首次加载会在打包版里卡住 loader lock，把整个进程的线程创建一起拖死）。
 """
 from __future__ import annotations
 
@@ -31,13 +31,19 @@ log = logging.getLogger("wrk.warmup")
 ENABLED = os.getenv("WRK_WARMUP", "1") == "1"
 
 # 预热顺序：解析库（每次上传都会用）→ 向量库（检索/大库才用）。
+#
+# 为什么**不预热 numpy / openpyxl**（v1.0.14 事故）：openpyxl 会 import numpy，
+# 而 numpy 的 `_multiarray_umath.pyd` + OpenBLAS 是打包版里最大的原生加载。
+# 实测（Windows 桌面版）后台线程加载它时会卡在 `create_module` 的 loader lock
+# 上不返回，进而让进程里**所有** `Thread.start()` 一起卡死：CLI 版本探测、
+# Agent 子进程输出线程、请求收尾全部挂住，界面停在「正在加载 Agent 核心…」。
+# 解析库（pypdf/docx/pptx/lxml）没有这个问题，仍照常预热；numpy 只在解析
+# xlsx、或候选向量超过 64 条时才需要，首次使用再加载（实测正常，约 1 秒）。
 WARM_MODULES: tuple[str, ...] = (
     "pypdf",
     "docx",
-    "openpyxl",
     "pptx",
     "lxml.html",
-    "numpy",
 )
 
 _thread: threading.Thread | None = None
