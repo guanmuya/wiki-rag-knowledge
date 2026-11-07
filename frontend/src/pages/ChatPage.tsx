@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useAuth, useToast } from '../auth'
 import { ApiError, chatApi, getToken, kbApi } from '../api'
@@ -12,7 +12,7 @@ import type {
   PipelineStep,
   ThinkingStream,
 } from '../types'
-import { errorText, formatMs, formatTime } from '../utils'
+import { errorText, formatMs, formatTime, parseApiTime } from '../utils'
 import { Button, ErrorState, Modal, SkeletonLines, Spinner, TextInput } from '../components/ui'
 import { Markdown } from '../components/Markdown'
 import { MessageInsights } from '../components/Evidence'
@@ -157,6 +157,43 @@ function applyStreamEvent(job: AskJob, event: AskStreamEvent) {
   }
 }
 
+/** 置顶图钉：实心表示已置顶。 */
+function PinIcon({ filled = false, size = 13 }: { filled?: boolean; size?: number }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      width={size}
+      height={size}
+      fill={filled ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M7.4 2.8h5.2l-.6 4.3 2.5 2.1v1.2H5.5V9.2l2.5-2.1-.6-4.3Z" />
+      <path d="M10 10.4v6.8" />
+    </svg>
+  )
+}
+
+/**
+ * 会话条目的时间标签：今天只显示时分，昨天显示「昨天」，同年显示月/日。
+ * 比完整时间戳短，才能在窄侧栏里和消息数并排，又不挤掉标题。
+ */
+function convTimeLabel(value: string | null): string {
+  const d = parseApiTime(value)
+  if (!d) return ''
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  if (d.toDateString() === now.toDateString()) return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  const yesterday = new Date(now)
+  yesterday.setDate(now.getDate() - 1)
+  if (d.toDateString() === yesterday.toDateString()) return '昨天'
+  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}/${d.getDate()}`
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`
+}
+
 export default function ChatPage() {
   const { conversationId } = useParams<{ conversationId: string }>()
   const navigate = useNavigate()
@@ -242,6 +279,7 @@ export default function ChatPage() {
   const [renameBusy, setRenameBusy] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
+  const [pinBusyId, setPinBusyId] = useState<number | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -706,11 +744,29 @@ export default function ChatPage() {
     }
   }
 
+  const togglePin = async (conv: Conversation) => {
+    if (pinBusyId !== null) return
+    const pinned = !conv.pinned
+    setPinBusyId(conv.id)
+    try {
+      await chatApi.update(conv.id, { pinned })
+      if (session !== getToken()) return
+      // 排序由服务端负责（置顶优先、最近更新优先），切换后重新取列表即可。
+      await loadConversations()
+      if (session === getToken()) push(pinned ? '会话已置顶' : '已取消置顶', 'success')
+    } catch (err) {
+      if (session === getToken()) push(errorText(err), 'error')
+    } finally {
+      if (mountedRef.current && session === getToken()) setPinBusyId(null)
+    }
+  }
+
   const openWikiPage = (kbId: number, slug: string) => {
     navigate(`/kbs/${kbId}?tab=wiki&slug=${encodeURIComponent(slug)}`)
   }
 
   const visibleKbs = kbs
+  const pinnedCount = conversations.filter((c) => c.pinned).length
 
   // A pending server message also covers a page reload or an HTTP timeout.
   useEffect(() => {
@@ -749,7 +805,7 @@ export default function ChatPage() {
               <IconClose size={16} />
             </button>
           </div>
-          <div className="conv-list">
+          <div className="conv-list chat-conv-list">
             {convError ? (
               <div className="tiny" style={{ padding: 10, color: 'var(--c-danger)' }}>
                 会话列表加载失败 <button type="button" className="btn-link" onClick={() => void loadConversations()}>重试会话列表</button>
@@ -760,70 +816,92 @@ export default function ChatPage() {
                 <SkeletonLines rows={4} />
               </div>
             ) : !convLoaded && convError ? null : conversations.length === 0 ? (
-              <div className="tiny muted" style={{ padding: 12, textAlign: 'center' }}>
-                还没有会话
-              </div>
+              <div className="chat-conv-empty">还没有会话</div>
             ) : (
-              conversations.map((c) => (
-                <div key={c.id} className={`conv-item ${activeId === c.id ? 'active' : ''}`}>
-                  <Link
-                    to={`/chat/${c.id}`}
-                    className="conv-title"
-                    title={c.title}
-                    aria-current={activeId === c.id ? 'page' : undefined}
-                    onClick={() => {
-                      if (viewRef.current && activeId !== c.id) viewRef.current.intent += 1
-                      if (sidebarOpen) closeSidebar()
-                    }}
-                  >
-                    {c.title}
-                  </Link>
-                  <span className="conv-actions">
-                    <button
-                      type="button"
-                      title="重命名"
-                      aria-label={`重命名会话：${c.title}`}
+              conversations.map((c, index) => (
+                <Fragment key={c.id}>
+                  {c.pinned && index === 0 ? <div className="chat-conv-group">置顶</div> : null}
+                  {!c.pinned && pinnedCount > 0 && index === pinnedCount ? (
+                    <div className="chat-conv-group">最近会话</div>
+                  ) : null}
+                  <div className={`chat-conv-item ${activeId === c.id ? 'active' : ''}`}>
+                    <Link
+                      to={`/chat/${c.id}`}
+                      className="chat-conv-link"
+                      title={c.title}
+                      aria-current={activeId === c.id ? 'page' : undefined}
                       onClick={() => {
-                        setRenameTarget(c)
-                        setRenameText(c.title)
+                        if (viewRef.current && activeId !== c.id) viewRef.current.intent += 1
+                        if (sidebarOpen) closeSidebar()
                       }}
                     >
-                      <svg
-                        viewBox="0 0 20 20"
-                        width="14"
-                        height="14"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        aria-hidden="true"
+                      <span className="chat-conv-title">
+                        {c.pinned ? (
+                          <span className="chat-conv-pin" aria-hidden="true"><PinIcon filled size={12} /></span>
+                        ) : null}
+                        <span className="chat-conv-title-text">{c.title}</span>
+                      </span>
+                      <span className="chat-conv-meta">
+                        {convTimeLabel(c.updated_at)} · {c.message_count > 0 ? `${c.message_count} 条消息` : '暂无消息'}
+                      </span>
+                    </Link>
+                    <span className="chat-conv-actions">
+                      <button
+                        type="button"
+                        title={c.pinned ? '取消置顶' : '置顶会话'}
+                        aria-label={`${c.pinned ? '取消置顶' : '置顶'}会话：${c.title}`}
+                        aria-pressed={c.pinned}
+                        disabled={pinBusyId === c.id}
+                        onClick={() => void togglePin(c)}
                       >
-                        <path d="m3.5 16.5 3.3-.7 8.7-8.7a2.1 2.1 0 0 0-3-3l-8.3 8.7-.7 3.7ZM11.7 5.3l3 3" />
-                      </svg>
-                    </button>
-                    <button
-                      type="button"
-                      title="删除"
-                      aria-label={`删除会话：${c.title}`}
-                      onClick={() => setDeleteTarget(c)}
-                    >
-                      <svg
-                        viewBox="0 0 20 20"
-                        width="14"
-                        height="14"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        aria-hidden="true"
+                        <PinIcon filled={c.pinned} />
+                      </button>
+                      <button
+                        type="button"
+                        title="重命名"
+                        aria-label={`重命名会话：${c.title}`}
+                        onClick={() => {
+                          setRenameTarget(c)
+                          setRenameText(c.title)
+                        }}
                       >
-                        <path d="M4 5.5h12M7.5 5.5V4h5v1.5M5.5 5.5l.6 10.2c0 .7.6 1.3 1.3 1.3h5.2c.7 0 1.3-.6 1.3-1.3l.6-10.2M8 8.5v5.5M12 8.5v5.5" />
-                      </svg>
-                    </button>
-                  </span>
-                </div>
+                        <svg
+                          viewBox="0 0 20 20"
+                          width="14"
+                          height="14"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="m3.5 16.5 3.3-.7 8.7-8.7a2.1 2.1 0 0 0-3-3l-8.3 8.7-.7 3.7ZM11.7 5.3l3 3" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        title="删除"
+                        aria-label={`删除会话：${c.title}`}
+                        onClick={() => setDeleteTarget(c)}
+                      >
+                        <svg
+                          viewBox="0 0 20 20"
+                          width="14"
+                          height="14"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M4 5.5h12M7.5 5.5V4h5v1.5M5.5 5.5l.6 10.2c0 .7.6 1.3 1.3 1.3h5.2c.7 0 1.3-.6 1.3-1.3l.6-10.2M8 8.5v5.5M12 8.5v5.5" />
+                        </svg>
+                      </button>
+                    </span>
+                  </div>
+                </Fragment>
               ))
             )}
           </div>

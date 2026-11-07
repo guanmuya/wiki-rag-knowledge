@@ -117,6 +117,7 @@ class ConversationIn(BaseModel):
 class ConversationUpdateIn(BaseModel):
     title: str | None = None
     kb_ids: list[int] | None = None
+    pinned: bool | None = None
 
 
 class AskIn(BaseModel):

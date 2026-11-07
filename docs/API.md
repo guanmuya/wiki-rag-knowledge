@@ -130,10 +130,10 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/conversations` | 我的会话列表 |
+| GET | `/api/conversations` | 我的会话列表（置顶优先，其次按最近更新；条目含 `pinned`、`message_count`） |
 | POST | `/api/conversations` | `{title,kb_ids}` |
 | GET | `/api/conversations/{id}` | 含 `messages:[{id,role,content,kb_ids,evidence,route,latency_ms,status,created_at,insufficient,usage,suggestions,refusal_reason}]`（`serializers.message_out()`） |
-| PATCH | `/api/conversations/{id}` | 改标题 / 换知识库选择 |
+| PATCH | `/api/conversations/{id}` | 改标题 / 换知识库选择 / 置顶（`pinned: true/false`） |
 | DELETE | `/api/conversations/{id}` | 删除 |
 | POST | `/api/conversations/{id}/ask` | `{question,kb_ids?,top_k?}` → `{content, message, evidence, route, usage, insufficient, citations, suggestions, refusal_reason, denied}` |
 | POST | `/api/conversations/{id}/ask/stream` | 同上请求体；SSE 流式推送思考步骤、答案增量与最终结果（见 7.1） |

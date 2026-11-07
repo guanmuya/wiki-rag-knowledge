@@ -103,7 +103,7 @@ def recover_pending_messages() -> int:
 def list_conversations(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     convs = db.execute(
         select(models.Conversation).where(models.Conversation.user_id == user.id)
-        .order_by(models.Conversation.updated_at.desc()).limit(100)
+        .order_by(models.Conversation.pinned.desc(), models.Conversation.updated_at.desc()).limit(100)
     ).scalars().all()
     counts = dict(db.execute(
         select(models.Message.conversation_id, func.count(models.Message.id))
@@ -166,6 +166,8 @@ def update_conversation(cid: int, body: schemas.ConversationUpdateIn, db: Sessio
     if body.kb_ids is not None:
         allowed, _ = _allowed_kbs(db, user, body.kb_ids)
         conv.kb_ids = json.dumps([kb.id for kb in allowed])
+    if body.pinned is not None:
+        conv.pinned = body.pinned
     db.add(conv)
     db.commit()
     return serializers.conversation_out(conv)
