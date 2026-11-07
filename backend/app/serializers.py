@@ -298,6 +298,7 @@ def conversation_out(c: models.Conversation, *, message_count: int = 0) -> dict:
     return {
         "id": c.id, "title": c.title, "kb_ids": kb_ids,
         "message_count": message_count,
+        "pinned": bool(c.pinned),
         "created_at": iso(c.created_at), "updated_at": iso(c.updated_at),
     }
 

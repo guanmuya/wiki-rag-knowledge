@@ -493,6 +493,7 @@ export interface Conversation {
   title: string
   kb_ids: number[]
   message_count: number
+  pinned: boolean
   created_at: string | null
   updated_at: string | null
 }

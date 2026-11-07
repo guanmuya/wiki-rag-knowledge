@@ -1593,7 +1593,8 @@ code {
 .conv-item:hover .conv-actions,
 .conv-item:focus-within .conv-actions,
 .conv-item.active .conv-actions { display: inline-flex; }
-.conv-actions button {
+.conv-actions button,
+.chat-conv-actions button {
   display: grid;
   place-items: center;
   width: 24px;
@@ -1605,9 +1606,85 @@ code {
   color: var(--c-text-secondary);
   cursor: pointer;
 }
-.conv-actions button:hover { background: rgba(59, 130, 246, 0.12); color: var(--c-primary); }
+.conv-actions button:hover,
+.chat-conv-actions button:hover { background: rgba(59, 130, 246, 0.12); color: var(--c-primary); }
+.chat-conv-actions button:disabled { opacity: 0.5; cursor: progress; }
 @media (hover: none) {
   .conv-item .conv-actions { display: inline-flex; }
+}
+
+/* 问答页会话列表：卡片式条目 + 置顶分组 + 时间/消息数。
+   目的是不悬停也能看出「一条会话到哪里结束」，并让置顶状态始终可见。 */
+.chat-conv-list { gap: 6px; padding: 10px 10px 16px; }
+.chat-conv-group {
+  padding: 8px 6px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--c-text-muted);
+}
+.chat-conv-item {
+  position: relative;
+  border: 1px solid var(--c-hairline);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-xs);
+  transition: border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+}
+.chat-conv-item:hover { border-color: var(--c-border-strong); box-shadow: var(--shadow-sm); }
+.chat-conv-item.active {
+  border-color: #b7d0f5;
+  background: var(--c-primary-soft);
+  box-shadow: inset 3px 0 0 var(--c-primary);
+}
+.chat-conv-link {
+  display: block;
+  padding: 9px 11px 9px 12px;
+  border-radius: inherit;
+  color: inherit;
+}
+.chat-conv-link:hover { color: inherit; text-decoration: none; }
+.chat-conv-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--c-text);
+}
+.chat-conv-title-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-conv-item.active .chat-conv-title { color: var(--c-primary); font-weight: 600; }
+.chat-conv-pin { display: inline-flex; flex: 0 0 auto; color: var(--c-primary); }
+.chat-conv-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--c-text-muted);
+}
+.chat-conv-actions {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  display: inline-flex;
+  gap: 1px;
+  padding: 1px;
+  border-radius: var(--radius-xs);
+  background: var(--c-surface);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.chat-conv-item:hover .chat-conv-actions,
+.chat-conv-item:focus-within .chat-conv-actions,
+.chat-conv-item.active .chat-conv-actions { opacity: 1; pointer-events: auto; }
+.chat-conv-item.active .chat-conv-actions { background: var(--c-primary-soft); }
+.chat-conv-empty { padding: 14px 12px; text-align: center; font-size: 12px; color: var(--c-text-muted); }
+@media (hover: none) {
+  .chat-conv-actions { opacity: 1; pointer-events: auto; }
 }
 
 .chat-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }

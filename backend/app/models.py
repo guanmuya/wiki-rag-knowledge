@@ -371,6 +371,8 @@ class Conversation(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(String(255), default="新会话")
     kb_ids: Mapped[str] = mapped_column(Text, default="[]")
+    # 置顶：列表里始终排在普通会话之前，由用户手动切换。
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

@@ -601,7 +601,7 @@ export const chatApi = {
   create: (title: string, kb_ids: number[]) =>
     request<Conversation>('/conversations', { method: 'POST', body: { title, kb_ids } }),
   get: (id: number) => request<ConversationDetail>(`/conversations/${id}`),
-  update: (id: number, payload: { title?: string; kb_ids?: number[] }) =>
+  update: (id: number, payload: { title?: string; kb_ids?: number[]; pinned?: boolean }) =>
     request<Conversation>(`/conversations/${id}`, { method: 'PATCH', body: payload }),
   remove: (id: number) => request<{ ok: boolean }>(`/conversations/${id}`, { method: 'DELETE' }),
   ask: (id: number, question: string, kb_ids?: number[], top_k?: number) =>
