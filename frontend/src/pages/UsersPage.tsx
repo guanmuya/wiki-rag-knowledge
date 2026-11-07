@@ -218,7 +218,6 @@ export default function UsersPage() {
       <div className="page-head">
         <div>
           <h1>用户管理</h1>
-          <div className="sub">创建员工账号、分配知识库权限、重置密码。管理员默认拥有全部知识库的管理权限。</div>
         </div>
         <div className="spacer" />
         <div className="page-head-actions">

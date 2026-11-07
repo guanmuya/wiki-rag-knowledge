@@ -108,9 +108,6 @@ export default function SearchPage() {
       <div className="page-head">
         <div>
           <h1>检索调试</h1>
-          <div className="sub">
-            只跑检索、不生成回答：观察候选数量、查询词覆盖率、通道名次与路由决策，用于调参与实验复现。
-          </div>
         </div>
         <div className="spacer" />
         <div className="page-head-actions">
@@ -179,9 +176,6 @@ export default function SearchPage() {
                   {error}
                 </div>
               ) : null}
-              <div className="tiny muted" style={{ marginTop: 8 }}>
-                已选 {selected.length} 个知识库 · 等价于 POST /api/search/preview，不写会话、不调用生成模型
-              </div>
             </>
           )}
         </div>
@@ -197,10 +191,7 @@ export default function SearchPage() {
         </div>
       ) : !result ? (
         <div className="card">
-          <EmptyState
-            title="还没有检索结果"
-            hint="选择知识库并输入查询语句，运行后这里会展示证据列表与路由信息。"
-          />
+          <EmptyState title="还没有检索结果" />
         </div>
       ) : (
         <div className="col" style={{ gap: 16 }}>

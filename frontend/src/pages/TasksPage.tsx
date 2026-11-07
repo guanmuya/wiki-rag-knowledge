@@ -94,9 +94,6 @@ export default function TasksPage() {
       <div className="page-head">
         <div>
           <h1>任务中心</h1>
-          <div className="sub">
-            文档入库、索引重建与 Wiki 生成任务。运行中的任务每 2 秒自动刷新，全部结束后停止轮询。
-          </div>
         </div>
         <div className="spacer" />
         <div className="page-head-actions">

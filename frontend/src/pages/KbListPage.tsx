@@ -159,11 +159,6 @@ export default function KbListPage() {
       <div className="page-head">
         <div>
           <h1>知识库</h1>
-          <div className="sub">
-            {isAdmin
-              ? '管理员可见全部知识库，可新建、配置与重建索引。'
-              : '这里只列出已授权给你的知识库，权限等级决定你能否上传与校对。'}
-          </div>
         </div>
         <div className="spacer" />
         <div className="page-head-actions">
