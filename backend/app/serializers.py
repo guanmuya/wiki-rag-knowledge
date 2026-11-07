@@ -113,11 +113,25 @@ def kb_out(db: Session, kb: models.KnowledgeBase, *, my_level: str | None = None
         select(func.count(models.WikiPage.id)).where(models.WikiPage.kb_id == kb.id)
     ).scalar() or 0
     published = wiki_published_count(db, kb.id)
+    status_label = STATUS_LABEL.get(kb.status, kb.status)
+    status_detail = kb.status_detail
+    if kb.status == models.KbStatus.indexing.value:
+        active_tasks = db.execute(
+            select(models.Task.kind, models.Task.status).where(
+                models.Task.kb_id == kb.id,
+                models.Task.status.in_([models.TaskStatus.queued.value, models.TaskStatus.running.value]),
+            )
+        ).all()
+        # 只在没有其他类型的活动任务时区分 Wiki 构建，避免掩盖文档入库或向量重建。
+        if active_tasks and all(kind == models.TaskKind.rebuild_wiki.value for kind, _ in active_tasks):
+            running = any(status == models.TaskStatus.running.value for _, status in active_tasks)
+            status_label = "Wiki 生成中" if running else "Wiki 排队中"
+            status_detail = "分块检索可用" if chunk_count else "尚无分块索引"
     return {
         "id": kb.id, "name": kb.name, "description": kb.description, "mode": kb.mode,
         "mode_label": MODE_LABEL.get(kb.mode, kb.mode),
-        "status": kb.status, "status_label": STATUS_LABEL.get(kb.status, kb.status),
-        "status_detail": kb.status_detail,
+        "status": kb.status, "status_label": status_label,
+        "status_detail": status_detail,
         "embed_signature": kb.embed_signature, "embed_dim": kb.embed_dim,
         "wiki_ready": bool(published),
         "my_level": my_level, "created_at": iso(kb.created_at),

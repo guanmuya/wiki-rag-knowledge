@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useAuth, useToast } from '../auth'
 import { kbApi } from '../api'
 import type { KnowledgeBase } from '../types'
-import { formatTime, kbStatusLabel, modeLabel, taskStatusClass } from '../utils'
+import { formatTime, kbStatusLabel, modeLabel, taskStatusClass, usePolling } from '../utils'
 import { Badge, Button, ErrorState, SkeletonLines, Tabs } from '../components/ui'
 import DocumentsTab from '../components/DocumentsTab'
 import WikiTab from '../components/WikiTab'
@@ -50,6 +50,15 @@ export default function KbDetailPage() {
     setLoading(true)
     void load()
   }, [load])
+
+  const refreshStatus = useCallback(async () => {
+    try {
+      setKb(await kbApi.get(kbId))
+    } catch {
+      // 短暂刷新失败时保留现有页面，下一次轮询继续尝试。
+    }
+  }, [kbId])
+  usePolling(refreshStatus, 2000, (kb?.index?.pending_tasks ?? 0) > 0)
 
   const setTab = (next: TabKey) => {
     const params = new URLSearchParams(searchParams)

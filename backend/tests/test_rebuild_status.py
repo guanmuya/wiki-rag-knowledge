@@ -12,9 +12,9 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app import models
+from app import models, serializers
 from app.db import Base
-from app.services import worker
+from app.services import retrieval, worker
 
 
 def _make_kb(db, name: str, *, mode: str = "basic", chunks: int = 3):
@@ -103,3 +103,54 @@ def test_reconcile_clears_only_stale_indexing_kbs():
         assert db.get(models.KnowledgeBase, ready.id).status == models.KbStatus.ready.value
         assert db.get(models.KnowledgeBase, empty.id).status == models.KbStatus.empty.value
         assert db.get(models.KnowledgeBase, queued.id).status == models.KbStatus.indexing.value
+
+
+@pytest.mark.parametrize(("status", "label"), [
+    ("queued", "Wiki 排队中"),
+    ("running", "Wiki 生成中"),
+])
+def test_wiki_rebuild_status_reports_available_chunks(db_session, app_client, admin_headers, status, label):
+    kb = _make_kb(db_session, "Wiki状态", mode="wiki")
+    task = models.Task(kind="rebuild_wiki", status=status, kb_id=kb.id)
+    db_session.add(task)
+    db_session.commit()
+
+    # 和真实检索路由对照，而不是把「索引中」误当作库不可用。
+    assert retrieval.plan_route(db_session, kb)[0] == "chunk"
+    detail = app_client.get(f"/api/kbs/{kb.id}", headers=admin_headers).json()
+    listed = next(item for item in app_client.get("/api/kbs", headers=admin_headers).json()["items"]
+                  if item["id"] == kb.id)
+    for result in (detail, listed):
+        assert result["status"] == "indexing"  # 原有 API 状态保持兼容
+        assert result["status_label"] == label
+        assert result["status_detail"] == "分块检索可用"
+    db_session.delete(task)
+    db_session.commit()
+
+
+def test_wiki_rebuild_does_not_mask_other_active_work(db_session):
+    kb = _make_kb(db_session, "混合状态", mode="wiki")
+    tasks = [
+        models.Task(kind="rebuild_wiki", status="queued", kb_id=kb.id),
+        models.Task(kind="reindex_kb", status="running", kb_id=kb.id),
+    ]
+    db_session.add_all(tasks)
+    db_session.commit()
+    result = serializers.kb_out(db_session, kb)
+    assert result["status_label"] == "索引中"
+    assert result["status_detail"] == kb.status_detail
+    for task in tasks:
+        db_session.delete(task)
+    db_session.commit()
+
+
+def test_wiki_rebuild_without_chunks_does_not_claim_availability(db_session):
+    kb = _make_kb(db_session, "无分块", mode="wiki", chunks=0)
+    task = models.Task(kind="rebuild_wiki", status="running", kb_id=kb.id)
+    db_session.add(task)
+    db_session.commit()
+    result = serializers.kb_out(db_session, kb)
+    assert result["status_label"] == "Wiki 生成中"
+    assert result["status_detail"] == "尚无分块索引"
+    db_session.delete(task)
+    db_session.commit()

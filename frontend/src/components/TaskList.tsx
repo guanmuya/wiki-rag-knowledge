@@ -100,6 +100,7 @@ export default function TaskList({
         const heartbeat = formatSince(beatAt, now)
         const heartbeatLabel = task.updated_at ? '最近更新' : '已运行'
         const isStale = stale.has(task.id)
+        const wikiRebuild = task.kind === 'rebuild_wiki'
         return (
           <div className="task-item" key={task.id}>
             <div className="task-head">
@@ -134,11 +135,15 @@ export default function TaskList({
 
             {running ? (
               <div className="row" style={{ gap: 10 }}>
-                <div style={{ flex: 1, maxWidth: 320 }}>
-                  <ProgressBar value={task.progress} />
-                </div>
+                {wikiRebuild ? (
+                  task.status === 'running' ? <Spinner size={14} /> : null
+                ) : (
+                  <div style={{ flex: 1, maxWidth: 320 }}>
+                    <ProgressBar value={task.progress} />
+                  </div>
+                )}
                 <span className="task-stage">
-                  {task.stage ? `${task.stage}` : '处理中'} · {task.progress}%
+                  {task.stage || '处理中'}{wikiRebuild ? null : ` · ${task.progress}%`}
                   {/* 排队中的任务还没开始跑：等待时长在行首右侧已经显示过一次，
                       这里不再重复「已排队」，也不该说「已运行」。 */}
                   {task.status === 'queued' ? null : (
@@ -158,7 +163,7 @@ export default function TaskList({
             {isStale ? (
               <div className="task-hint" role="status">
                 <span className="task-hint-icon"><IconClock size={13} /></span>
-                <span>{staleHintText(task.status)}</span>
+                <span>{staleHintText(task.status, task.kind)}</span>
               </div>
             ) : null}
 
@@ -244,9 +249,12 @@ function useStaleTasks(tasks: Task[], now: number): Set<number> {
  * 排队中与执行中是两种不同的等待：前者在等轮到自己，后者在等写锁，
  * 说成同一句会让用户以为「排队也在写数据库」。
  */
-function staleHintText(status: string): string {
+function staleHintText(status: string, kind: string): string {
   if (status === 'queued') {
     return '排队超过 30 秒仍未开始，可能在等待其它任务写入，可稍后再看（不是失败）。'
+  }
+  if (kind === 'rebuild_wiki') {
+    return '当前阶段尚未完成，Wiki 生成可能需要较长时间，请稍后查看。'
   }
   return '超过 30 秒没有新进展，可能在等待其它任务写入，可点重试或稍后再看（任务仍在后台运行，不是失败）。'
 }

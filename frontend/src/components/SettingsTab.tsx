@@ -64,6 +64,7 @@ export default function SettingsTab({
   }, [loadTasks])
 
   const hasRunning = tasks.some((t) => isRunningStatus(t.status))
+  const wikiTask = tasks.find((t) => t.kind === 'rebuild_wiki' && isRunningStatus(t.status))
   usePolling(loadTasks, 2000, hasRunning)
 
   const dirty = name !== kb.name || description !== kb.description || mode !== kb.mode
@@ -204,7 +205,12 @@ export default function SettingsTab({
                 </dd>
                 <dt>Wiki 索引</dt>
                 <dd>
-                  {kb.wiki_ready ? (
+                  {wikiTask ? (
+                    <span className="muted">
+                      {wikiTask.status === 'queued' ? '等待生成' : '生成中'}
+                      {kb.wiki_ready ? ` · 已有 ${kb.stats?.wiki_page_count ?? 0} 个页面` : ''}
+                    </span>
+                  ) : kb.wiki_ready ? (
                     <span className="test-ok">已就绪 · {kb.stats?.wiki_page_count ?? 0} 个页面</span>
                   ) : (
                     <span className="muted">未生成</span>
