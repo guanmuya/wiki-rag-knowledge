@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import config, models
+from .. import config, models, wiki_visibility
 from . import retrieval
 
 log = logging.getLogger("wrk.answer")
@@ -263,6 +263,7 @@ def _wiki_page_titles(db: Session, kb_ids: list[int], limit: int) -> list[tuple[
             models.WikiPage.kb_id.in_(kb_ids),
             models.WikiPage.status != models.WikiPageStatus.draft.value,
             models.WikiPage.current_version_id.is_not(None),
+            wiki_visibility.visible_page(),
         ).order_by(models.WikiPage.order_index, models.WikiPage.id).limit(limit)
     ).all()
     return [(r[0], r[1] or "") for r in rows]
@@ -275,6 +276,7 @@ def _wiki_section_topics(db: Session, kb_ids: list[int], limit: int) -> list[tup
         models.WikiPage.kb_id.in_(kb_ids),
         models.WikiPage.status != models.WikiPageStatus.draft.value,
         models.WikiPage.current_version_id.is_not(None),
+        wiki_visibility.visible_page(),
     )
     rows = db.execute(
         select(models.WikiSection.kb_id, models.WikiSection.heading_path).where(
@@ -290,8 +292,10 @@ def _chunk_topics(db: Session, kb_ids: list[int], limit: int) -> list[tuple[int,
     if not kb_ids or limit <= 0:
         return []
     rows = db.execute(
-        select(models.Chunk.kb_id, models.Chunk.heading).where(
+        select(models.Chunk.kb_id, models.Chunk.heading)
+        .join(models.Document, models.Document.id == models.Chunk.doc_id).where(
             models.Chunk.kb_id.in_(kb_ids),
+            models.Document.deleted.is_(False),
             models.Chunk.heading != "",
         ).order_by(models.Chunk.kb_id, models.Chunk.ordinal).limit(limit * 4)
     ).all()

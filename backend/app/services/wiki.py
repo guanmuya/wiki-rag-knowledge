@@ -18,10 +18,10 @@ import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
-from .. import config, models
+from .. import config, models, wiki_visibility
 from . import chunking, llm
 
 log = logging.getLogger("wrk.wiki")
@@ -395,12 +395,13 @@ def _extract_evidence(page_md: str, picked: list[models.Chunk], all_chunks: list
                 continue
             used_ids.add(c.id)
             links.append({"chunk": c, "quote": c.text.strip()[:400], "locator": c.locator})
-    if not links:
-        for c in picked:
-            if c.id in used_ids:
-                continue
-            used_ids.add(c.id)
-            links.append({"chunk": c, "quote": c.text.strip()[:400], "locator": c.locator})
+    # Every topic source can influence the title, summary or body, even if the
+    # model cites only some of them. Keep those associations for later deletion.
+    for c in picked:
+        if c.id in used_ids:
+            continue
+        used_ids.add(c.id)
+        links.append({"chunk": c, "quote": c.text.strip()[:400], "locator": c.locator})
     return links
 
 
@@ -562,6 +563,20 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
                 stats.mode = "offline"
                 stats.add_note("页面正文使用抽取式拼装")
 
+        links = _extract_evidence(content, [chunks[i - 1] for i in ids], chunks)
+        if page is not None:
+            # Acquire the write lock, then re-read: a human may have edited and
+            # locked this page while the model was generating its replacement.
+            db.execute(update(models.WikiPage).where(models.WikiPage.id == page.id)
+                       .values(updated_at=models.WikiPage.updated_at))
+            db.refresh(page)
+            if page.human_locked and not force:
+                page.status = models.WikiPageStatus.needs_review.value
+                db.commit()
+                result.pages_skipped += 1
+                result.notes.append(f"《{title}》已人工校对，本次生成进入待审，不覆盖")
+                continue
+
         if page is None:
             page = models.WikiPage(
                 kb_id=kb.id, slug=slug, title=title, summary=summary,
@@ -595,17 +610,15 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
         page.status = models.WikiPageStatus.published.value
         db.add(page)
 
-        # 先把页面/版本落库再向量化章节。
-        # 章节向量化是网络调用（本地 Ollama 一批可能要几十秒），如果此时还开着
-        # 写事务，SQLite 的写锁会一直占着，别的写请求（提问、建会话、另一个
-        # worker）全部卡到 busy_timeout 超时——表现就是「软件卡住」。
-        # 代价是极端情况下可能留下「有版本但没章节」的页面：它不会让 wiki_ready
-        # 变真（还要看 current_version_id），下次重建会补齐，可以接受。
-        db.commit()
-
-        # 证据关联：先清旧版本关联，只保留当前版本
-        db.execute(delete(models.WikiEvidence).where(models.WikiEvidence.page_version_id == version.id))
-        links = _extract_evidence(content, picked, chunks)
+        # The write lock is now held. Revalidate every source before publishing:
+        # deletion may have completed while the model was generating this page.
+        source_ids = {link["chunk"].id for link in links}
+        active_ids = set(db.execute(
+            select(models.Chunk.id).join(models.Document, models.Document.id == models.Chunk.doc_id)
+            .where(models.Chunk.id.in_(source_ids), models.Document.deleted.is_(False))
+        ).scalars())
+        if active_ids != source_ids:
+            raise RuntimeError("Wiki 生成期间来源已删除或更新，请重新生成")
         for link in links:
             c = link["chunk"]
             db.add(models.WikiEvidence(
@@ -614,9 +627,8 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
             ))
             result.evidence_links += 1
 
-        # 证据先落库再向量化章节：`delete(WikiEvidence)` 一执行就开启写事务，
-        # 如果带着它去 embed 章节（本地 Ollama 可能几十秒），SQLite 写锁会一直被占着，
-        # 另一个 worker 的批量提交就会 `database is locked`，前端也会跟着卡。
+        # Publish the version and its source links together. The potentially slow
+        # section embedding still happens after this short write transaction.
         db.commit()
 
         result.sections += _index_sections(db, kb, page, version, stats=stats)
@@ -635,7 +647,8 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
     return result
 
 
-def related_pages(db: Session, kb_id: int, page: models.WikiPage, limit: int = 5) -> list[dict]:
+def related_pages(db: Session, kb_id: int, page: models.WikiPage, limit: int = 5, *,
+                  include_hidden: bool = False) -> list[dict]:
     """基于共享证据计算关联页面，替代知识图谱，成本可控。"""
     if not page.current_version_id:
         return []
@@ -659,15 +672,17 @@ def related_pages(db: Session, kb_id: int, page: models.WikiPage, limit: int = 5
         select(models.WikiPageVersion).where(models.WikiPageVersion.id.in_(list(counts)))
     ).scalars()}
     page_ids = {v.page_id for v in versions.values()}
-    pages = {p.id: p for p in db.execute(
-        select(models.WikiPage).where(models.WikiPage.id.in_(page_ids))).scalars()}
+    stmt = select(models.WikiPage).where(models.WikiPage.id.in_(page_ids))
+    if not include_hidden:
+        stmt = stmt.where(wiki_visibility.visible_page())
+    pages = {p.id: p for p in db.execute(stmt).scalars()}
     out = []
     for pv_id, shared in sorted(counts.items(), key=lambda kv: -kv[1]):
         v = versions.get(pv_id)
         if not v:
             continue
         p = pages.get(v.page_id)
-        if not p or p.id == page.id:
+        if not p or p.id == page.id or v.id != p.current_version_id:
             continue
         out.append({"page_id": p.id, "slug": p.slug, "title": p.title, "shared_evidence": shared})
         if len(out) >= limit:
