@@ -43,7 +43,6 @@ import type {
   UpdateUserPayload,
   UploadResponse,
   User,
-  WikiEvidenceRef,
   WikiPage,
   WikiPageDetail,
   WikiPageVersion,
@@ -229,6 +228,8 @@ interface RequestOptions {
   form?: FormData
   /** 登录接口等场景：401 不触发全局登出 */
   silent401?: boolean
+  /** 后台权限复核自行处理 403，避免重复弹出全局提示。 */
+  silent403?: boolean
   signal?: AbortSignal
   /**
    * 超时毫秒数，默认 60s。
@@ -315,7 +316,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 
   if (res.status === 403) {
     const detail = await parseError(res)
-    onForbidden(detail || '没有操作权限')
+    if (!opts.silent403) onForbidden(detail || '没有操作权限')
     throw new ApiError(403, detail)
   }
 
@@ -559,22 +560,23 @@ export const taskApi = {
 // ---------------------------------------------------------------- Wiki
 export const wikiApi = {
   /** 后端返回 {items,...}，这里归一化为 {pages,...} */
-  tree: async (kbId: number): Promise<WikiTree> => {
-    const raw = await request<WikiTree & { items?: WikiPage[] }>(`/kbs/${kbId}/wiki/tree`)
+  tree: async (kbId: number, opts?: Pick<RequestOptions, 'silent403'>): Promise<WikiTree> => {
+    const raw = await request<WikiTree & { items?: WikiPage[] }>(`/kbs/${kbId}/wiki/tree`, opts)
     return { ...raw, pages: raw.pages ?? raw.items ?? [] }
   },
-  /** 后端把 page 字段平铺在顶层，这里归一化为 {page, version, evidence, related} */
-  page: async (kbId: number, slug: string): Promise<WikiPageDetail> => {
+  /** 兼容平铺与嵌套的页面详情返回，统一为 WikiPageDetail。 */
+  page: async (kbId: number, slug: string, opts?: Pick<RequestOptions, 'silent403'>): Promise<WikiPageDetail> => {
     const raw = await request<
-      (WikiPageDetail & { page?: WikiPage }) | (WikiPage & { version?: WikiPageVersion })
-    >(`/kbs/${kbId}/wiki/pages/${encodeURIComponent(slug)}`)
-    if ('page' in raw && raw.page) return raw as WikiPageDetail
-    const flat = raw as WikiPage & { version?: WikiPageVersion; evidence?: WikiEvidenceRef[]; related?: WikiPage[] }
+      WikiPageDetail | (WikiPage & Partial<Omit<WikiPageDetail, 'page'>>)
+    >(`/kbs/${kbId}/wiki/pages/${encodeURIComponent(slug)}`, opts)
+    if ('page' in raw && raw.page) return raw
+    const flat = raw as WikiPage & Partial<Omit<WikiPageDetail, 'page'>>
     return {
       page: flat,
       version: flat.version ?? null,
       evidence: flat.evidence ?? [],
       related: flat.related ?? [],
+      deleted_generation_sources: flat.deleted_generation_sources,
     }
   },
   save: (

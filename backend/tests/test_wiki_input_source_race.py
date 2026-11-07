@@ -446,15 +446,6 @@ def test_large_unchanged_map_inputs_fit_sqlite_variable_limit(race_env, monkeypa
     assert validated_ids == chunk_ids, "every Map input must be checked in the database"
 
 
-class _MapDependencyNotPersisted(AssertionError):
-    """A published version lost an unreported source from its durable dependencies."""
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=_MapDependencyNotPersisted,
-    reason="Map input dependencies are not persisted after publication; deleting an unreported source cannot hide the page",
-)
 def test_deleting_unreported_map_input_after_publication_should_hide_page(race_env, tmp_path, monkeypatch):
     case = _prepare(race_env, tmp_path, count=2, secret_no=1, old_source_no=2)
     calls = _model(monkeypatch, shards=[([1, 2], [2])], secret_no=1, on_page=lambda db: None)
@@ -466,20 +457,30 @@ def test_deleting_unreported_map_input_after_publication_should_hide_page(race_e
     before = client.get(url, headers=case["reader"])
     assert before.status_code == 200 and SECRET in before.text
     assert {e["doc_id"] for e in before.json()["evidence"]} == {case["sources"][1]["doc"]}
+    generated_id = before.json()["version"]["id"]
+    with race_env[0]() as observer:
+        deps = observer.execute(select(models.WikiGenerationSource.kb_id,
+                                       models.WikiGenerationSource.doc_id).where(
+            models.WikiGenerationSource.page_version_id == generated_id)).all()
+        assert set(deps) == {(case["kb"], source["doc"]) for source in case["sources"]}
+
     deleted = client.delete(f"/api/documents/{case['sources'][0]['doc']}", headers=case["admin"])
     assert deleted.status_code == 200 and deleted.json()["rebuild_task_id"] is not None
     with race_env[0]() as observer:
         assert observer.get(models.Document, case["sources"][0]["doc"]).deleted is True
         assert observer.get(models.Chunk, case["sources"][0]["chunk"]) is None
+        assert observer.get(models.Task, deleted.json()["rebuild_task_id"]).status == "queued"
 
     # No queued rebuild has run. A persisted Map dependency should hide this
     # version immediately, even though A was not reported as display evidence.
     after = client.get(url, headers=case["reader"])
-    assert after.status_code in (200, 404), after.text
-    if after.status_code == 200:
-        assert SECRET in after.text
-        raise _MapDependencyNotPersisted("expected 404; the deleted unreported Map source remains visible")
-    assert after.status_code == 404
+    assert after.status_code == 404, after.text
+    assert client.get(url + "/versions", headers=case["reader"]).status_code == 404
+    reviewed = client.get(url, headers=case["admin"])
+    assert reviewed.status_code == 200, reviewed.text
+    assert reviewed.json()["version"]["id"] == generated_id
+    assert reviewed.json()["status_label"] == "来源已删除，待复核"
+    assert {e["doc_id"] for e in reviewed.json()["evidence"]} == {case["sources"][1]["doc"]}
 
 
 def test_same_source_ids_with_changed_chunk_text_are_rejected(race_env, tmp_path, monkeypatch):

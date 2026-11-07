@@ -705,7 +705,8 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
             links = _extract_evidence(content, [chunks[i - 1] for i in ids], chunks)
         except ObjectDeletedError as exc:
             raise RuntimeError("Wiki 生成期间来源已删除或更新，请重新生成") from exc
-        source_snapshots = dict(topic.get("_map_sources") or {})
+        map_sources = topic.get("_map_sources") or {}
+        source_snapshots = dict(map_sources)
         for link in links:
             c = link["chunk"]
             source = sources_by_object.get(id(c))
@@ -774,6 +775,12 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
         )
         db.add(version)
         db.flush()
+        # Record all Map inputs and every cited source as visibility dependencies.
+        # A generated citation may refer to a source outside this topic's shard.
+        for doc_id in sorted({source.doc_id for source in source_snapshots.values()}):
+            db.add(models.WikiGenerationSource(
+                kb_id=kb_id, page_version_id=version.id, doc_id=doc_id, doc_ref_id=doc_id,
+            ))
         for link in links:
             c = link["chunk"]
             db.add(models.WikiEvidence(
