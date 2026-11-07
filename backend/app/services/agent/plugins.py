@@ -522,7 +522,18 @@ def plugin_out(db: Session, plugin: AgentPlugin) -> dict:
 
 
 def model_label(cfg: models.ModelConfig, provider: models.Provider) -> str:
-    return f"{cfg.label or cfg.model} · {provider.name}"
+    """界面展示用：显示名 · 模型标识 · 供应商。
+
+    同名模型（例如不同渠道的同款模型）只靠显示名分不清，所以把模型标识一起带上；
+    显示名留空时它本身就是模型标识，不重复显示。
+    """
+    name = (cfg.label or "").strip() or cfg.model
+    parts = [name]
+    if cfg.model and cfg.model != name:
+        parts.append(cfg.model)
+    if provider.name:
+        parts.append(provider.name)
+    return " · ".join(parts)
 
 
 def normalize_base_url(protocol: str, base: str) -> str:
