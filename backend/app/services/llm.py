@@ -237,6 +237,21 @@ class CallStats:
 _ERROR_BODY_RE = re.compile(r"^供应商返回 (\d{3}):\s*(\{.*\})$", re.S)
 
 
+def public_error(exc: ModelUnavailable) -> str:
+    """向普通用户返回错误类别，避免暴露供应商地址、凭据或响应正文。"""
+    if isinstance(exc, ModelNotConfigured):
+        return "未配置可用模型"
+    text = str(exc)
+    status = re.match(r"供应商返回 (\d{3})", text)
+    if status:
+        return f"供应商返回 {status.group(1)}"
+    if text.startswith("供应商接口地址"):
+        return "供应商接口地址不合法"
+    if text.startswith("网络请求失败"):
+        return "无法连接供应商"
+    return "模型调用失败"
+
+
 def error_summary(exc: BaseException | str, limit: int = 200) -> str:
     """把供应商异常压成一句可展示的原因：只取错误体里的 message 并截断，
     完整原文仍保留在 `CallStats.notes`，排障以 notes 为准。"""
