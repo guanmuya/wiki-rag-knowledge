@@ -5,12 +5,17 @@
    ========================================================================= */
 
 :root {
-  /* 画布与表面（淡蓝灰底，不用纯灰） */
-  --c-bg: #f4f7fb;
+  /* 画布：纯白底 + 22px 点阵，替代原先整片淡蓝灰的空白留白。
+     用一条变量统一 body / 应用外壳 / 启动页，避免三处各写一遍。 */
+  --c-bg: #ffffff;
   --c-bg-elevated: #ffffff;
   --c-surface: #ffffff;
   --c-surface-alt: #f8fafc;
   --c-surface-sunken: #edf2f8;
+
+  --c-dot: #d2ddec;
+  --canvas-bg: radial-gradient(circle, var(--c-dot) 1px, transparent 1.2px) 0 0 / 22px 22px,
+    var(--c-bg);
 
   /* 描边 */
   --c-border: #dce5ef;
@@ -70,7 +75,7 @@ html, body, #root { height: 100%; }
 
 body {
   margin: 0;
-  background: var(--c-bg);
+  background: var(--canvas-bg);
   color: var(--c-text);
   font-family: var(--font-sans);
   font-size: 14px;
@@ -155,7 +160,7 @@ code {
 .app-shell {
   display: flex;
   min-height: 100vh;
-  background: var(--c-bg);
+  background: var(--canvas-bg);
 }
 
 .sidebar {
@@ -309,6 +314,11 @@ code {
 .desktop-data-link:hover { color: var(--c-text-secondary); background: #f5f6fa; }
 
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+/* 智能问答 / 个人 Agent 是整屏布局：main 必须有确定高度，content 的 flex:1 与
+   chat-shell 的 height:100% 才能把消息区约束在视口内。否则整页随会话一起变高，
+   flex:1 的消息区不会自己滚动，底部输入框会被顶到视口外面。 */
+.main-flush { height: 100vh; height: 100dvh; min-height: 0; }
 
 .topbar {
   height: var(--topbar-h);
@@ -786,7 +796,7 @@ code {
   min-height: 100vh;
   display: grid;
   place-items: center;
-  background: var(--c-bg);
+  background: var(--canvas-bg);
   padding: 32px;
 }
 .boot-screen .state-block { padding: 0; }
@@ -1072,8 +1082,11 @@ code {
 .tab.active .tab-badge { background: var(--c-primary-soft); color: var(--c-primary); }
 
 /* 页签放进卡片里时不要自带底色：卡片本身已是白底，子元素的不透明背景会盖住
-   卡片的圆角，四个角看起来就是方的（模型设置页的页签条就是这样）。 */
-.card > .tabs { background: transparent; }
+   卡片的圆角，四个角看起来就是方的（模型设置页的页签条就是这样）。
+   也不要让页签条成为滚动容器：.tabs 的 overflow-x: auto 会连带把 overflow-y 算成
+   auto，激活项 2px 下划线（bottom: -1px）多出的 1px 就会挤出一条竖向滚动条，
+   卡片右端因此看起来像一块带滚轮的方块。卡片里的页签不需要横向滚动。 */
+.card > .tabs { background: transparent; overflow: visible; }
 
 /* 卡片 / 表格视图切换：页头里的分段控件。
    不复用 .tabs —— 页签容器带 overflow-x: auto，放在这里会挤出横竖两条滚动条，
@@ -1571,8 +1584,9 @@ code {
   min-height: 0;
   background: var(--c-surface);
 }
-/* 右侧会话区收成圆角描边卡片：原先是一整块贴着窗口与侧栏边缘的方形白板。 */
-.chat-shell:not(.agent-shell) { background: var(--c-bg); }
+/* 右侧会话区收成圆角描边卡片：原先是一整块贴着窗口与侧栏边缘的方形白板。
+   外层沿用全局点阵画布，让圆角卡片落在点阵白底上，和其余内容页一致。 */
+.chat-shell:not(.agent-shell) { background: var(--canvas-bg); }
 .chat-sidebar {
   display: flex;
   flex-direction: column;
@@ -2179,6 +2193,9 @@ code {
 /* ---------------------------------------------------------------- 23 响应式 */
 @media (max-width: 1180px) {
   .content { padding: 20px 20px 36px; }
+  /* 问答 / Agent 是整屏布局，不能继承普通页面的内边距，否则底部输入框会被
+     这圈留白顶离视口底边，长会话时看起来仍「没有固定在最底下」。 */
+  .content.content-flush { padding: 0; }
   .wiki-layout { grid-template-columns: 1fr; }
   .wiki-tree {
     position: static;

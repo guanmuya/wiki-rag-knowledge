@@ -10,8 +10,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import event, select
 
 from app import models, serializers
-from app.routers import kbs
-from app.services import wiki, worker
+from app.routers import kbs, wiki as wiki_router
+from app.services import retrieval, wiki, worker
 from test_wiki_mode_switch import _active_init, _claim, _kb, _switch, _task, store  # noqa: F401
 
 
@@ -34,6 +34,7 @@ def wal_store(store):
 def client(wal_store):
     app = FastAPI()
     app.include_router(kbs.router, prefix="/api")
+    app.include_router(wiki_router.router, prefix="/api")
 
     def request_db():
         with wal_store() as db:
@@ -41,7 +42,7 @@ def client(wal_store):
 
     def admin_user():
         with wal_store() as db:
-            return db.execute(select(models.User)).scalar_one()
+            return db.execute(select(models.User).where(models.User.role == models.Role.admin.value)).scalar_one()
 
     app.dependency_overrides[kbs.get_db] = request_db
     app.dependency_overrides[kbs.get_current_user] = admin_user
@@ -378,8 +379,31 @@ def test_delete_that_gets_write_lock_first_precedes_mode_switch(wal_store, tmp_p
     assert not _active_init(wal_store, kb_id)
 
 
-def test_retry_after_initial_generation_does_not_leave_source_only_pages_published(
-    wal_store, client, tmp_path, monkeypatch, request,
+def test_hidden_retained_page_still_counts_as_an_existing_wiki(wal_store, tmp_path):
+    kb_id, deleted_doc_id, _ = _source(wal_store, tmp_path, "hidden-source")
+    _add_remaining_source(wal_store, kb_id, tmp_path)
+    with wal_store() as db:
+        doc = db.get(models.Document, deleted_doc_id)
+        doc.deleted = True
+        page = models.WikiPage(kb_id=kb_id, slug="retained", title="Retained",
+                               status="published", human_locked=True)
+        db.add(page)
+        db.flush()
+        version = models.WikiPageVersion(page_id=page.id, version_no=1, content_md="Retained text")
+        db.add(version)
+        db.flush()
+        page.current_version_id = version.id
+        db.add(models.WikiEvidence(kb_id=kb_id, page_version_id=version.id, doc_id=deleted_doc_id))
+        db.commit()
+
+    result = _switch(wal_store, kb_id, "wiki")
+    assert result["wiki_ready"] is False
+    assert result["stats"]["wiki_page_count"] == 1  # admin retains the page for review
+    assert not _active_init(wal_store, kb_id)
+
+
+def test_retry_after_initial_generation_hides_deleted_source_pages_from_readers(
+    wal_store, client, tmp_path, monkeypatch,
 ):
     kb_id, doc_id, remaining_id, path = _generate_with_delete_during_mapping(
         wal_store, tmp_path, monkeypatch,
@@ -402,21 +426,64 @@ def test_retry_after_initial_generation_does_not_leave_source_only_pages_publish
             models.WikiEvidence.doc_id == remaining_id,
         )).scalars())
 
+    with wal_store() as db:
+        slugs = {db.get(models.WikiPage, page_id).slug for page_id in source_only_ids}
+        kb = db.get(models.KnowledgeBase, kb_id)
+        hits, _ = retrieval.search_wiki(db, kb, "住宿报销", top_n=20, qvec=None)
+        assert set(source_only_ids).intersection({hit.page_id for hit in hits})
+        reader_ids = {}
+        for level in ("read", "manage"):
+            reader = models.User(username=f"source-{level}", password_hash="unused", role="employee", status="active")
+            db.add(reader)
+            db.flush()
+            db.add(models.KbGrant(kb_id=kb_id, user_id=reader.id, level=level))
+            reader_ids[level] = reader.id
+        db.commit()
+
+    def reader_user(reader_id):
+        with wal_store() as db:
+            return db.get(models.User, reader_id)
+
+    admin_user = client.app.dependency_overrides[kbs.get_current_user]
+
+    def assert_source_visibility():
+        # Administrators retain the original pages for review; readers cannot
+        # load their current contents or history, even if storage stays published.
+        client.app.dependency_overrides[kbs.get_current_user] = admin_user
+        admin_tree = client.get(f"/api/kbs/{kb_id}/wiki/tree")
+        assert admin_tree.status_code == 200, admin_tree.text
+        reviewed = {page["slug"]: page for page in admin_tree.json()["items"]}
+        assert slugs.issubset(reviewed)
+        assert all(reviewed[slug]["status"] == "needs_review" and
+                   reviewed[slug]["status_label"] == "来源已删除，待复核" for slug in slugs)
+        for slug in slugs:
+            url = f"/api/kbs/{kb_id}/wiki/pages/{slug}"
+            page = client.get(url)
+            assert page.status_code == 200, page.text
+            assert doc_id in {item["doc_id"] for item in page.json()["evidence"]}
+            assert client.get(url + "/versions").status_code == 200
+        for reader_id in reader_ids.values():
+            client.app.dependency_overrides[kbs.get_current_user] = lambda: reader_user(reader_id)
+            tree = client.get(f"/api/kbs/{kb_id}/wiki/tree")
+            assert tree.status_code == 200, tree.text
+            assert slugs.isdisjoint({page["slug"] for page in tree.json()["items"]})
+            assert tree.json()["items"], "pages from the remaining source should stay visible"
+            for slug in slugs:
+                url = f"/api/kbs/{kb_id}/wiki/pages/{slug}"
+                assert client.get(url).status_code == 404
+                assert client.get(url + "/versions").status_code == 404
+        with wal_store() as db:
+            kb = db.get(models.KnowledgeBase, kb_id)
+            hits, _ = retrieval.search_wiki(db, kb, "住宿报销", top_n=20, qvec=None)
+            assert set(source_only_ids).isdisjoint({hit.page_id for hit in hits})
+
     response = client.delete(f"/api/documents/{doc_id}")
     _assert_deleted(wal_store, kb_id, doc_id, path, response)
     rebuild_id = response.json()["rebuild_task_id"]
     assert rebuild_id is not None
+    assert_source_visibility()
     assert worker.run_once("delete-rebuild")
     with wal_store() as db:
         task = db.get(models.Task, rebuild_id)
         assert task.status == models.TaskStatus.success.value, task.error
-        published_ids = [page_id for page_id in source_only_ids
-                         if (page := db.get(models.WikiPage, page_id)) is not None
-                         and page.status == models.WikiPageStatus.published.value]
-
-    # Apply xfail only after all prerequisites pass, so an unrelated setup failure
-    # cannot be mistaken for the known stale-page bug.
-    request.node.add_marker(pytest.mark.xfail(
-        strict=True, reason="delete-triggered Wiki rebuild does not retire obsolete source-only pages",
-    ))
-    assert not published_ids, f"deleted source still has published pages: {published_ids}"
+    assert_source_visibility()

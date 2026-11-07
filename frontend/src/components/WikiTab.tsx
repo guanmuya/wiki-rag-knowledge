@@ -341,11 +341,11 @@ export default function WikiTab({
     return (
       <div className="card">
         <EmptyState
-          title="该知识库还没有 Wiki 页面"
+          title="暂无可查看的 Wiki 页面"
           hint={
             kb.mode === 'wiki'
-              ? '文档入库后会自动生成页面；生成失败时可在「设置」中重建。'
-              : '当前知识库为基础分块模式，切换到 Wiki 增强后会自动生成首次页面。'
+              ? '文档入库会触发 Wiki 生成；若页面暂不可用，请查看任务或联系管理员。'
+              : '当前为基础分块模式；切换到 Wiki 增强后可查看可用页面。'
           }
         />
       </div>

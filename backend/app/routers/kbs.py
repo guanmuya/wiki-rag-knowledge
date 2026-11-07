@@ -16,7 +16,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from .. import config, models, schemas, security, serializers
+from .. import config, models, schemas, security, serializers, wiki_visibility
 from ..db import DB_BUSY_DETAIL, apply_busy_timeout, get_db, is_lock_error
 from ..deps import audit, get_current_user, grant_level, require_admin
 from ..services import chunking, cost, parser, taskflow
@@ -33,7 +33,7 @@ AUDIT_BUSY_TIMEOUT_MS = 500
 def list_kbs(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     if user.role == models.Role.admin.value:
         kbs = db.execute(select(models.KnowledgeBase).order_by(models.KnowledgeBase.id)).scalars().all()
-        items = [serializers.kb_out(db, kb, my_level="manage") for kb in kbs]
+        items = [serializers.kb_out(db, kb, my_level="manage", include_review=True) for kb in kbs]
     else:
         rows = db.execute(
             select(models.KnowledgeBase, models.KbGrant.level)
@@ -61,7 +61,7 @@ def create_kb(body: schemas.KbCreateIn, db: Session = Depends(get_db),
     db.flush()
     audit(db, admin, "create_kb", target=name, detail=f"mode={body.mode}")
     db.commit()
-    return serializers.kb_out(db, kb, my_level="manage")
+    return serializers.kb_out(db, kb, my_level="manage", include_review=True)
 
 
 @router.get("/kbs/{kb_id}")
@@ -72,7 +72,7 @@ def get_kb(kb_id: int, db: Session = Depends(get_db), user: models.User = Depend
     level = grant_level(db, user, kb_id)
     if level is None:
         raise HTTPException(status_code=403, detail="没有该知识库的访问权限")
-    data = serializers.kb_out(db, kb, my_level=level)
+    data = serializers.kb_out(db, kb, my_level=level, include_review=user.role == models.Role.admin.value)
     data["index"] = _index_status(db, kb)
     return data
 
@@ -132,7 +132,7 @@ def update_kb(kb_id: int, body: schemas.KbUpdateIn, db: Session = Depends(get_db
     db.add(kb)
     audit(db, admin, "update_kb", target=kb.name, detail=f"mode={kb.mode}")
     db.commit()
-    return serializers.kb_out(db, kb, my_level="manage")
+    return serializers.kb_out(db, kb, my_level="manage", include_review=True)
 
 
 @router.delete("/kbs/{kb_id}")
@@ -163,8 +163,14 @@ def _index_status(db: Session, kb: models.KnowledgeBase) -> dict:
     chunk_units = db.execute(
         select(func.count(models.Chunk.id)).where(models.Chunk.kb_id == kb.id)
     ).scalar() or 0
+    live_versions = select(models.WikiPage.current_version_id).where(
+        models.WikiPage.kb_id == kb.id,
+        models.WikiPage.status != models.WikiPageStatus.draft.value,
+        wiki_visibility.visible_page(),
+    )
     wiki_units = db.execute(
-        select(func.count(models.WikiSection.id)).where(models.WikiSection.kb_id == kb.id)
+        select(func.count(models.WikiSection.id)).where(
+            models.WikiSection.kb_id == kb.id, models.WikiSection.page_version_id.in_(live_versions))
     ).scalar() or 0
     pending = db.execute(
         select(func.count(models.Task.id)).where(

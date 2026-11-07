@@ -7,7 +7,7 @@ import json
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import models
+from . import models, wiki_visibility
 
 MODE_LABEL = {"basic": "基础分块", "wiki": "Wiki 增强"}
 STATUS_LABEL = {
@@ -63,13 +63,14 @@ def wiki_published_count(db: Session, kb_id: int) -> int:
     「发布了但切不出章节」的空页都会被算成就绪，而那两类页面检索侧根本用不到。
 
     判定标准与 `retrieval.plan_route()` 严格一致：
-    `status != draft` **且** `current_version_id` 非空。
+    `status != draft`、`current_version_id` 非空且没有已删除的来源。
     """
     return db.execute(
         select(func.count(models.WikiPage.id)).where(
             models.WikiPage.kb_id == kb_id,
             models.WikiPage.status != models.WikiPageStatus.draft.value,
             models.WikiPage.current_version_id.is_not(None),
+            wiki_visibility.visible_page(),
         )
     ).scalar() or 0
 
@@ -101,7 +102,8 @@ def user_out(db: Session, u: models.User) -> dict:
     }
 
 
-def kb_out(db: Session, kb: models.KnowledgeBase, *, my_level: str | None = None) -> dict:
+def kb_out(db: Session, kb: models.KnowledgeBase, *, my_level: str | None = None,
+           include_review: bool = False) -> dict:
     doc_count = db.execute(
         select(func.count(models.Document.id)).where(
             models.Document.kb_id == kb.id, models.Document.deleted.is_(False))
@@ -109,9 +111,10 @@ def kb_out(db: Session, kb: models.KnowledgeBase, *, my_level: str | None = None
     chunk_count = db.execute(
         select(func.count(models.Chunk.id)).where(models.Chunk.kb_id == kb.id)
     ).scalar() or 0
-    page_count = db.execute(
-        select(func.count(models.WikiPage.id)).where(models.WikiPage.kb_id == kb.id)
-    ).scalar() or 0
+    pages = select(func.count(models.WikiPage.id)).where(models.WikiPage.kb_id == kb.id)
+    if not include_review:
+        pages = pages.where(wiki_visibility.visible_page())
+    page_count = db.execute(pages).scalar() or 0
     published = wiki_published_count(db, kb.id)
     return {
         "id": kb.id, "name": kb.name, "description": kb.description, "mode": kb.mode,
@@ -211,9 +214,11 @@ def wiki_page_out(db: Session, p: models.WikiPage) -> dict:
             select(func.count(models.WikiSection.id)).where(
                 models.WikiSection.page_version_id == p.current_version_id)
         ).scalar() or 0
+    source_deleted = db.scalar(select(wiki_visibility.has_deleted_source(p.current_version_id)))
     return {
         "id": p.id, "kb_id": p.kb_id, "slug": p.slug, "title": p.title, "summary": p.summary,
-        "status": p.status, "status_label": WIKI_STATUS_LABEL.get(p.status, p.status),
+        "status": models.WikiPageStatus.needs_review.value if source_deleted else p.status,
+        "status_label": "来源已删除，待复核" if source_deleted else WIKI_STATUS_LABEL.get(p.status, p.status),
         "human_locked": p.human_locked, "parent_slug": p.parent_slug,
         "order_index": p.order_index, "section_count": section_count,
         "current_version_id": p.current_version_id,

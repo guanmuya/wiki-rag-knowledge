@@ -312,7 +312,7 @@ export default function Layout() {
         </div>
       </aside>
 
-      <div className="main">
+      <div className={`main ${isFlush ? 'main-flush' : ''}`}>
         <header className="topbar">
           <button
             type="button"

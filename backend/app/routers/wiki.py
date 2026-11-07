@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from .. import models, schemas, serializers
+from .. import models, schemas, serializers, wiki_visibility
 from ..db import get_db
 from ..deps import audit, get_current_user, grant_level
 from ..services import chunking, cost, llm, wiki
@@ -25,14 +25,24 @@ def _require(db: Session, user: models.User, kb_id: int, level: str = "read") ->
     return kb
 
 
+def _page_for_user(db: Session, user: models.User, kb_id: int, slug: str) -> models.WikiPage:
+    stmt = select(models.WikiPage).where(models.WikiPage.kb_id == kb_id, models.WikiPage.slug == slug)
+    if user.role != models.Role.admin.value:
+        stmt = stmt.where(wiki_visibility.visible_page())
+    page = db.execute(stmt).scalar_one_or_none()
+    if not page:
+        raise HTTPException(status_code=404, detail="Wiki 页面不存在")
+    return page
+
+
 @router.get("/kbs/{kb_id}/wiki/tree")
 def wiki_tree(kb_id: int, db: Session = Depends(get_db),
               user: models.User = Depends(get_current_user)):
     kb = _require(db, user, kb_id)
-    pages = db.execute(
-        select(models.WikiPage).where(models.WikiPage.kb_id == kb_id)
-        .order_by(models.WikiPage.order_index, models.WikiPage.id)
-    ).scalars().all()
+    stmt = select(models.WikiPage).where(models.WikiPage.kb_id == kb_id)
+    if user.role != models.Role.admin.value:
+        stmt = stmt.where(wiki_visibility.visible_page())
+    pages = db.execute(stmt.order_by(models.WikiPage.order_index, models.WikiPage.id)).scalars().all()
     items = [serializers.wiki_page_out(db, p) for p in pages]
     return {
         "items": items, "total": len(items),
@@ -40,9 +50,9 @@ def wiki_tree(kb_id: int, db: Session = Depends(get_db),
         "wiki_ready": serializers.wiki_ready(db, kb_id),
         "status_detail": kb.status_detail,
         "empty_reason": "" if pages else (
-            "该知识库还没有生成 Wiki 页面。文档入库后会自动生成；失败时可在设置中重建。"
+            "暂无可查看的 Wiki 页面。文档入库会触发生成；如页面暂不可用，请查看任务或联系管理员。"
             if kb.mode == models.KbMode.wiki.value else
-            "该知识库是基础分块模式，不生成 Wiki 页面。"
+            "暂无可查看的 Wiki 页面。当前为基础分块模式。"
         ),
     }
 
@@ -51,11 +61,7 @@ def wiki_tree(kb_id: int, db: Session = Depends(get_db),
 def wiki_page(kb_id: int, slug: str, db: Session = Depends(get_db),
               user: models.User = Depends(get_current_user)):
     _require(db, user, kb_id)
-    page = db.execute(
-        select(models.WikiPage).where(models.WikiPage.kb_id == kb_id, models.WikiPage.slug == slug)
-    ).scalar_one_or_none()
-    if not page:
-        raise HTTPException(status_code=404, detail="Wiki 页面不存在")
+    page = _page_for_user(db, user, kb_id, slug)
     version = db.get(models.WikiPageVersion, page.current_version_id) if page.current_version_id else None
     data = serializers.wiki_page_out(db, page)
     data["version"] = {
@@ -64,7 +70,7 @@ def wiki_page(kb_id: int, slug: str, db: Session = Depends(get_db),
         "created_at": serializers.iso(version.created_at),
     } if version else None
     data["evidence"] = wiki_evidence(db, version.id) if version else []
-    data["related"] = wiki.related_pages(db, kb_id, page)
+    data["related"] = wiki.related_pages(db, kb_id, page, include_hidden=user.role == models.Role.admin.value)
     return data
 
 
@@ -97,11 +103,7 @@ def wiki_evidence(db: Session, page_version_id: int) -> list[dict]:
 def update_wiki_page(kb_id: int, slug: str, body: schemas.WikiPageUpdateIn,
                      db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     kb = _require(db, user, kb_id, level="manage")
-    page = db.execute(
-        select(models.WikiPage).where(models.WikiPage.kb_id == kb_id, models.WikiPage.slug == slug)
-    ).scalar_one_or_none()
-    if not page:
-        raise HTTPException(status_code=404, detail="Wiki 页面不存在")
+    page = _page_for_user(db, user, kb_id, slug)
     content = body.content_md.strip()
     if len(content) < 10:
         raise HTTPException(status_code=400, detail="正文内容过短")
@@ -189,15 +191,11 @@ def update_wiki_page(kb_id: int, slug: str, body: schemas.WikiPageUpdateIn,
 def wiki_versions(kb_id: int, slug: str, db: Session = Depends(get_db),
                   user: models.User = Depends(get_current_user)):
     _require(db, user, kb_id)
-    page = db.execute(
-        select(models.WikiPage).where(models.WikiPage.kb_id == kb_id, models.WikiPage.slug == slug)
-    ).scalar_one_or_none()
-    if not page:
-        raise HTTPException(status_code=404, detail="Wiki 页面不存在")
-    versions = db.execute(
-        select(models.WikiPageVersion).where(models.WikiPageVersion.page_id == page.id)
-        .order_by(models.WikiPageVersion.version_no.desc())
-    ).scalars().all()
+    page = _page_for_user(db, user, kb_id, slug)
+    stmt = select(models.WikiPageVersion).where(models.WikiPageVersion.page_id == page.id)
+    if user.role != models.Role.admin.value:
+        stmt = stmt.where(~wiki_visibility.has_deleted_source(models.WikiPageVersion.id))
+    versions = db.execute(stmt.order_by(models.WikiPageVersion.version_no.desc())).scalars().all()
     # 返回正文：校对页需要能对比历史版本与当前版本，否则"版本历史"只能看到编号
     return {"items": [{
         "id": v.id, "version_no": v.version_no, "origin": v.origin, "note": v.note,
@@ -212,11 +210,7 @@ def wiki_versions(kb_id: int, slug: str, db: Session = Depends(get_db),
 def publish_page(kb_id: int, slug: str, db: Session = Depends(get_db),
                  user: models.User = Depends(get_current_user)):
     _require(db, user, kb_id, level="manage")
-    page = db.execute(
-        select(models.WikiPage).where(models.WikiPage.kb_id == kb_id, models.WikiPage.slug == slug)
-    ).scalar_one_or_none()
-    if not page:
-        raise HTTPException(status_code=404, detail="Wiki 页面不存在")
+    page = _page_for_user(db, user, kb_id, slug)
     if not page.current_version_id:
         raise HTTPException(status_code=400, detail="页面还没有正文版本")
     page.status = models.WikiPageStatus.published.value
@@ -230,11 +224,7 @@ def publish_page(kb_id: int, slug: str, db: Session = Depends(get_db),
 def unlock_page(kb_id: int, slug: str, db: Session = Depends(get_db),
                 user: models.User = Depends(get_current_user)):
     _require(db, user, kb_id, level="manage")
-    page = db.execute(
-        select(models.WikiPage).where(models.WikiPage.kb_id == kb_id, models.WikiPage.slug == slug)
-    ).scalar_one_or_none()
-    if not page:
-        raise HTTPException(status_code=404, detail="Wiki 页面不存在")
+    page = _page_for_user(db, user, kb_id, slug)
     page.human_locked = False
     page.status = models.WikiPageStatus.published.value
     db.add(page)
