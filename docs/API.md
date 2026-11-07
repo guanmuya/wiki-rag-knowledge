@@ -249,6 +249,7 @@
 | `total_tokens` | 全通道合计 = `prompt_tokens + completion_tokens + embed_tokens` |
 | `latency_ms` | 总耗时；`latency_chat_ms` / `latency_embed_ms` 为分通道耗时 |
 | `mode` | **生成通道**模式（`live`/`offline`）；前端据此显示「未调用生成模型」 |
+| `offline_reason` | 生成通道降级原因（供应商错误摘要）；为空表示未配置模型，前端据此区分「没配」与「配了但调用失败」 |
 | `embed_mode` | **向量通道**模式。单独存在，避免「只有向量走离线」被误报成整体离线 |
 | `degraded` | 任一通道降级 |
 

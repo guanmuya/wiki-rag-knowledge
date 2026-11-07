@@ -157,6 +157,13 @@ def _chat_json(db: Session, messages: list[dict], call_stats: llm.CallStats, *,
     return data
 
 
+def _offline_reason(exc: llm.ModelUnavailable) -> str:
+    """生成通道降级原因：未配置模型不算「调用失败」，返回空串。"""
+    if isinstance(exc, llm.ModelNotConfigured):
+        return ""
+    return llm.error_summary(exc, limit=120)
+
+
 def _normalize_queries(raw, *, limit: int = MAX_QUERIES) -> list[str]:
     if not isinstance(raw, list):
         return []
@@ -512,6 +519,7 @@ def _general_reply(db: Session, question: str, call_stats: llm.CallStats, *,
                 yield {"type": "answer", "delta": text}
     except llm.ModelUnavailable as exc:
         call_stats.mode = "offline"
+        call_stats.offline_reason = _offline_reason(exc)
         call_stats.add_note(f"通用回复降级为固定文案：{exc}")
     text = "".join(parts).strip()
     if not text:
@@ -589,7 +597,9 @@ def _generate_answer(db: Session, question: str, kbs: list[models.KnowledgeBase]
             call_stats.add_note(f"流式生成中断：{exc}")
             if not parts:
                 call_stats.mode = "offline"
-                text = answering._extractive_answer(question, evidence)
+                call_stats.offline_reason = _offline_reason(exc)
+                text = answering._extractive_answer(
+                    question, evidence, reason=call_stats.offline_reason)
                 parts.append(text)
                 yield {"type": "answer", "delta": text}
     else:
@@ -600,12 +610,16 @@ def _generate_answer(db: Session, question: str, kbs: list[models.KnowledgeBase]
                 parts.append(text)
         except llm.ModelUnavailable as exc:
             call_stats.mode = "offline"
+            call_stats.offline_reason = _offline_reason(exc)
             call_stats.add_note(f"生成模型不可用：{exc}")
     text = "".join(parts).strip()
     if not text:
-        text = answering._extractive_answer(question, evidence)
         call_stats.mode = "offline"
+        if not call_stats.offline_reason:
+            call_stats.offline_reason = "生成模型返回空内容"
         call_stats.add_note("生成结果为空，已回退抽取式回答")
+        text = answering._extractive_answer(
+            question, evidence, reason=call_stats.offline_reason)
         yield {"type": "answer", "delta": text}
 
     citations = answering._citation_check(text, evidence)
@@ -792,8 +806,10 @@ def iter_run(db: Session, question: str, kbs: list[models.KnowledgeBase], *,
         db, question, kbs, evidence, routes, plan, evaluation, retries,
         first_missing,
         call_stats=call_stats, cfg_override=cfg_override, stream=stream)
-    yield steps.done("answer", "生成回答",
-                     f"已完成 · {len(evidence)} 条参考资料")
+    detail = f"已完成 · {len(evidence)} 条参考资料"
+    if call_stats.mode == "offline":
+        detail += "（生成模型不可用，已降级为离线抽取）"
+    yield steps.done("answer", "生成回答", detail)
 
     result["route"]["stats"] = stats
     result["route"]["pipeline"] = pipeline

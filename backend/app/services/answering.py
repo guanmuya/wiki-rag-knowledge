@@ -381,12 +381,22 @@ def _looks_like_table_row(text: str) -> bool:
     return s.count("|") >= 3 or bool(re.match(r"^\|?[\s:\-]*\|", s))
 
 
-def _extractive_answer(question: str, evidence: list[retrieval.Evidence]) -> str:
-    """离线降级：从证据中抽取最相关句子拼装，不做生成。"""
+def _extractive_answer(question: str, evidence: list[retrieval.Evidence],
+                       reason: str = "") -> str:
+    """离线降级：从证据中抽取最相关句子拼装，不做生成。
+
+    `reason` 是「模型配了但这次调用失败」的原因（如供应商 429 限流）；
+    必须写进正文开头，否则用户会把「被限流降级」误认为「模型没配好」。
+    """
     if not evidence:
         return REFUSAL_LEAD
     terms = retrieval.query_terms(question)
-    parts = ["（离线演示模式：以下内容由检索片段抽取整理，未调用生成模型）", ""]
+    if reason:
+        header = (f"（离线演示模式：生成模型调用失败 —— {reason}；"
+                  "以下内容由检索片段抽取整理）")
+    else:
+        header = "（离线演示模式：以下内容由检索片段抽取整理，未调用生成模型）"
+    parts = [header, ""]
     for idx, ev in enumerate(evidence[:4], start=1):
         sentences = re.split(r"(?<=[。！？；\n])", ev.text)
         scored = []

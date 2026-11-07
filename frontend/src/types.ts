@@ -444,6 +444,8 @@ export interface UsageInfo {
   completion_tokens: number
   latency_ms: number
   mode: string
+  /** 生成通道降级原因（如供应商 429）；未配置模型时为空 */
+  offline_reason?: string
   notes?: string[]
 }
 

@@ -67,10 +67,15 @@ function RouteRow({ route }: { route: KbRoute }) {
 export function UsageLine({ usage }: { usage: UsageInfo | null | undefined }) {
   if (!usage) return null
   const offline = usage.mode === 'offline' || usage.calls === 0
+  const reason = (usage.offline_reason || '').trim()
   return (
     <span className="tiny muted">
       {usage.latency_ms > 0 ? `耗时 ${formatMs(usage.latency_ms)} · ` : ''}
-      {offline ? '离线抽取模式（未调用生成模型）' : `模型调用 ${usage.calls} 次`}
+      {offline
+        ? reason
+          ? `离线抽取模式（生成模型调用失败：${reason}）`
+          : '离线抽取模式（未调用生成模型）'
+        : `模型调用 ${usage.calls} 次`}
       {usage.prompt_tokens || usage.completion_tokens
         ? ` · 输入 ${usage.prompt_tokens} / 输出 ${usage.completion_tokens} tokens`
         : ''}
