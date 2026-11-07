@@ -151,6 +151,7 @@ export interface KbIndexState {
   chunk_ready?: boolean
   wiki_ready?: boolean
   embed_signature?: string
+  pending_tasks?: number
 }
 
 export interface KnowledgeBase {

@@ -54,7 +54,7 @@
 | GET | `/api/kbs` | 当前用户可见的知识库（admin 全部）。元素 = `serializers.kb_out()`（`serializers.py:85`），含 `my_level`；**列表不带 `index`** |
 | POST | `/api/kbs` | admin。`{name,description,mode}` mode=`basic`\|`wiki` |
 | GET | `/api/kbs/{id}` | 详情 = `kb_out()` + `index`（`kbs.py:67` 单独追加 `_index_status()`，`kbs.py:122`） |
-| PATCH | `/api/kbs/{id}` | admin。改名/描述/切换 mode（切到 wiki 不自动生成，需手动重建） |
+| PATCH | `/api/kbs/{id}` | admin。改名/描述/切换 mode；切到 wiki 时，没有 Wiki 页的知识库会在已有或正在入库的文档就绪后自动生成首次页面，已有页面可按需手动重建。 |
 | DELETE | `/api/kbs/{id}` | admin |
 | POST | `/api/kbs/{id}/rebuild` | manage。`{kind:"chunk"\|"wiki"}` → `{task_id}` |
 | GET | `/api/kbs/{id}/grants` | admin。`[{user_id,username,display_name,level}]` |

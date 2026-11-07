@@ -40,7 +40,7 @@ def wiki_tree(kb_id: int, db: Session = Depends(get_db),
         "wiki_ready": serializers.wiki_ready(db, kb_id),
         "status_detail": kb.status_detail,
         "empty_reason": "" if pages else (
-            "该知识库还没有生成 Wiki 页面。先上传文档并等待入库完成，再执行「重建 Wiki」。"
+            "该知识库还没有生成 Wiki 页面。文档入库后会自动生成；失败时可在设置中重建。"
             if kb.mode == models.KbMode.wiki.value else
             "该知识库是基础分块模式，不生成 Wiki 页面。"
         ),

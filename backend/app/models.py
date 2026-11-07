@@ -44,6 +44,10 @@ class GrantLevel(str, enum.Enum):
     manage = "manage"    # 额外可上传/删除文档、重建索引、校对 Wiki
 
 
+# 标识切换模式时排队的首次 Wiki 生成任务（不同于用户主动重建）。
+WIKI_INITIAL_TASK_PREFIX = "wiki-init:"
+
+
 class TaskKind(str, enum.Enum):
     ingest_document = "ingest_document"
     rebuild_wiki = "rebuild_wiki"

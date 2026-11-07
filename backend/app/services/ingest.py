@@ -25,6 +25,15 @@ def _set_progress(db: Session, task: models.Task, stage: str, progress: int) -> 
     db.commit()
 
 
+def _initial_wiki_pending(db: Session, kb_id: int) -> bool:
+    # 切换模式时由独立任务等既有任务完成后统一生成，避免并发写 Wiki。
+    return db.execute(select(models.Task.id).where(
+        models.Task.kb_id == kb_id,
+        models.Task.dedupe_key == f"{models.WIKI_INITIAL_TASK_PREFIX}{kb_id}",
+        models.Task.status.in_([models.TaskStatus.queued.value, models.TaskStatus.running.value]),
+    ).limit(1)).first() is not None
+
+
 def ingest_version(db: Session, task: models.Task, *, stats: llm.CallStats) -> dict:
     """文档入库：解析 → 分块 → 向量索引（Wiki 库再加一段 Wiki 生成）。
 
@@ -173,7 +182,7 @@ def ingest_version(db: Session, task: models.Task, *, stats: llm.CallStats) -> d
     phases = {"ingest_document": chunk_stats.as_dict()}
 
     # Wiki 增强库：文档入库后增量重建 Wiki
-    if kb.mode == models.KbMode.wiki.value:
+    if kb.mode == models.KbMode.wiki.value and not _initial_wiki_pending(db, kb.id):
         _set_progress(db, task, "生成 Wiki 页面", 88)
         # Wiki 成本单独一份：这是「Wiki 增强」相对「基础分块」多出来的代价，
         # 也是论文里最想量化的那一列。它不进 chunk 阶段，必须能独立报出。
@@ -274,7 +283,7 @@ def reindex_kb(db: Session, task: models.Task, *, stats: llm.CallStats) -> dict:
     stats.merge(chunk_stats)
     phases = {models.TaskKind.reindex_kb.value: chunk_stats.as_dict()}
     result = {"chunks": total, "embedding_signature": sig}
-    if kb.mode == models.KbMode.wiki.value:
+    if kb.mode == models.KbMode.wiki.value and not _initial_wiki_pending(db, kb.id):
         db.commit()
         wiki_stats = llm.CallStats()
         try:

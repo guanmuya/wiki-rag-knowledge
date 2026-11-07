@@ -150,6 +150,13 @@ export default function WikiTab({
     void loadTree()
   }, [loadTree])
 
+  const pendingTasksRef = useRef(kb.index?.pending_tasks ?? 0)
+  useEffect(() => {
+    const pending = kb.index?.pending_tasks ?? 0
+    if (pendingTasksRef.current > 0 && pending === 0 && pages.length === 0) void loadTree()
+    pendingTasksRef.current = pending
+  }, [kb.id, kb.index?.pending_tasks, loadTree, pages.length])
+
   useEffect(() => {
     if (slug) void loadPage(slug)
     return () => { pageRequestRef.current += 1 }
@@ -311,8 +318,8 @@ export default function WikiTab({
           title="该知识库还没有 Wiki 页面"
           hint={
             kb.mode === 'wiki'
-              ? '文档入库完成后，在「设置」里点击「重建 Wiki」即可自动归纳生成页面。'
-              : '当前知识库为基础分块模式，切换到 Wiki 增强并重建后才会生成页面。'
+              ? '文档入库后会自动生成页面；生成失败时可在「设置」中重建。'
+              : '当前知识库为基础分块模式，切换到 Wiki 增强后会自动生成首次页面。'
           }
         />
       </div>
