@@ -125,8 +125,9 @@ def update_kb(kb_id: int, body: schemas.KbUpdateIn, db: Session = Depends(get_db
                                        status=models.TaskStatus.queued.value, stage="排队中",
                                        kb_id=kb.id, dedupe_key=initial_key, created_by=admin.id))
                 if has_chunks or active:
-                    kb.status = models.KbStatus.indexing.value
-                    kb.status_detail = "已切换为 Wiki 增强，首次生成 Wiki 页面已排队"
+                    if kb.status not in (models.KbStatus.failed.value, models.KbStatus.partial.value):
+                        kb.status = models.KbStatus.indexing.value
+                        kb.status_detail = "已切换为 Wiki 增强，首次生成 Wiki 页面已排队"
                 elif kb.status not in (models.KbStatus.failed.value, models.KbStatus.partial.value):
                     kb.status_detail = "已切换为 Wiki 增强，文档入库后将自动生成 Wiki 页面"
     db.add(kb)
@@ -172,6 +173,14 @@ def _index_status(db: Session, kb: models.KnowledgeBase) -> dict:
         select(func.count(models.WikiSection.id)).where(
             models.WikiSection.kb_id == kb.id, models.WikiSection.page_version_id.in_(live_versions))
     ).scalar() or 0
+    wiki_current_units = db.execute(
+        select(func.count(models.WikiSection.id))
+        .join(models.WikiPage, models.WikiPage.id == models.WikiSection.page_id)
+        .where(models.WikiSection.kb_id == kb.id,
+               models.WikiPage.status != models.WikiPageStatus.draft.value,
+               models.WikiPage.current_version_id == models.WikiSection.page_version_id,
+               wiki_visibility.visible_page())
+    ).scalar() or 0
     pending = db.execute(
         select(func.count(models.Task.id)).where(
             models.Task.kb_id == kb.id,
@@ -186,6 +195,7 @@ def _index_status(db: Session, kb: models.KnowledgeBase) -> dict:
         # 都会被算成就绪，与列表页的结论相反。
         "wiki_ready": serializers.wiki_ready(db, kb.id),
         "wiki_units": wiki_units,
+        "wiki_current_units": wiki_current_units,
         "embed_signature": kb.embed_signature,
         "embed_dim": kb.embed_dim,
         "active_embed_signature": active_sig,

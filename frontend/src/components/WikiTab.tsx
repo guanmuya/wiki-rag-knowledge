@@ -155,22 +155,25 @@ export default function WikiTab({
   }, [loadTree])
 
   const treeStateRef = useRef({
-    kbId: kb.id, pending: kb.index?.pending_tasks ?? 0,
+    kbId: kb.id, pending: kb.index?.pending_tasks ?? 0, readyAt: kb.wiki_ready_at,
     count: kb.stats?.wiki_page_count ?? 0, refresh: false, refreshDetail: false,
   })
   useEffect(() => {
     const pending = kb.index?.pending_tasks ?? 0
     const count = kb.stats?.wiki_page_count ?? 0
+    const readyAt = kb.wiki_ready_at
     const previous = treeStateRef.current
     if (previous.kbId !== kb.id) {
-      treeStateRef.current = { kbId: kb.id, pending, count, refresh: false, refreshDetail: false }
+      treeStateRef.current = { kbId: kb.id, pending, count, readyAt, refresh: false, refreshDetail: false }
       return
     }
-    if ((previous.pending > 0 && pending === 0) || previous.count !== count) {
+    if ((previous.pending > 0 && pending === 0) || previous.count !== count ||
+        (Boolean(readyAt) && previous.readyAt !== readyAt)) {
       previous.refresh = true
     }
     previous.pending = pending
     previous.count = count
+    previous.readyAt = readyAt
     // 编辑时仍更新目录，但保留选中页面与正文；详情等校对结束再刷新。
     if (previous.refresh) {
       previous.refresh = false
@@ -181,7 +184,7 @@ export default function WikiTab({
       previous.refreshDetail = false
       if (selectedSlugRef.current) void loadPage(selectedSlugRef.current)
     }
-  }, [kb.id, kb.index?.pending_tasks, kb.stats?.wiki_page_count, editing, saving, loadTree, loadPage])
+  }, [kb.id, kb.index?.pending_tasks, kb.stats?.wiki_page_count, kb.wiki_ready_at, editing, saving, loadTree, loadPage])
 
   useEffect(() => {
     if (slug) void loadPage(slug)
@@ -337,7 +340,7 @@ export default function WikiTab({
     )
   }
 
-  if (pages.length === 0) {
+  if (pages.length === 0 && !(detail && (editing || saving))) {
     return (
       <div className="card">
         <EmptyState

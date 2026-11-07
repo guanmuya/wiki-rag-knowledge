@@ -17,6 +17,7 @@ import logging
 import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from typing import Callable, Literal
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
@@ -455,7 +456,9 @@ def _index_sections(db: Session, kb: models.KnowledgeBase, page: models.WikiPage
 
 
 def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
-               stats: llm.CallStats | None = None) -> WikiBuildResult:
+               stats: llm.CallStats | None = None,
+               on_progress: Callable[[Literal["topics", "pages"], int, int], None] | None = None
+               ) -> WikiBuildResult:
     """生成整库 Wiki：分片 Map 归纳 → Reduce 合并 → 逐主题写页面。
 
     覆盖范围是这里最重要的语义：**全库每一个分块都必须进入某一分片**。
@@ -463,7 +466,8 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
     扩料做「Wiki vs 分块」对比时 Wiki 天然少看到 2/3 资料，结论不可用。
 
     `stats` 必须透传：Wiki 的成本大头是章节向量化（每页 3~8 节），
-    不传就等于把整理成本记成 0。
+    不传就等于把整理成本记成 0。可选回调只报告阶段和已处理/总数；
+    页面处理包含有原因的跳过，成功页面在章节提交后才算处理完成。
     """
     stats = stats or llm.CallStats()
     result = WikiBuildResult(notes=[])
@@ -479,6 +483,8 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
     # 现在按字符预算切片，逐片归纳，片内编号一律用全库序号。
     shards, excerpt = _plan_shards(chunks)
     topics: list[dict] = []
+    if on_progress:
+        on_progress("topics", 0, len(shards))
     for shard_no, entries in enumerate(shards, start=1):
         if not entries:
             continue
@@ -486,6 +492,8 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
             db, entries, shard_no=shard_no, shard_total=len(shards),
             total_chunks=len(chunks), excerpt=excerpt, stats=stats,
         ))
+        if on_progress:
+            on_progress("topics", shard_no, len(shards))
 
     # 2. Reduce：合并各片归纳出的相近主题
     topics = _merge_topics(topics)
@@ -508,6 +516,8 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
         topics = [topics[i] for i in sorted(keep)]
 
     taken: set[str] = set()
+    if on_progress:
+        on_progress("pages", 0, len(topics))
     for order, topic in enumerate(topics):
         title = str(topic.get("title") or "未命名主题")[:80]
         ids = [int(i) for i in topic.get("chunk_ids") or []
@@ -523,6 +533,8 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
             # 跳过必须有原因，否则用户看到「页面数少于主题数」却无从排查
             result.notes.append(
                 f"《{title}》未能定位到有效原文片段（编号 {ids[:5]}），已跳过")
+            if on_progress:
+                on_progress("pages", order + 1, len(topics))
             continue
 
         # 去重只针对「本次生成内的同名主题」，**刻意避开已存在的页面 slug**：
@@ -545,6 +557,8 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
             db.add(page)
             result.pages_skipped += 1
             result.notes.append(f"《{title}》已人工校对，本次生成进入待审，不覆盖")
+            if on_progress:
+                on_progress("pages", order + 1, len(topics))
             continue
 
         content = ""
@@ -575,6 +589,8 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
                 db.commit()
                 result.pages_skipped += 1
                 result.notes.append(f"《{title}》已人工校对，本次生成进入待审，不覆盖")
+                if on_progress:
+                    on_progress("pages", order + 1, len(topics))
                 continue
 
         if page is None:
@@ -634,6 +650,8 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
         result.sections += _index_sections(db, kb, page, version, stats=stats)
         # 本章节写完立刻提交，别把写锁带到下一页的 LLM 调用里
         db.commit()
+        if on_progress:
+            on_progress("pages", order + 1, len(topics))
 
     # 2. 页面间关联：同主题共享证据的页面互为关联
     db.flush()

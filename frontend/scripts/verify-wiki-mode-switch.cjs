@@ -99,13 +99,15 @@ async function isolated(browser, { existingPage = false } = {}) {
     }
   }
 
-  function completeTask({ addLaterPage = false } = {}) {
+  function completeTask({ addLaterPage = false, removePages = false } = {}) {
     assert.equal(state.task?.status, 'running', 'fixture task must be running before completion')
-    state.hasPage = true
+    assert(!(addLaterPage && removePages), 'fixture cannot add and remove pages at the same time')
+    state.hasPage = !removePages
     state.hasLaterPage = addLaterPage
+    const pageCount = pages().length
     state.task = {
       ...state.task, status: 'success', status_label: '成功', stage: '完成', progress: 100,
-      result: { created: addLaterPage ? 2 : 1, updated: 0, skipped: 0, sections: addLaterPage ? 2 : 1 },
+      result: { created: pageCount, updated: 0, skipped: 0, sections: pageCount },
       finished_at: '2026-01-01T00:00:01Z',
     }
   }
@@ -162,19 +164,22 @@ async function isolated(browser, { existingPage = false } = {}) {
       if (method === 'PATCH' && url.pathname === '/api/kbs/1') {
         const body = request.postDataJSON()
         assert.equal(body.mode, 'wiki', 'mode switch PATCH must select wiki')
-        assert.equal(state.mode, 'basic', 'fixture expects a single mode switch')
+        const switching = state.mode === 'basic'
         state.mode = body.mode
-        if (!state.hasPage) startTask(true)
+        state.name = body.name ?? state.name
+        if (switching && !state.hasPage) startTask(true)
         return await json(route, kb())
       }
       if (method === 'GET' && url.pathname === '/api/tasks' && url.searchParams.get('kb_id') === '1') {
         if (state.heldTaskRead && state.mode === 'wiki') {
           const held = state.heldTaskRead
-          state.heldTaskRead = null
-          held.started.resolve()
+          held.seen.add(url.searchParams.get('status') || '')
+          if (held.seen.has('') && held.seen.has('queued,running')) held.started.resolve()
           await held.release.promise
         }
-        const items = state.task ? [state.task] : []
+        const status = url.searchParams.get('status')
+        const items = state.task && (!status || status.split(',').some((value) => value.trim() === state.task.status))
+          ? [state.task] : []
         return await json(route, { items, total: items.length })
       }
       if (method === 'POST' && url.pathname === '/api/kbs/1/rebuild') {
@@ -189,6 +194,10 @@ async function isolated(browser, { existingPage = false } = {}) {
       }
       const pageMatch = url.pathname.match(/^\/api\/kbs\/1\/wiki\/pages\/([^/]+)$/)
       const requestedPage = pageMatch && pages().find((item) => item.slug === decodeURIComponent(pageMatch[1]))
+      if (method === 'GET' && pageMatch && decodeURIComponent(pageMatch[1]) === wikiPage.slug &&
+          state.task?.status === 'success' && !state.hasPage) {
+        return await json(route, { detail: 'Wiki 页面不存在' }, 404)
+      }
       if (method === 'GET' && requestedPage) {
         const refreshed = requestedPage.slug === 'first-page' && state.hasLaterPage
         return await json(route, {
@@ -235,12 +244,15 @@ const count = (requests, method, path) => requests.filter((r) => r.method === me
 async function switchToWiki(env) {
   const { page, requests, state } = env
   await modeField(page).getByRole('combobox').selectOption('wiki')
-  assert.match(await modeField(page).innerText(), /首次.*自动生成/)
+  const hint = await modeField(page).innerText()
+  assert.match(hint, /首次页面在已有分块时保存后自动生成/)
+  assert.match(hint, /否则随文档入库生成/)
+  assert.match(hint, /未就绪时回退分块/)
   assert.equal(state.mode, 'basic', 'selection alone must not save the mode')
   assert.equal(manualRebuilds(requests).length, 0)
   await page.getByRole('button', { name: '保存修改' }).click()
   await page.getByText('有任务运行中…').waitFor()
-  await page.locator('.task-item').getByText('处理中', { exact: true }).waitFor()
+  await page.locator('.task-item .task-head').getByText('处理中', { exact: true }).waitFor()
   await page.locator('.task-item .task-kind').getByText('首次生成 Wiki', { exact: true }).waitFor()
   await page.locator('.info-list').getByText('Wiki 增强', { exact: true }).waitFor()
   assert.equal(state.mode, 'wiki')
@@ -311,9 +323,10 @@ async function staleSettingsPoll(env) {
   try {
     await within(held.started.promise, 'the older settings poll')
     started = true
-    state.name = '较新轮询的名称'
-    // The Wiki tab starts its own automatic poll while the settings poll is held.
-    await page.getByRole('tab', { name: /^Wiki/ }).click()
+    // Saving a new name starts a foreground reload while the older poll is held.
+    const nameField = page.locator('label.field').filter({ hasText: '知识库名称' }).locator('input')
+    await nameField.fill('较新轮询的名称')
+    await page.getByRole('button', { name: '保存修改' }).click()
     await page.getByRole('heading', { name: '较新轮询的名称' }).waitFor()
     const olderResponse = page.waitForResponse((response) => response.request() === held.request)
     held.release.resolve()
@@ -331,12 +344,12 @@ async function staleSettingsPoll(env) {
 async function fastWikiCompletion(env) {
   const { page, state, completeTask } = env
   await openSettings(page)
-  const held = { started: deferred(), release: deferred() }
+  const held = { started: deferred(), release: deferred(), seen: new Set() }
   state.heldTaskRead = held
   try {
     await modeField(page).getByRole('combobox').selectOption('wiki')
     await page.getByRole('button', { name: '保存修改' }).click()
-    await within(held.started.promise, 'task list after saving')
+    await within(held.started.promise, 'recent and active task lists after saving')
     await page.getByRole('tab', { name: /^Wiki/ }).click()
     await page.getByText('暂无可查看的 Wiki 页面').waitFor()
     completeTask()
@@ -403,6 +416,43 @@ async function partialWikiPolling(env) {
   assert.equal(manualRebuilds(requests).length, 0)
 }
 
+async function emptyWikiPreservesDraft(env) {
+  const { page, requests, state, completeTask } = env
+  await openSettings(page)
+  await switchToWiki(env)
+  state.hasPage = true
+  const initialTree = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === '/api/kbs/1/wiki/tree' && response.status() === 200)
+  await page.getByRole('tab', { name: /^Wiki/ }).click()
+  assert.deepEqual((await (await initialTree).json()).items.map((item) => item.slug), ['first-page'])
+  assert.equal(state.task?.status, 'running')
+  await page.locator('.wiki-doc-head').getByRole('heading', { name: '自动生成页面' }).waitFor()
+  await page.getByRole('button', { name: '编辑校对' }).click()
+  const summary = page.getByPlaceholder('页面摘要（可选）')
+  const body = page.locator('.wiki-doc textarea.code')
+  const draftSummary = '目录清空时仍需保留的摘要'
+  const draftBody = '目录清空时仍需保留的 Wiki 正文。'
+  await summary.fill(draftSummary)
+  await body.fill(draftBody)
+
+  const emptyTree = page.waitForResponse(async (response) =>
+    new URL(response.url()).pathname === '/api/kbs/1/wiki/tree' && response.status() === 200 &&
+    (await response.json()).items.length === 0)
+  completeTask({ removePages: true })
+  await emptyTree
+  await page.locator('.wiki-tree .wiki-tree-item').waitFor({ state: 'detached' })
+  assert.equal(await summary.isVisible(), true, 'summary editor must remain visible after the tree becomes empty')
+  assert.equal(await body.isVisible(), true, 'body editor must remain visible after the tree becomes empty')
+  assert.equal(await summary.inputValue(), draftSummary, 'empty tree must preserve the open summary draft')
+  assert.equal(await body.inputValue(), draftBody, 'empty tree must preserve the open body draft')
+  assert.equal(await page.getByText('暂无可查看的 Wiki 页面').count(), 0, 'empty state must wait until editing ends')
+
+  await page.locator('.wiki-doc-head').getByRole('button', { name: '取消', exact: true }).click()
+  await page.getByText('暂无可查看的 Wiki 页面').waitFor()
+  assert.equal(count(requests, 'PUT', '/api/kbs/1/wiki/pages/first-page'), 0, 'cancel must not save the drafts')
+  assert.equal(manualRebuilds(requests).length, 0)
+}
+
 async function existingWiki(env) {
   const { page, requests, state } = env
   await openSettings(page)
@@ -438,6 +488,7 @@ async function existingWiki(env) {
     ['fast completion refreshes Wiki without a pending transition', fastWikiCompletion, {}],
     ['first generation refreshes open Wiki', wikiPolling, {}],
     ['partially generated Wiki refreshes without discarding draft', partialWikiPolling, {}],
+    ['empty refreshed Wiki preserves draft until cancel', emptyWikiPreservesDraft, {}],
     ['existing Wiki remains a manual rebuild', existingWiki, { existingPage: true }],
   ]
   let failed = 0

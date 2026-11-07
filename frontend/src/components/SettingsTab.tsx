@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { kbApi, taskApi } from '../api'
 import type { KbMode, KnowledgeBase, Task } from '../types'
 import {
   errorText,
   formatTime,
-  isRunningStatus,
   modeLabel,
   taskStatusClass,
   usePolling,
@@ -42,18 +41,34 @@ export default function SettingsTab({
   const [rebuildBusy, setRebuildBusy] = useState(false)
 
   const [tasks, setTasks] = useState<Task[]>([])
+  const [activeTasks, setActiveTasks] = useState<Task[]>([])
+  const taskRequestRef = useRef(0)
+  const previousKbRef = useRef(kb)
 
   useEffect(() => {
-    setName(kb.name)
-    setDescription(kb.description)
-    setMode(kb.mode)
+    const previous = previousKbRef.current
+    const changedKb = previous.id !== kb.id
+    // 状态轮询不应覆盖用户尚未保存的输入。
+    setName((current) => changedKb || current === previous.name ? kb.name : current)
+    setDescription((current) => changedKb || current === previous.description ? kb.description : current)
+    setMode((current) => changedKb || current === previous.mode ? kb.mode : current)
+    previousKbRef.current = kb
   }, [kb.id, kb.name, kb.description, kb.mode])
 
   const loadTasks = useCallback(async () => {
+    const requestId = ++taskRequestRef.current
     try {
-      const data = await taskApi.list({ kb_id: kb.id })
-      const items = data.items ?? []
-      setTasks(items.slice(0, 8))
+      const [recent, active] = await Promise.all([
+        taskApi.list({ kb_id: kb.id }),
+        taskApi.list({ kb_id: kb.id, status: 'queued,running' }),
+      ])
+      if (requestId !== taskRequestRef.current) return
+      const running = active.items ?? []
+      const activeIds = new Set(running.map((task) => task.id))
+      setActiveTasks(running)
+      // 重试复用旧任务 ID；优先显示所有活动任务，再补足最近记录。
+      setTasks([...running, ...(recent.items ?? []).filter((task) => !activeIds.has(task.id))]
+        .slice(0, Math.max(8, running.length)))
     } catch {
       /* 设置页任务区静默失败 */
     }
@@ -61,13 +76,13 @@ export default function SettingsTab({
 
   useEffect(() => {
     void loadTasks()
+    return () => { taskRequestRef.current += 1 }
   }, [loadTasks])
 
-  const hasRunning = tasks.some((t) => isRunningStatus(t.status))
-  usePolling(async () => {
-    await loadTasks()
-    await onChanged(true)
-  }, 2000, hasRunning)
+  const hasRunning = activeTasks.length > 0 || (kb.index?.pending_tasks ?? 0) > 0
+  const wikiTask = activeTasks.find((t) => t.kind === 'rebuild_wiki' && t.status === 'running')
+    ?? activeTasks.find((t) => t.kind === 'rebuild_wiki' && t.status === 'queued')
+  usePolling(loadTasks, 2000, hasRunning)
 
   const dirty = name !== kb.name || description !== kb.description || mode !== kb.mode
 
@@ -113,6 +128,7 @@ export default function SettingsTab({
     const res = await taskApi.retry(task.id)
     onToast(`任务 #${res.task_id} 已重新排队（第 ${res.retry_count || 1} 次）`, 'success')
     await loadTasks()
+    onChanged()
   }
 
   return (
@@ -147,7 +163,7 @@ export default function SettingsTab({
                 mode === 'wiki'
                   ? (kb.stats?.wiki_page_count ?? 0) > 0
                     ? 'Wiki 增强：问答优先检索 Wiki 章节；如需更新现有页面，可手动重建。'
-                    : 'Wiki 增强：首次页面会在文档入库后自动生成；未就绪时回退到分块。'
+                    : 'Wiki 增强：首次页面在已有分块时保存后自动生成，否则随文档入库生成；未就绪时回退分块。'
                   : '基础分块：问答按文本分块检索。'
               }
             >
@@ -210,7 +226,14 @@ export default function SettingsTab({
                 </dd>
                 <dt>Wiki 索引</dt>
                 <dd>
-                  {kb.wiki_ready ? (
+                  {wikiTask ? (
+                    <span className="muted">
+                      {wikiTask.status === 'queued' ? '等待生成' : '生成中'}
+                      {kb.wiki_ready ? ` · 已有 ${kb.stats?.wiki_page_count ?? 0} 个页面` : ''}
+                    </span>
+                  ) : kb.wiki_ready && kb.index?.wiki_current_units === 0 ? (
+                    <span className="muted">章节索引未建立 · 已有 {kb.stats?.wiki_page_count ?? 0} 个页面</span>
+                  ) : kb.wiki_ready ? (
                     <span className="test-ok">已就绪 · {kb.stats?.wiki_page_count ?? 0} 个页面</span>
                   ) : (
                     <span className="muted">未生成</span>

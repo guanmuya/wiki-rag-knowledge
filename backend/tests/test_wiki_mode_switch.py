@@ -33,6 +33,9 @@ def store(tmp_path, monkeypatch):
         connect_args={"check_same_thread": False},
     )
     Base.metadata.create_all(engine)
+    # Progress writes use a separate connection, as in the production WAL database.
+    with engine.connect() as conn:
+        conn.exec_driver_sql("PRAGMA journal_mode=WAL")
     sessions = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     with sessions() as db:
         db.add(models.User(username="admin", password_hash="unused", role="admin"))
@@ -166,6 +169,30 @@ def test_switch_of_empty_kb_does_not_queue_a_build(store):
 
     with store() as db:
         assert not db.execute(select(models.Task).where(models.Task.kb_id == kb_id)).first()
+
+
+@pytest.mark.parametrize("status", ["partial", "failed"])
+@pytest.mark.parametrize("work", ["indexed-chunks", "queued-task"])
+def test_switch_preserves_failure_detail_while_initial_build_is_queued(store, status, work):
+    kb_id = _kb(store, chunks=work == "indexed-chunks")
+    detail = "Previous indexing failure: source unavailable"
+    with store() as db:
+        kb = db.get(models.KnowledgeBase, kb_id)
+        kb.status, kb.status_detail = status, detail
+        db.commit()
+    if work == "queued-task":
+        _task(store, kb_id, kind="reindex_kb")
+
+    response = _switch(store, kb_id, "wiki")
+
+    assert len(_active_init(store, kb_id)) == 1
+    assert response["mode"] == "wiki"
+    assert detail in response["status_detail"]
+    if work == "indexed-chunks":
+        assert "Wiki 排队中" in response["status_detail"]
+    with store() as db:
+        kb = db.get(models.KnowledgeBase, kb_id)
+        assert detail in kb.status_detail
 
 
 @pytest.mark.parametrize("page_status", ["draft", "published"])
@@ -379,6 +406,27 @@ def test_prior_work_defers_inline_wiki_to_pending_initial_build(
         assert builds == [kb_id]
 
 
+@pytest.mark.parametrize("initial", [False, True])
+def test_wiki_build_reports_progress_for_initial_and_manual_tasks(store, monkeypatch, initial):
+    kb_id = _kb(store, chunks=True, mode="wiki")
+    key = f"wiki-init:{kb_id}" if initial else f"wiki:{kb_id}"
+    task_id = _task(store, kb_id, kind="rebuild_wiki", dedupe_key=key)
+    progress = []
+    monkeypatch.setattr(worker, "_report_wiki_progress",
+                        lambda task, phase, done, total: progress.append((task, phase, done, total)))
+
+    def build(db, kb, *, stats, on_progress):
+        on_progress("topics", 1, 1)
+        on_progress("pages", 1, 1)
+        return wiki.WikiBuildResult()
+
+    monkeypatch.setattr(wiki, "build_wiki", build)
+    assert worker.run_once("test")
+    assert progress == [(task_id, "topics", 1, 1), (task_id, "pages", 1, 1)]
+    with store() as db:
+        assert db.get(models.Task, task_id).status == models.TaskStatus.success.value
+
+
 @pytest.mark.parametrize("changed", ["basic", "pages"])
 def test_worker_skips_initial_build_if_preconditions_changed(store, monkeypatch, changed):
     kb_id = _kb(store, chunks=True, mode="wiki")
@@ -507,6 +555,58 @@ def test_initial_build_preserves_ingest_failure(store, tmp_path, failure_before_
         assert "missing.md" in failed_doc.status_detail
         assert db.execute(select(func.count(models.Chunk.id)).where(
             models.Chunk.kb_id == kb_id)).scalar_one() > 0
+
+
+@pytest.mark.parametrize("prior_failure", [None, "document", "rebuild"])
+def test_initial_completion_keeps_later_task_active(store, tmp_path, monkeypatch, prior_failure):
+    kb_id = _kb(store, chunks=True)
+    error = None
+    if prior_failure == "document":
+        error = "missing.md"
+        failed_id = _ingest_task(store, kb_id, tmp_path / error, missing=True)
+    elif prior_failure == "rebuild":
+        error = "full index rebuild unavailable"
+        failed_id = _task(store, kb_id, kind="reindex_kb")
+
+        def fail_rebuild(db, task, *, stats):
+            raise RuntimeError(error)
+
+        monkeypatch.setattr(worker.ingest, "reindex_kb", fail_rebuild)
+    if prior_failure:
+        assert worker.run_once("test")
+        with store() as db:
+            failed = db.get(models.Task, failed_id)
+            assert failed.status == models.TaskStatus.failed.value
+            assert error in failed.error
+            assert db.get(models.KnowledgeBase, kb_id).status == models.KbStatus.partial.value
+
+    _switch(store, kb_id, "wiki")
+    initial = _active_init(store, kb_id)
+    assert len(initial) == 1
+    initial_id = initial[0].id
+    later_id = _ingest_task(store, kb_id, tmp_path / "later.md")
+    assert initial_id < later_id
+
+    # The first build finishes while the later document is still in the queue.
+    assert worker.run_once("test")
+    with store() as db:
+        init_task = db.get(models.Task, initial_id)
+        assert init_task.status == models.TaskStatus.success.value, init_task.error
+        assert db.get(models.Task, later_id).status == models.TaskStatus.queued.value
+        assert serializers.wiki_ready(db, kb_id)
+        kb = db.get(models.KnowledgeBase, kb_id)
+        if prior_failure:
+            assert kb.status == models.KbStatus.partial.value
+            assert error in kb.status_detail
+        else:
+            assert kb.status == models.KbStatus.indexing.value
+
+    # Once initialization finishes, the queued task is claimable and can finish.
+    assert worker.run_once("test")
+    with store() as db:
+        later = db.get(models.Task, later_id)
+        assert later.status == models.TaskStatus.success.value, later.error
+        assert db.get(models.Document, later.doc_id).status == models.KbStatus.ready.value
 
 
 @pytest.mark.parametrize("kind", ["reindex_kb", "embedding_rebuild"])

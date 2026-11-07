@@ -295,6 +295,227 @@ async function dirtyCancel(browser) {
   } finally { await env.finish() }
 }
 
+async function wikiRetryStatus(browser) {
+  let phase = 'failed'
+  const env = await isolated(browser, { api: async (route, request, url) => {
+    if (url.pathname === '/api/kbs/1' && request.method() === 'GET') {
+      const state = phase === 'failed'
+        ? { status: 'partial', status_label: '部分可用', wiki_ready: false, pending: 0 }
+        : phase === 'queued'
+          ? { status: 'indexing', status_label: 'Wiki 排队中', wiki_ready: false, pending: 1 }
+          : { status: 'ready', status_label: '可用', wiki_ready: true, pending: 0 }
+      await json(route, { ...kb, ...state, index: { pending_tasks: state.pending },
+        stats: { ...kb.stats, chunk_count: 3, wiki_page_count: state.wiki_ready ? 1 : 0 } })
+      return true
+    }
+    if (url.pathname === '/api/tasks' && request.method() === 'GET') {
+      const status = phase === 'failed' ? 'failed' : phase === 'queued' ? 'queued' : 'success'
+      const task = { id: 99, kind: 'rebuild_wiki', kind_label: '重建 Wiki',
+        status, status_label: { failed: '失败', queued: '排队中', success: '成功' }[status],
+        stage: status === 'queued' ? '排队中' : '', progress: 0, attempts: 1,
+        result: {}, error: status === 'failed' ? '生成失败' : '', created_at: null }
+      const activeOnly = url.searchParams.has('status')
+      const items = activeOnly && status !== 'queued' ? [] : [task]
+      await json(route, { items, total: items.length })
+      return true
+    }
+    if (url.pathname === '/api/tasks/99/retry' && request.method() === 'POST') {
+      phase = 'queued'
+      await json(route, { task_id: 99, retry_count: 1 })
+      return true
+    }
+    return false
+  } })
+  try {
+    const { page } = env
+    await loginAndOpen(page, 'settings')
+    await page.locator('.task-item').getByRole('button', { name: '重试' }).click()
+    await page.locator('.detail-title').getByText('Wiki 排队中').waitFor()
+    await page.locator('.info-list').getByText('等待生成').waitFor()
+    phase = 'success'
+    await page.locator('.detail-title').getByText('可用').waitFor()
+    await page.locator('.info-list').getByText('已就绪 · 1 个页面').waitFor()
+  } finally { await env.finish() }
+}
+
+async function wikiStatusSnapshotRace(browser) {
+  let detailRequests = 0
+  const env = await isolated(browser, { api: async (route, request, url) => {
+    if (url.pathname === '/api/kbs/1' && request.method() === 'GET') {
+      detailRequests++
+      const stale = detailRequests === 1
+      await json(route, { ...kb, status: stale ? 'indexing' : 'ready',
+        status_label: stale ? '索引中' : '可用', index: { pending_tasks: 0 } })
+      return true
+    }
+    return false
+  } })
+  try {
+    const { page } = env
+    await loginAndOpen(page, 'settings')
+    await page.locator('.detail-title').getByText('可用').waitFor()
+    assert(detailRequests >= 2, 'an indexing snapshot with zero pending tasks must be refreshed')
+  } finally { await env.finish() }
+}
+
+async function wikiActiveOldTaskAndDraft(browser) {
+  let description = '原说明'
+  const running = { id: 1, kind: 'rebuild_wiki', kind_label: '重建 Wiki', status: 'running',
+    status_label: '处理中', stage: 'Wiki 主题归纳 1/2', progress: 20, attempts: 1,
+    result: {}, error: '', created_at: null, started_at: null }
+  const queued = { ...running, id: 2, status: 'queued', status_label: '排队中', stage: '排队中' }
+  const recent = Array.from({ length: 8 }, (_, i) => ({ ...running, id: 20 + i,
+    kind: 'ingest_document', status: 'success', status_label: '成功', stage: '完成' }))
+  const env = await isolated(browser, { api: async (route, request, url) => {
+    if (url.pathname === '/api/kbs/1') {
+      await json(route, { ...kb, description, status: 'indexing', status_label: 'Wiki 生成中',
+        wiki_ready: false, index: { pending_tasks: 2 }, stats: { ...kb.stats, wiki_page_count: 0 } })
+      return true
+    }
+    if (url.pathname === '/api/tasks') {
+      const items = url.searchParams.has('status') ? [queued, running] : recent
+      await json(route, { items, total: items.length })
+      return true
+    }
+    return false
+  } })
+  try {
+    const { page } = env
+    await loginAndOpen(page, 'settings')
+    await page.locator('.info-list').getByText('生成中', { exact: true }).waitFor()
+    await page.locator('.task-item').getByText('Wiki 主题归纳 1/2').waitFor()
+    assert(await page.getByRole('button', { name: '重建 Wiki', exact: true }).isDisabled())
+    const name = page.locator('input[maxlength="128"]')
+    await name.fill('尚未保存的名称')
+    description = '远端更新的说明'
+    await page.locator('textarea').waitFor()
+    await page.waitForFunction(() => document.querySelector('textarea')?.value === '远端更新的说明')
+    assert.equal(await name.inputValue(), '尚未保存的名称', 'polling must preserve local edits')
+  } finally { await env.finish() }
+}
+
+async function wikiMissingCurrentSections(browser) {
+  const env = await isolated(browser, { api: async (route, request, url) => {
+    if (url.pathname !== '/api/kbs/1') return false
+    await json(route, { ...kb, status: 'partial', status_label: '部分可用', wiki_ready: true,
+      stats: { ...kb.stats, wiki_page_count: 1 },
+      index: { pending_tasks: 0, wiki_current_units: 0 } })
+    return true
+  } })
+  try {
+    await loginAndOpen(env.page, 'settings')
+    await env.page.locator('.info-list').getByText('章节索引未建立 · 已有 1 个页面').waitFor()
+  } finally { await env.finish() }
+}
+
+async function wikiRefreshAfterBuild(browser) {
+  let finished = false
+  const env = await isolated(browser, { api: async (route, request, url) => {
+    if (url.pathname === '/api/kbs/1') {
+      await json(route, { ...kb, status: finished ? 'ready' : 'indexing',
+        status_label: finished ? '可用' : 'Wiki 生成中', wiki_ready: finished,
+        wiki_ready_at: finished ? '2026-06-15T12:00:00Z' : null,
+        index: { pending_tasks: finished ? 0 : 1 },
+        stats: { ...kb.stats, wiki_page_count: finished ? pages.length : 0 } })
+      return true
+    }
+    if (url.pathname === '/api/kbs/1/wiki/tree') {
+      await json(route, { items: finished ? pages : [] })
+      return true
+    }
+    return false
+  } })
+  try {
+    const { page } = env
+    await loginAndOpen(page, 'wiki')
+    await page.getByText('暂无可查看的 Wiki 页面').waitFor()
+    finished = true
+    await wikiHeading(page, 'Alpha page')
+    await page.getByText('BODY-alpha-original').waitFor()
+  } finally { await env.finish() }
+}
+
+async function wikiRefreshPreservesDraft(browser) {
+  let finished = false
+  const env = await isolated(browser, { api: async (route, request, url) => {
+    if (url.pathname === '/api/kbs/1') {
+      await json(route, { ...kb, status: finished ? 'ready' : 'indexing',
+        status_label: finished ? '可用' : 'Wiki 生成中',
+        wiki_ready_at: finished ? '2026-06-15T12:00:00Z' : '2026-06-14T12:00:00Z',
+        index: { pending_tasks: finished ? 0 : 1 } })
+      return true
+    }
+    if (url.pathname === '/api/kbs/1/wiki/pages/alpha') {
+      const data = detail('alpha')
+      if (finished) data.version.content_md = 'BODY-alpha-updated'
+      await json(route, data)
+      return true
+    }
+    return false
+  } })
+  try {
+    const { page } = env
+    await openWiki(page)
+    await page.getByRole('button', { name: '编辑校对' }).click()
+    const textarea = page.locator('.wiki-main textarea.code')
+    await textarea.fill('尚未保存的 Wiki 草稿')
+    finished = true
+    await page.locator('.detail-title').getByText('可用').waitFor()
+    assert.equal(await textarea.inputValue(), '尚未保存的 Wiki 草稿', 'background refresh must preserve the draft')
+    await page.locator('.wiki-doc-head').getByRole('button', { name: '取消' }).click()
+    await page.getByText('BODY-alpha-updated').waitFor()
+  } finally { await env.finish() }
+}
+
+async function wikiStalePollAfterRetry(browser) {
+  let phase = 'failed', holdNextPoll = false, wasHeld = false
+  const held = deferred(), release = deferred(), delivered = deferred()
+  const env = await isolated(browser, { api: async (route, request, url) => {
+    if (url.pathname === '/api/kbs/1' && request.method() === 'GET') {
+      if (holdNextPoll && !wasHeld) {
+        wasHeld = true
+        held.resolve()
+        await release.promise
+        await json(route, { ...kb, status: 'ready', status_label: '可用', index: { pending_tasks: 0 } })
+        delivered.resolve()
+      } else {
+        await json(route, { ...kb, status: 'indexing',
+          status_label: phase === 'queued' ? 'Wiki 排队中' : '索引中',
+          wiki_ready: false, index: { pending_tasks: 1 } })
+      }
+      return true
+    }
+    if (url.pathname === '/api/tasks' && request.method() === 'GET') {
+      const status = phase === 'failed' ? 'failed' : 'queued'
+      const task = { id: 99, kind: 'rebuild_wiki', kind_label: '重建 Wiki', status,
+        status_label: status === 'failed' ? '失败' : '排队中', stage: '排队中', progress: 0,
+        attempts: 1, result: {}, error: '', created_at: null }
+      const items = url.searchParams.has('status') && status === 'failed' ? [] : [task]
+      await json(route, { items, total: items.length })
+      return true
+    }
+    if (url.pathname === '/api/tasks/99/retry') {
+      phase = 'queued'
+      await json(route, { task_id: 99, retry_count: 1 })
+      return true
+    }
+    return false
+  } })
+  try {
+    const { page } = env
+    await loginAndOpen(page, 'settings')
+    holdNextPoll = true
+    await within(held.promise, 'the older KB poll')
+    await page.locator('.task-item').getByRole('button', { name: '重试' }).click()
+    await page.locator('.detail-title').getByText('Wiki 排队中').waitFor()
+    release.resolve()
+    await within(delivered.promise, 'the older KB response')
+    await page.waitForTimeout(200)
+    assert.equal(await page.locator('.detail-title').getByText('Wiki 排队中').count(), 1,
+      'an older poll must not replace the state obtained after retry')
+  } finally { release.resolve(); await env.finish() }
+}
+
 const tests = {
   setup,
   'upload-mixed-inflight': mixedAndInflight,
@@ -304,6 +525,13 @@ const tests = {
   'wiki-stale-success': (browser) => stale(browser, 200),
   'wiki-stale-error': (browser) => stale(browser, 500),
   'wiki-dirty-cancel': dirtyCancel,
+  'wiki-retry-status': wikiRetryStatus,
+  'wiki-status-snapshot-race': wikiStatusSnapshotRace,
+  'wiki-active-old-task-and-draft': wikiActiveOldTaskAndDraft,
+  'wiki-missing-current-sections': wikiMissingCurrentSections,
+  'wiki-refresh-after-build': wikiRefreshAfterBuild,
+  'wiki-refresh-preserves-draft': wikiRefreshPreservesDraft,
+  'wiki-stale-poll-after-retry': wikiStalePollAfterRetry,
 }
 ;(async () => {
   const selected = process.argv.slice(2)

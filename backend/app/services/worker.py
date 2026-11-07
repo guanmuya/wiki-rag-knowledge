@@ -11,13 +11,15 @@ import json
 import logging
 import threading
 import traceback
+from typing import Literal
 
 from sqlalchemy import and_, exists, or_, select, text, update
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.orm import aliased
 
 from .. import config, models
-from ..db import is_lock_error, retry_on_locked, session_scope
+from ..db import (apply_busy_timeout, is_lock_error, retry_on_locked,
+                  run_with_lock_retry, session_scope)
 from . import cost, ingest, llm, taskflow, wiki
 
 log = logging.getLogger("wrk.worker")
@@ -142,6 +144,39 @@ def _retain_index_failures(db, kb: models.KnowledgeBase) -> None:
         kb.status_detail = f"Wiki 已生成；分块索引重建失败：{(last_rebuild.error or '请重试')[:200]}"
 
 
+def _report_wiki_progress(task_id: int, phase: Literal["topics", "pages"],
+                          done: int, total: int) -> None:
+    """独立任务的阶段计数单独提交，不提交 Wiki 会话中尚未落库的业务修改。"""
+    if phase == "topics":
+        stage = f"Wiki 主题归纳 {done}/{total}"
+        progress = 5 + (35 * done // total if total else 0)
+    else:
+        stage = f"Wiki 页面处理 {done}/{total}"
+        progress = 40 + (55 * done // total if total else 0)
+    # 进度值为兼容已有任务契约的阶段权重，并非总耗时的精确百分比；
+    # 已完成工作以 stage 中的计数为准，100 只在任务成功提交时写入。
+    def write_progress() -> None:
+        # 外层 Wiki 会话占用 worker 连接；进度使用独立池，池满也只短等一次。
+        with session_scope(role="progress") as progress_db:
+            apply_busy_timeout(progress_db, min(config.BUSY_TIMEOUT_INTERACTIVE,
+                                                config.BUSY_TIMEOUT_PROGRESS))
+            task = progress_db.get(models.Task, task_id)
+            if task and task.status == models.TaskStatus.running.value:
+                task.stage = stage
+                task.progress = progress
+                progress_db.add(task)
+
+    try:
+        # 和 WorkerSession 的进度提交一致，最多短暂重试一次写锁冲突。
+        run_with_lock_retry(write_progress, attempts=min(config.LOCK_RETRY_ATTEMPTS, 2))
+    except OperationalError as exc:
+        if not is_lock_error(exc):
+            raise
+        log.warning("Wiki 进度写入被锁挡住，跳过本次更新：%s", getattr(exc, "orig", exc))
+    except SQLAlchemyTimeoutError as exc:
+        log.warning("Wiki 进度连接池等待超时，跳过本次更新：%s", exc)
+
+
 def run_once(worker_id: str = "inline") -> bool:
     """执行一个任务；返回是否真的处理了任务（供测试同步驱动）。"""
     # role="worker"：busy_timeout 提到 30s，且进度写撞锁不会让任务失败
@@ -183,13 +218,25 @@ def run_once(worker_id: str = "inline") -> bool:
                         task.payload = json.dumps(payload, ensure_ascii=False)
                         db.add(task)
                         db.commit()
-                    wres = wiki.build_wiki(db, kb, stats=stats)
+                    task_id = task.id
+                    wres = wiki.build_wiki(
+                        db, kb, stats=stats,
+                        on_progress=lambda phase, done, total: _report_wiki_progress(
+                            task_id, phase, done, total),
+                    )
                     result = {"created": wres.pages_created, "updated": wres.pages_updated,
                               "skipped": wres.pages_skipped, "sections": wres.sections,
                               "notes": wres.notes or []}
                     ingest._refresh_kb_status(db, kb, commit=False)
                     if initial:
                         _retain_index_failures(db, kb)
+                        pending = db.execute(select(models.Task.id).where(
+                            models.Task.kb_id == kb.id, models.Task.id != task.id,
+                            models.Task.status.in_([models.TaskStatus.queued.value, models.TaskStatus.running.value]),
+                        ).limit(1)).first()
+                        if pending and kb.status == models.KbStatus.ready.value:
+                            kb.status = models.KbStatus.indexing.value
+                            kb.status_detail = "还有任务排队或处理中"
                 result["usage_by_phase"] = {task.kind: stats.as_dict()}
             elif task.kind == models.TaskKind.reindex_kb.value:
                 result = ingest.reindex_kb(db, task, stats=stats)

@@ -23,7 +23,7 @@ export default function KbDetailPage() {
   const [kb, setKb] = useState<KnowledgeBase | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<unknown>(null)
-  const requestRef = useRef(0)
+  const kbRequestRef = useRef(0)
 
   const tabParam = searchParams.get('tab')
   const tab: TabKey =
@@ -31,7 +31,7 @@ export default function KbDetailPage() {
   const slugParam = searchParams.get('slug')
 
   const load = useCallback(async (background = false) => {
-    const requestId = ++requestRef.current
+    const requestId = ++kbRequestRef.current
     if (!Number.isFinite(kbId)) {
       setError(new Error('知识库 ID 不合法'))
       setLoading(false)
@@ -39,23 +39,26 @@ export default function KbDetailPage() {
     }
     try {
       const data = await kbApi.get(kbId)
-      if (requestId !== requestRef.current) return
+      if (requestId !== kbRequestRef.current) return
       setKb(data)
       setError(null)
     } catch (err) {
       // 轮询失败保留当前页面和未保存内容，下次轮询继续尝试。
-      if (requestId === requestRef.current && !background) setError(err)
+      if (requestId === kbRequestRef.current && !background) setError(err)
     } finally {
-      if (requestId === requestRef.current) setLoading(false)
+      if (requestId === kbRequestRef.current) setLoading(false)
     }
   }, [kbId])
 
   useEffect(() => {
     setLoading(true)
     void load()
+    return () => { kbRequestRef.current += 1 }
   }, [load])
 
-  usePolling(() => load(true), 2000, tab === 'wiki' && (kb?.index?.pending_tasks ?? 0) > 0)
+  // 任务可能在库状态与任务计数的读取之间结束；持续刷新直到状态收敛。
+  usePolling(() => load(true), 2000, kb?.id === kbId &&
+    ((kb.index?.pending_tasks ?? 0) > 0 || kb.status === 'indexing'))
 
   const setTab = (next: TabKey) => {
     const params = new URLSearchParams(searchParams)
