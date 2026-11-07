@@ -173,7 +173,29 @@ def test_model_binding_injects_key_and_model(db_session):
     assert binding["base_url"] == "https://example.test/v1"
     assert binding["api_key"] == "sk-agent"
     assert binding["model"] == "agent-model"
-    assert binding["model_label"] == "Agent Model · AgentTestProvider"
+    assert binding["model_label"] == "Agent Model · agent-model · AgentTestProvider"
+
+
+def test_model_label_carries_model_identifier(db_session):
+    """同名模型只靠显示名分不清，展示名必须带模型标识；标识与显示名相同时不重复。"""
+    provider = models.Provider(name="Magpie", base_url="https://example.test", protocol="openai")
+    db_session.add(provider)
+    db_session.flush()
+    labeled = models.ModelConfig(
+        provider_id=provider.id, purpose="llm", model="openai/gpt-6.1-sol", label="GPT-6.1 Sol",
+    )
+    same_name = models.ModelConfig(
+        provider_id=provider.id, purpose="llm", model="kiro/auto", label="kiro/auto",
+    )
+    unlabeled = models.ModelConfig(
+        provider_id=provider.id, purpose="llm", model="codex/gpt-6-luna", label="",
+    )
+    db_session.add_all([labeled, same_name, unlabeled])
+    db_session.commit()
+
+    assert plugins.model_label(labeled, provider) == "GPT-6.1 Sol · openai/gpt-6.1-sol · Magpie"
+    assert plugins.model_label(same_name, provider) == "kiro/auto · Magpie"
+    assert plugins.model_label(unlabeled, provider) == "codex/gpt-6-luna · Magpie"
 
 
 def test_model_list_filters_by_core_protocol(db_session):
