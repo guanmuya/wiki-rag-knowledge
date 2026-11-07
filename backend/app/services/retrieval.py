@@ -579,7 +579,7 @@ def _wiki_evidence(db: Session, page_version_id: int, limit: int = 4) -> list[di
 def plan_route(db: Session, kb: models.KnowledgeBase) -> tuple[str, str, bool]:
     """返回 (used, reason, fallback)。配置模式 ≠ 可用状态，这里显式区分。"""
     if kb.mode == models.KbMode.wiki.value:
-        wiki_count = db.execute(
+        wiki_count = None if kb.wiki_incomplete else db.execute(
             select(models.WikiPage.id).where(
                 models.WikiPage.kb_id == kb.id,
                 models.WikiPage.status != models.WikiPageStatus.draft.value,

@@ -11,6 +11,7 @@ import json
 import logging
 import threading
 import traceback
+import uuid
 from typing import Literal
 
 from sqlalchemy import and_, exists, or_, select, text, update
@@ -97,7 +98,8 @@ def _claim_locked(db, worker_id: str) -> models.Task | None:
         update(models.Task)
         .where(models.Task.id == task.id, models.Task.status == models.TaskStatus.queued.value)
         .values(status=models.TaskStatus.running.value, stage="处理中", progress=5,
-                started_at=models.utcnow(), attempts=models.Task.attempts + 1)
+                started_at=models.utcnow(), attempts=models.Task.attempts + 1,
+                run_token=uuid.uuid4().hex)
     )
     db.commit()
     if res.rowcount != 1:
@@ -145,7 +147,7 @@ def _retain_index_failures(db, kb: models.KnowledgeBase) -> None:
 
 
 def _report_wiki_progress(task_id: int, phase: Literal["topics", "pages"],
-                          done: int, total: int) -> None:
+                          done: int, total: int, *, run_token: str | None = None) -> None:
     """独立任务的阶段计数单独提交，不提交 Wiki 会话中尚未落库的业务修改。"""
     if phase == "topics":
         stage = f"Wiki 主题归纳 {done}/{total}"
@@ -160,11 +162,16 @@ def _report_wiki_progress(task_id: int, phase: Literal["topics", "pages"],
         with session_scope(role="progress") as progress_db:
             apply_busy_timeout(progress_db, min(config.BUSY_TIMEOUT_INTERACTIVE,
                                                 config.BUSY_TIMEOUT_PROGRESS))
-            task = progress_db.get(models.Task, task_id)
-            if task and task.status == models.TaskStatus.running.value:
-                task.stage = stage
-                task.progress = progress
-                progress_db.add(task)
+            # 单条条件更新与恢复、重试及停止请求竞争；旧执行不能改写新执行的进度。
+            statement = update(models.Task).where(
+                models.Task.id == task_id,
+                models.Task.status == models.TaskStatus.running.value,
+                models.Task.wiki_stop_requested.is_(False),
+            )
+            if run_token is not None:
+                statement = statement.where(models.Task.run_token == run_token,
+                                            models.Task.wiki_active.is_(True))
+            progress_db.execute(statement.values(stage=stage, progress=progress))
 
     try:
         # 和 WorkerSession 的进度提交一致，最多短暂重试一次写锁冲突。
@@ -185,6 +192,8 @@ def run_once(worker_id: str = "inline") -> bool:
         if not task:
             return False
         stats = llm.CallStats()
+        run_token = task.run_token
+        task_id, kb_id, doc_id = task.id, task.kb_id, task.doc_id
         try:
             if task.kind == models.TaskKind.ingest_document.value:
                 result = ingest.ingest_version(db, task, stats=stats)
@@ -213,55 +222,77 @@ def run_once(worker_id: str = "inline") -> bool:
                         ingest._refresh_kb_status(db, kb, commit=False)
                 else:
                     if initial and not payload.get("initial_wiki_started"):
-                        # 部分页面已提交后被中断，重试必须能继续这次首次生成。
+                        # 已发布部分页面后重试必须继续；标记与开始阶段同事务提交，
+                        # 且旧执行不能把标记写到恢复或重试后的新执行上。
                         payload["initial_wiki_started"] = True
-                        task.payload = json.dumps(payload, ensure_ascii=False)
-                        db.add(task)
-                        db.commit()
-                    task_id = task.id
-                    wres = wiki.build_wiki(
-                        db, kb, stats=stats,
-                        on_progress=lambda phase, done, total: _report_wiki_progress(
-                            task_id, phase, done, total),
-                    )
-                    result = {"created": wres.pages_created, "updated": wres.pages_updated,
-                              "skipped": wres.pages_skipped, "sections": wres.sections,
-                              "notes": wres.notes or []}
-                    ingest._refresh_kb_status(db, kb, commit=False)
-                    if initial:
-                        _retain_index_failures(db, kb)
-                        pending = db.execute(select(models.Task.id).where(
-                            models.Task.kb_id == kb.id, models.Task.id != task.id,
-                            models.Task.status.in_([models.TaskStatus.queued.value, models.TaskStatus.running.value]),
-                        ).limit(1)).first()
-                        if pending and kb.status == models.KbStatus.ready.value:
-                            kb.status = models.KbStatus.indexing.value
-                            kb.status_detail = "还有任务排队或处理中"
+                        marked = db.execute(update(models.Task).where(
+                            models.Task.id == task_id,
+                            models.Task.status == models.TaskStatus.running.value,
+                            models.Task.run_token == run_token,
+                        ).values(payload=json.dumps(payload, ensure_ascii=False)))
+                        if marked.rowcount != 1:
+                            raise taskflow.StaleRun()
+                    wiki_epoch = taskflow.start_wiki(db, task, run_token)
+                    try:
+                        wres = wiki.build_wiki(
+                            db, kb, stats=stats,
+                            on_progress=lambda phase, done, total: _report_wiki_progress(
+                                task_id, phase, done, total, run_token=run_token),
+                            check_cancel=lambda: taskflow.check_wiki_stop(task_id, run_token, db),
+                            on_publish=lambda: taskflow.record_wiki_publication(db, task_id, run_token),
+                        )
+                        taskflow.finish_wiki(db, task, run_token, wiki_epoch, complete=True)
+                        result = {"created": wres.pages_created, "updated": wres.pages_updated,
+                                  "skipped": wres.pages_skipped, "sections": wres.sections,
+                                  "notes": wres.notes or []}
+                        ingest._refresh_kb_status(db, kb, commit=False)
+                        if initial:
+                            _retain_index_failures(db, kb)
+                            pending = db.execute(select(models.Task.id).where(
+                                models.Task.kb_id == kb.id, models.Task.id != task.id,
+                                models.Task.status.in_([models.TaskStatus.queued.value, models.TaskStatus.running.value]),
+                            ).limit(1)).first()
+                            if pending and kb.status == models.KbStatus.ready.value:
+                                kb.status = models.KbStatus.indexing.value
+                                kb.status_detail = "还有任务排队或处理中"
+                    except taskflow.WikiStopped:
+                        db.rollback()
+                        result = {"wiki_stopped": True}
                 result["usage_by_phase"] = {task.kind: stats.as_dict()}
             elif task.kind == models.TaskKind.reindex_kb.value:
                 result = ingest.reindex_kb(db, task, stats=stats)
-                _refresh_kb_after_rebuild(db, task, result)
+                if not result.get("wiki_stopped"):
+                    _refresh_kb_after_rebuild(db, task, result)
             elif task.kind == models.TaskKind.embedding_rebuild.value:
                 result = ingest.reindex_kb(db, task, stats=stats)
-                _refresh_kb_after_rebuild(db, task, result)
+                if not result.get("wiki_stopped"):
+                    _refresh_kb_after_rebuild(db, task, result)
             else:
                 raise RuntimeError(f"未知任务类型：{task.kind}")
 
             result["usage"] = stats.as_dict()
-            # 成本流水：把本任务的用量按阶段投影进 cost_records。
-            # Task.result["usage"] 保持原样不动（前端与历史接口仍读它），
-            # 这里只是让历史成本能被 SQL 聚合，而不是每次查询都反序列化 JSON。
+            stopped = bool(result.get("wiki_stopped"))
+            values = {
+                "status": models.TaskStatus.stopped.value if stopped else models.TaskStatus.success.value,
+                "stage": "已停止" if stopped else "完成",
+                "wiki_active": False,
+                "result": json.dumps(result, ensure_ascii=False),
+                "finished_at": models.utcnow(),
+            }
+            if not stopped:
+                values["progress"] = 100
+            changed = db.execute(update(models.Task).where(
+                models.Task.id == task_id, models.Task.status == models.TaskStatus.running.value,
+                models.Task.run_token == run_token,
+            ).values(**values))
+            if changed.rowcount != 1:
+                raise taskflow.StaleRun()
             cost.record_phases(
-                db, kb_id=task.kb_id, task_kind=task.kind, task_id=task.id,
-                doc_id=task.doc_id,
-                phases=result.get("usage_by_phase"),
-                total=stats,
+                db, kb_id=kb_id, task_kind=task.kind, task_id=task_id,
+                doc_id=doc_id, phases=result.get("usage_by_phase"), total=stats,
             )
-            task.status = models.TaskStatus.success.value
-            task.stage = "完成"
-            task.progress = 100
-            task.result = json.dumps(result, ensure_ascii=False)
-            task.finished_at = models.utcnow()
+            if stopped:
+                taskflow.sync_wiki_stopped(db, task)
             if task.kind != models.TaskKind.rebuild_wiki.value and task.kb_id:
                 kb = db.get(models.KnowledgeBase, task.kb_id)
                 if (kb and kb.status == models.KbStatus.ready.value and
@@ -273,18 +304,48 @@ def run_once(worker_id: str = "inline") -> bool:
                 if ver:
                     ver.status = models.TaskStatus.success.value
                     db.add(ver)
-            db.add(task)
             db.commit()
+        except taskflow.StaleRun:
+            db.rollback()
+            # 旧执行已经产生的调用仍需留账，但不能覆盖重试后的任务状态。
+            cost.record(db, kb_id=kb_id, kind="failed_attempt", stats=stats,
+                        source="task", source_id=task_id, doc_id=doc_id)
+            db.commit()
+            return True
         except Exception as exc:
             db.rollback()
             err = f"{exc.__class__.__name__}: {exc}"
-            log.warning("任务 %s 失败：%s", task.id, err)
-            task = db.get(models.Task, task.id)
+            log.warning("任务 %s 失败：%s", task_id, err)
+            owned = db.execute(update(models.Task).where(
+                models.Task.id == task_id, models.Task.status == models.TaskStatus.running.value,
+                models.Task.run_token == run_token,
+            ).values(run_token=run_token))
+            if owned.rowcount != 1:
+                db.rollback()
+                cost.record(db, kb_id=kb_id, kind="failed_attempt", stats=stats,
+                            source="task", source_id=task_id, doc_id=doc_id)
+                db.commit()
+                return True
+            task = db.get(models.Task, task_id, populate_existing=True)
+            if task and task.wiki_stop_requested and task.wiki_active:
+                task.status = models.TaskStatus.stopped.value
+                task.stage = "已停止"
+                task.finished_at = models.utcnow()
+                task.result = json.dumps({"wiki_stopped": True, "usage": stats.as_dict()}, ensure_ascii=False)
+                # 异常路径可能同时包含入库和 Wiki 成本，不能把总量都归给 Wiki。
+                cost.record(db, kb_id=task.kb_id, kind="failed_attempt",
+                            stats=stats, source="task", source_id=task.id, doc_id=task.doc_id)
+                taskflow.sync_wiki_stopped(db, task)
+                db.add(task)
+                db.commit()
+                return True
             if task and is_lock_error(exc) and task.attempts <= LOCK_REQUEUE_MAX_ATTEMPTS:
                 # 业务写等满 30s 还没拿到锁：这是「环境忙」，不是「任务坏」。
                 # 判失败会让用户以为文档解析出问题、还白花一次重试预算；
                 # 重新排队等下一轮，进度和文档状态都回到「等待处理」。
                 task.status = models.TaskStatus.queued.value
+                task.wiki_active = False
+                task.run_token = uuid.uuid4().hex
                 task.stage = "等待重试（数据库繁忙）"
                 task.progress = 0
                 task.started_at = None
@@ -295,6 +356,7 @@ def run_once(worker_id: str = "inline") -> bool:
                 return True
             if task:
                 task.status = models.TaskStatus.failed.value
+                task.wiki_active = False
                 task.stage = "失败"
                 task.error = err[:2000]
                 task.finished_at = models.utcnow()
@@ -347,13 +409,26 @@ def recover_interrupted(max_attempts: int = MAX_RESUME_ATTEMPTS) -> int:
     「处理中」——等 30 秒拿到锁，比报错退出有用得多。
     """
     with session_scope(role="worker") as db:
+        # 恢复与停止/完成/重试必须读取同一份受写锁保护的状态；否则旧快照
+        # 可能在用户确认停止后把任务重新排队。SQLite 的锁需在 SELECT 前取得。
+        if db.get_bind().dialect.name == "sqlite":
+            db.rollback()
+            db.execute(text("BEGIN IMMEDIATE"))
         tasks = db.execute(
             select(models.Task).where(models.Task.status == models.TaskStatus.running.value)
+            .with_for_update()
         ).scalars().all()
         if not tasks:
             return 0
         for task in tasks:
-            if task.attempts >= max_attempts:
+            if task.wiki_stop_requested and task.wiki_active:
+                task.status = models.TaskStatus.stopped.value
+                task.stage = "已停止"
+                task.finished_at = models.utcnow()
+                task.result = json.dumps({"wiki_stopped": True}, ensure_ascii=False)
+                taskflow.sync_wiki_stopped(db, task)
+            elif task.attempts >= max_attempts:
+                task.wiki_active = False
                 task.status = models.TaskStatus.failed.value
                 task.stage = "失败"
                 task.error = f"任务被中断 {task.attempts} 次，已停止自动恢复（可在文档列表点重试）"
@@ -362,7 +437,9 @@ def recover_interrupted(max_attempts: int = MAX_RESUME_ATTEMPTS) -> int:
                 # 文档永远停在「索引中」，用户既看不出问题也没有重试入口。
                 taskflow.sync_failure(db, task, task.error)
             else:
+                task.wiki_active = False
                 task.status = models.TaskStatus.queued.value
+                task.run_token = uuid.uuid4().hex
                 task.stage = "等待恢复"
                 task.progress = 0
                 task.started_at = None

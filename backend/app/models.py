@@ -61,6 +61,7 @@ class TaskStatus(str, enum.Enum):
     success = "success"
     partial = "partial"
     failed = "failed"
+    stopped = "stopped"
 
 
 class WikiPageStatus(str, enum.Enum):
@@ -103,6 +104,9 @@ class KnowledgeBase(Base):
     embed_signature: Mapped[str] = mapped_column(String(200), default="")
     embed_dim: Mapped[int] = mapped_column(Integer, default=0)
     wiki_ready_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    wiki_ready_started_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    wiki_incomplete: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    wiki_stop_epoch: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
@@ -253,6 +257,11 @@ class Task(Base):
     status: Mapped[str] = mapped_column(String(16), default=TaskStatus.queued.value, index=True)
     stage: Mapped[str] = mapped_column(String(64), default="排队中")
     progress: Mapped[int] = mapped_column(Integer, default=0)
+    wiki_active: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    wiki_stop_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    run_token: Mapped[str] = mapped_column(String(32), default="", server_default="")
+    wiki_started_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+    wiki_last_changed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     kb_id: Mapped[int | None] = mapped_column(ForeignKey("knowledge_bases.id", ondelete="CASCADE"), nullable=True)
     doc_id: Mapped[int | None] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), nullable=True)
     doc_version_id: Mapped[int | None] = mapped_column(ForeignKey("document_versions.id", ondelete="CASCADE"), nullable=True)

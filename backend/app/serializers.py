@@ -21,6 +21,7 @@ TASK_LABEL = {
 }
 TASK_STATUS_LABEL = {
     "queued": "排队中", "running": "处理中", "success": "成功", "partial": "部分失败", "failed": "失败",
+    "stopped": "已停止",
 }
 ROLE_LABEL = {"admin": "管理员", "employee": "普通员工"}
 GRANT_LABEL = {"read": "可读", "manage": "可管理"}
@@ -78,8 +79,9 @@ def wiki_published_count(db: Session, kb_id: int) -> int:
 
 
 def wiki_ready(db: Session, kb_id: int) -> bool:
-    """`wiki_published_count() > 0` 的布尔视图，供只关心「能不能用 Wiki」的调用方。"""
-    return wiki_published_count(db, kb_id) > 0
+    """中断后的部分页面仍可查看，但不能当成完整的 Wiki 检索索引。"""
+    kb = db.get(models.KnowledgeBase, kb_id)
+    return bool(kb and not kb.wiki_incomplete and wiki_published_count(db, kb_id) > 0)
 
 
 def user_out(db: Session, u: models.User) -> dict:
@@ -146,7 +148,7 @@ def kb_out(db: Session, kb: models.KnowledgeBase, *, my_level: str | None = None
         "status": kb.status, "status_label": status_label,
         "status_detail": status_detail,
         "embed_signature": kb.embed_signature, "embed_dim": kb.embed_dim,
-        "wiki_ready": bool(published),
+        "wiki_ready": bool(published and not kb.wiki_incomplete),
         "my_level": my_level, "created_at": iso(kb.created_at),
         "wiki_ready_at": iso(kb.wiki_ready_at),
         "stats": {
@@ -217,6 +219,14 @@ def task_out(db: Session, t: models.Task) -> dict:
                        else TASK_LABEL.get(t.kind, t.kind)),
         "status": t.status, "status_label": TASK_STATUS_LABEL.get(t.status, t.status),
         "stage": t.stage, "progress": t.progress,
+        "can_stop_wiki": bool(
+            not t.wiki_stop_requested
+            and ((t.kind == models.TaskKind.rebuild_wiki.value
+                  and t.status == models.TaskStatus.queued.value)
+                 or (t.status == models.TaskStatus.running.value and t.wiki_active))
+        ),
+        "wiki_stop_requested": bool(t.wiki_stop_requested and t.status == models.TaskStatus.running.value),
+        "run_token": t.run_token or "",
         "kb_id": t.kb_id, "kb_name": kb_name, "doc_id": t.doc_id, "doc_name": doc_name,
         "doc_version_id": t.doc_version_id,
         "error": t.error, "attempts": t.attempts, "result": result,

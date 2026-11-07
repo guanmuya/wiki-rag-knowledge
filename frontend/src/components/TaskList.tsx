@@ -17,12 +17,20 @@ import { IconAlert, IconClock } from './icons'
  */
 const STALE_AFTER_MS = 30_000
 
+function wikiStopRunKey(task: Task): string {
+  return JSON.stringify([task.id, task.run_token])
+}
+
 interface TaskListProps {
   tasks: Task[]
   loading?: boolean
   error?: unknown
   onRetry?: (task: Task) => Promise<void> | void
   onRetryError?: (err: unknown) => void
+  onStopWiki?: (task: Task) => Promise<void>
+  onStopWikiError?: (err: unknown) => void
+  /** 任务中心混合多个知识库，需要逐条判断管理权限。 */
+  canManageTask?: (task: Task) => boolean
   showKb?: boolean
   emptyText?: string
 }
@@ -33,13 +41,31 @@ export default function TaskList({
   error,
   onRetry,
   onRetryError,
+  onStopWiki,
+  onStopWikiError,
+  canManageTask,
   showKb = false,
   emptyText = '暂无任务',
 }: TaskListProps) {
   const [retrying, setRetrying] = useState<number | null>(null)
+  const [stopping, setStopping] = useState<Set<string>>(() => new Set())
+  // 已受理但刷新尚未确认时保留禁用状态；任务重试后不沿用上次的状态。
+  const [accepted, setAccepted] = useState<Set<string>>(() => new Set())
+  const stoppingRef = useRef(new Set<string>())
   // hooks 必须在任何 return 之前调用：心跳秒数与「无进展」判定都依赖它们
   const now = useHeartbeatClock(tasks)
   const stale = useStaleTasks(tasks, now)
+
+  useEffect(() => {
+    const activeRuns = new Set(
+      tasks.filter((task) => isRunningStatus(task.status) && !task.wiki_stop_requested)
+        .map(wikiStopRunKey),
+    )
+    setAccepted((previous) => {
+      const next = new Set([...previous].filter((key) => activeRuns.has(key)))
+      return next.size === previous.size ? previous : next
+    })
+  }, [tasks, accepted])
 
   const hasData = tasks.length > 0
 
@@ -78,6 +104,26 @@ export default function TaskList({
     }
   }
 
+  const handleStopWiki = async (task: Task) => {
+    const runKey = wikiStopRunKey(task)
+    if (!onStopWiki || !task.can_stop_wiki || stoppingRef.current.has(runKey)) return
+    stoppingRef.current.add(runKey)
+    setStopping((previous) => new Set(previous).add(runKey))
+    try {
+      await onStopWiki(task)
+      setAccepted((previous) => new Set(previous).add(runKey))
+    } catch (err) {
+      onStopWikiError?.(err)
+    } finally {
+      stoppingRef.current.delete(runKey)
+      setStopping((previous) => {
+        const next = new Set(previous)
+        next.delete(runKey)
+        return next
+      })
+    }
+  }
+
   return (
     <div className="task-list">
       {error ? (
@@ -94,6 +140,9 @@ export default function TaskList({
 
       {tasks.map((task) => {
         const running = isRunningStatus(task.status)
+        const mayManage = canManageTask?.(task) ?? true
+        const runKey = wikiStopRunKey(task)
+        const stopPending = stopping.has(runKey) || accepted.has(runKey) || Boolean(task.wiki_stop_requested)
         // 心跳优先取 updated_at（后端补上后就是真实的「最后进展」时间），
         // 现在后端 Task 还没这个字段，退回 started_at / created_at。
         const beatAt = task.updated_at ?? task.started_at ?? task.created_at
@@ -107,7 +156,7 @@ export default function TaskList({
               <span className="task-kind">{task.kind_label || task.kind}</span>
               <span role={wikiRebuild ? 'status' : undefined}>
                 <Badge tone={taskStatusClass(task.status)}>
-                  {task.status_label || statusText(task.status)}
+                  {task.status === 'stopped' ? '已停止' : task.status_label || statusText(task.status)}
                 </Badge>
               </span>
               {showKb && task.kb_name ? (
@@ -121,17 +170,27 @@ export default function TaskList({
               ) : (
                 <span className="tiny muted nowrap">{formatTime(task.created_at)}</span>
               )}
-              {task.status === 'failed' || task.status === 'partial' ? (
-                onRetry ? (
-                  <button
-                    type="button"
-                    className="btn-link"
-                    disabled={retrying === task.id}
-                    onClick={() => void handleRetry(task)}
-                  >
-                    {retrying === task.id ? '重试中…' : '重试'}
-                  </button>
-                ) : null
+              {onStopWiki && mayManage && running && (task.can_stop_wiki || stopPending) ? (
+                <button
+                  type="button"
+                  className="btn-link"
+                  disabled={stopPending || !task.can_stop_wiki}
+                  title="只停止这次 Wiki 生成，其他任务仍可能触发生成"
+                  onClick={() => void handleStopWiki(task)}
+                >
+                  {stopPending ? '正在停止…' : '停止生成'}
+                </button>
+              ) : null}
+              {(task.status === 'failed' || task.status === 'partial' || (task.status === 'stopped' && wikiRebuild)) && onRetry && mayManage ? (
+                <button
+                  type="button"
+                  className="btn-link"
+                  disabled={retrying === task.id}
+                  title={task.status === 'stopped' ? '重新执行整个任务，可能再次生成 Wiki' : undefined}
+                  onClick={() => void handleRetry(task)}
+                >
+                  {retrying === task.id ? '重试中…' : '重试'}
+                </button>
               ) : null}
             </div>
 
@@ -163,14 +222,26 @@ export default function TaskList({
               无进展提示刻意做成浅色说明条而不是红色报错：任务还在后台跑，
               只是被别的写事务挡住了，显示成失败会让用户去点删除或反复重启应用。
             */}
-            {isStale ? (
+            {running && (task.wiki_stop_requested || accepted.has(runKey)) ? (
+              <div className="task-hint" role="status">
+                当前步骤完成后停止本次 Wiki 生成；已入库的分块保留，其他任务仍可能生成 Wiki。
+              </div>
+            ) : isStale ? (
               <div className="task-hint" role="status">
                 <span className="task-hint-icon"><IconClock size={13} /></span>
                 <span>{staleHintText(task.status, task.kind)}</span>
               </div>
             ) : null}
 
-            {task.status === 'success' && task.result && Object.keys(task.result).length > 0 ? (
+            {task.status === 'stopped' ? (
+              <div className="tiny muted">
+                {wikiRebuild
+                  ? '本次 Wiki 生成已停止。重试任务、后续文档入库或删除、重建索引及手动重建 Wiki 可能再次生成。'
+                  : '本次 Wiki 生成已停止。可在知识库设置中重建 Wiki；后续文档入库或删除、重建索引也可能再次生成。'}
+              </div>
+            ) : null}
+
+            {(task.status === 'success' || task.status === 'stopped') && task.result && Object.keys(task.result).length > 0 ? (
               <div className="tiny muted">{resultText(task.result)}</div>
             ) : null}
 
@@ -274,6 +345,8 @@ function statusText(status: string): string {
       return '部分失败'
     case 'failed':
       return '失败'
+    case 'stopped':
+      return '已停止'
     default:
       return status
   }

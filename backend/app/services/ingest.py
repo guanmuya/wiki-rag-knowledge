@@ -5,15 +5,16 @@ Wiki 页面按 slug 复用，不会因重跑产生重复页面。
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 from pathlib import Path
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from .. import config, models
-from . import chunking, llm, parser, wiki
+from . import chunking, llm, parser, taskflow, wiki
 
 log = logging.getLogger("wrk.ingest")
 
@@ -34,6 +35,38 @@ def _initial_wiki_pending(db: Session, kb_id: int) -> bool:
     ).limit(1)).first() is not None
 
 
+def _initial_wiki_defers_inline(db: Session, task: models.Task) -> bool:
+    """让首次生成接管之前的工作，包括用户在排队期间停止该首次任务时。"""
+    initial_tasks = db.execute(select(models.Task.status, models.Task.finished_at).where(
+        models.Task.kb_id == task.kb_id,
+        models.Task.dedupe_key == f"{models.WIKI_INITIAL_TASK_PREFIX}{task.kb_id}",
+        or_(
+            models.Task.status.in_([models.TaskStatus.queued.value, models.TaskStatus.running.value]),
+            and_(models.Task.id > task.id, models.Task.status == models.TaskStatus.stopped.value,
+                 models.Task.wiki_stop_requested.is_(True)),
+        ),
+    )).all()
+    if not initial_tasks:
+        return False
+
+    # 显式重试先前工作是新的用户操作；旧的首次生成停止不能永久抑制它。
+    retry_at = taskflow.retry_history(task).get("at")
+    try:
+        retry_at = dt.datetime.fromisoformat(retry_at.replace("Z", "+00:00")) if retry_at else None
+        if retry_at and retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=dt.timezone.utc)
+    except (AttributeError, TypeError, ValueError):
+        retry_at = None
+    for status, stopped_at in initial_tasks:
+        if status != models.TaskStatus.stopped.value or retry_at is None or stopped_at is None:
+            return True
+        if stopped_at.tzinfo is None:
+            stopped_at = stopped_at.replace(tzinfo=dt.timezone.utc)
+        if retry_at <= stopped_at:
+            return True
+    return False
+
+
 def ingest_version(db: Session, task: models.Task, *, stats: llm.CallStats) -> dict:
     """文档入库：解析 → 分块 → 向量索引（Wiki 库再加一段 Wiki 生成）。
 
@@ -46,6 +79,7 @@ def ingest_version(db: Session, task: models.Task, *, stats: llm.CallStats) -> d
     两者都 merge 进调用方传入的 stats（任务总量，不丢信息），
     同时各自序列化进 result["usage_by_phase"]，供成本流水按阶段入账。
     """
+    run_token = task.run_token
     version = db.get(models.DocumentVersion, task.doc_version_id)
     if not version:
         raise RuntimeError("文档版本不存在")
@@ -181,31 +215,44 @@ def ingest_version(db: Session, task: models.Task, *, stats: llm.CallStats) -> d
     # 重复 merge 会把同一批调用算两遍，所以此处不能再 merge。
     phases = {"ingest_document": chunk_stats.as_dict()}
 
-    # Wiki 增强库：文档入库后增量重建 Wiki
-    if kb.mode == models.KbMode.wiki.value and not _initial_wiki_pending(db, kb.id):
-        _set_progress(db, task, "生成 Wiki 页面", 88)
-        # Wiki 成本单独一份：这是「Wiki 增强」相对「基础分块」多出来的代价，
-        # 也是论文里最想量化的那一列。它不进 chunk 阶段，必须能独立报出。
+    # Wiki 增强库：文档入库后增量重建 Wiki。首次生成排队或已被停止时，
+    # 之前的入库任务不应再替它启动 Wiki；分块和成本仍正常保存。
+    if kb.mode == models.KbMode.wiki.value and not _initial_wiki_defers_inline(db, task):
+        wiki_epoch = taskflow.start_wiki(db, task, run_token, progress=88)
+        # Wiki 成本单独一份；停止后已经产生的调用也需要入账。
         wiki_stats = llm.CallStats()
         try:
-            wres = wiki.build_wiki(db, kb, stats=wiki_stats)
+            wres = wiki.build_wiki(
+                db, kb, stats=wiki_stats,
+                check_cancel=lambda: taskflow.check_wiki_stop(task.id, run_token, db),
+                on_publish=lambda: taskflow.record_wiki_publication(db, task.id, run_token),
+            )
+            taskflow.finish_wiki(db, task, run_token, wiki_epoch, complete=True)
             result["wiki"] = {
                 "created": wres.pages_created, "updated": wres.pages_updated,
                 "skipped": wres.pages_skipped, "sections": wres.sections,
                 "evidence_links": wres.evidence_links, "notes": wres.notes or [],
             }
-            phases["rebuild_wiki"] = wiki_stats.as_dict()
-            stats.merge(wiki_stats)
+        except taskflow.WikiStopped:
+            db.rollback()
+            result["wiki_stopped"] = True
+        except taskflow.StaleRun:
+            raise
         except Exception as exc:  # Wiki 失败不推翻分块索引
             db.rollback()
-            result["wiki_error"] = f"{exc.__class__.__name__}: {exc}"
-            # 失败前已经发生的调用仍是真实开销，不能因为异常就丢掉
+            try:
+                taskflow.finish_wiki(db, task, run_token, wiki_epoch, complete=False)
+            except taskflow.WikiStopped:
+                db.rollback()
+                result["wiki_stopped"] = True
+            else:
+                result["wiki_error"] = f"{exc.__class__.__name__}: {exc}"
+                kb.status = models.KbStatus.partial.value
+                kb.status_detail = f"分块索引已就绪，Wiki 生成失败：{result['wiki_error']}"
+                db.add(kb)
+        finally:
             phases["rebuild_wiki"] = wiki_stats.as_dict()
             stats.merge(wiki_stats)
-            kb.status = models.KbStatus.partial.value
-            kb.status_detail = f"分块索引已就绪，Wiki 生成失败：{result['wiki_error']}"
-            db.add(kb)
-            db.commit()
     result["usage_by_phase"] = phases
     return result
 
@@ -230,6 +277,9 @@ def _refresh_kb_status(db: Session, kb: models.KnowledgeBase, *,
         ).scalar() or 0
         kb.status = models.KbStatus.ready.value if chunk_total else models.KbStatus.partial.value
         kb.status_detail = f"{total} 个文档 / {chunk_total} 个索引单元"
+        if kb.mode == models.KbMode.wiki.value and kb.wiki_incomplete:
+            kb.status = models.KbStatus.partial.value
+            kb.status_detail = "Wiki 尚未完整生成，正在使用分块索引"
     db.add(kb)
     if commit:
         db.commit()
@@ -242,6 +292,7 @@ def reindex_kb(db: Session, task: models.Task, *, stats: llm.CallStats) -> dict:
     再 merge 进任务总量。换一次 embedding 模型的真实代价通常远高于日常入库，
     论文里要能单独报出这个数字，所以不能只留一个合并后的 calls。
     """
+    run_token = task.run_token
     kb = db.get(models.KnowledgeBase, task.kb_id)
     if not kb:
         raise RuntimeError("知识库不存在")
@@ -283,17 +334,36 @@ def reindex_kb(db: Session, task: models.Task, *, stats: llm.CallStats) -> dict:
     stats.merge(chunk_stats)
     phases = {models.TaskKind.reindex_kb.value: chunk_stats.as_dict()}
     result = {"chunks": total, "embedding_signature": sig}
-    if kb.mode == models.KbMode.wiki.value and not _initial_wiki_pending(db, kb.id):
+    if kb.mode == models.KbMode.wiki.value and not _initial_wiki_defers_inline(db, task):
         db.commit()
+        wiki_epoch = taskflow.start_wiki(db, task, run_token)
         wiki_stats = llm.CallStats()
         try:
-            wres = wiki.build_wiki(db, kb, stats=wiki_stats)
+            wres = wiki.build_wiki(
+                db, kb, stats=wiki_stats,
+                check_cancel=lambda: taskflow.check_wiki_stop(task.id, run_token, db),
+                on_publish=lambda: taskflow.record_wiki_publication(db, task.id, run_token),
+            )
+            taskflow.finish_wiki(db, task, run_token, wiki_epoch, complete=True)
             result["wiki"] = {"created": wres.pages_created, "updated": wres.pages_updated,
                               "sections": wres.sections}
+        except taskflow.WikiStopped:
+            db.rollback()
+            result["wiki_stopped"] = True
+        except taskflow.StaleRun:
+            raise
         except Exception as exc:
-            result["wiki_error"] = str(exc)
-        # Wiki 阶段的调用无论成败都要入账
-        phases[models.TaskKind.rebuild_wiki.value] = wiki_stats.as_dict()
-        stats.merge(wiki_stats)
+            db.rollback()
+            try:
+                taskflow.finish_wiki(db, task, run_token, wiki_epoch, complete=False)
+            except taskflow.WikiStopped:
+                db.rollback()
+                result["wiki_stopped"] = True
+            else:
+                result["wiki_error"] = str(exc)
+        finally:
+            # 即使执行代次失效，已发生的 Wiki 调用仍需留账。
+            phases[models.TaskKind.rebuild_wiki.value] = wiki_stats.as_dict()
+            stats.merge(wiki_stats)
     result["usage_by_phase"] = phases
     return result

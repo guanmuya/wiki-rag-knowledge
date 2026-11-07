@@ -96,6 +96,31 @@ def test_multiple_missing_columns_across_tables(tmp_path):
     engine.dispose()
 
 
+def test_existing_task_gets_safe_wiki_stop_defaults(tmp_path):
+    db_path, engine = _make_old_db(tmp_path, [
+        ("tasks", "wiki_active"), ("tasks", "wiki_stop_requested"), ("tasks", "run_token"),
+        ("tasks", "wiki_last_changed_at"), ("tasks", "wiki_started_at"),
+        ("knowledge_bases", "wiki_incomplete"), ("knowledge_bases", "wiki_stop_epoch"),
+        ("knowledge_bases", "wiki_ready_started_at"),
+    ])
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO tasks (kind, status, stage, progress, dedupe_key, payload, result, "
+            "error, attempts, created_at) VALUES "
+            "('rebuild_wiki', 'queued', '排队中', 0, '', '{}', '{}', '', 0, '2026-01-01')"
+        ))
+    added = ensure_sqlite_columns(engine, models.Base.metadata)
+    assert {"tasks.wiki_active", "tasks.wiki_stop_requested", "tasks.run_token",
+            "tasks.wiki_last_changed_at", "tasks.wiki_started_at", "knowledge_bases.wiki_incomplete",
+            "knowledge_bases.wiki_stop_epoch", "knowledge_bases.wiki_ready_started_at"} <= set(added)
+    with engine.begin() as conn:
+        row = conn.execute(text(
+            "SELECT wiki_active, wiki_stop_requested, run_token, wiki_last_changed_at FROM tasks"
+        )).one()
+        assert row == (0, 0, "", None)
+    engine.dispose()
+
+
 def test_fresh_database_needs_no_migration(tmp_path):
     """新库走 create_all 已经完整，迁移应是空操作。"""
     db_path = tmp_path / "fresh.sqlite3"

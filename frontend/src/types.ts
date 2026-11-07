@@ -5,7 +5,7 @@ export type UserStatus = 'active' | 'disabled'
 export type KbMode = 'basic' | 'wiki'
 export type KbStatus = 'empty' | 'indexing' | 'ready' | 'partial' | 'failed'
 export type GrantLevel = 'read' | 'manage'
-export type TaskStatus = 'queued' | 'running' | 'success' | 'partial' | 'failed'
+export type TaskStatus = 'queued' | 'running' | 'success' | 'partial' | 'failed' | 'stopped'
 export type TaskKind =
   | 'ingest_document'
   | 'rebuild_wiki'
@@ -248,6 +248,10 @@ export interface Task {
   status_label?: string
   stage: string
   progress: number
+  /** 当前任务是否处于可以停止 Wiki 生成的阶段。 */
+  can_stop_wiki?: boolean
+  /** 已请求停止，等待当前步骤结束。 */
+  wiki_stop_requested?: boolean
   kb_id: number | null
   kb_name: string
   doc_id: number | null
@@ -255,6 +259,8 @@ export interface Task {
   doc_version_id?: number | null
   error: string
   attempts: number
+  /** 任务当前执行代次；停止请求须携带展示时的值。 */
+  run_token: string
   /** 手动重试次数（重试复用同一条任务记录，不再新增行） */
   retry_count?: number
   /** 上一次失败的报错，重试后仍保留，便于对照 */
