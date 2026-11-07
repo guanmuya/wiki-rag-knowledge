@@ -210,7 +210,9 @@ def task_out(db: Session, t: models.Task) -> dict:
     retry = payload.get("retry") if isinstance(payload, dict) else None
     retry = retry if isinstance(retry, dict) else {}
     return {
-        "id": t.id, "kind": t.kind, "kind_label": TASK_LABEL.get(t.kind, t.kind),
+        "id": t.id, "kind": t.kind,
+        "kind_label": ("首次生成 Wiki" if (t.dedupe_key or "").startswith(models.WIKI_INITIAL_TASK_PREFIX)
+                       else TASK_LABEL.get(t.kind, t.kind)),
         "status": t.status, "status_label": TASK_STATUS_LABEL.get(t.status, t.status),
         "stage": t.stage, "progress": t.progress,
         "kb_id": t.kb_id, "kb_name": kb_name, "doc_id": t.doc_id, "doc_name": doc_name,

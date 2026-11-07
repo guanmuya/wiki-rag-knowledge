@@ -174,7 +174,8 @@ def test_current_wiki_section_count_excludes_old_versions(app_client, admin_head
 
     detail = app_client.get(f"/api/kbs/{kb_id}", headers=admin_headers).json()
     assert detail["wiki_ready"] is True
-    assert detail["index"]["wiki_units"] == 1
+    # 两个字段都仅统计可见页面当前版本，历史版本章节不会计入。
+    assert detail["index"]["wiki_units"] == 0
     assert detail["index"]["wiki_current_units"] == 0
     db_session.add(models.WikiSection(kb_id=kb_id, page_id=page.id, page_version_id=current.id,
                                       ordinal=0, heading_path="当前章节", text="当前正文"))

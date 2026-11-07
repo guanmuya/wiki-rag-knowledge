@@ -30,7 +30,7 @@ export default function SettingsTab({
   isAdmin: boolean
   canManage: boolean
   onToast: (text: string, kind?: 'info' | 'success' | 'error') => void
-  onChanged: () => void
+  onChanged: (background?: boolean) => void | Promise<void>
 }) {
   const [name, setName] = useState(kb.name)
   const [description, setDescription] = useState(kb.description)
@@ -99,6 +99,7 @@ export default function SettingsTab({
         mode,
       })
       onToast('设置已保存', 'success')
+      await loadTasks()
       onChanged()
     } catch (err) {
       onToast(errorText(err), 'error')
@@ -160,7 +161,9 @@ export default function SettingsTab({
               label="检索模式"
               hint={
                 mode === 'wiki'
-                  ? 'Wiki 增强：问答优先检索 Wiki 章节，未就绪时回退到分块。切换后需要手动「重建 Wiki」。'
+                  ? (kb.stats?.wiki_page_count ?? 0) > 0
+                    ? 'Wiki 增强：问答优先检索 Wiki 章节；如需更新现有页面，可手动重建。'
+                    : 'Wiki 增强：首次页面在已有分块时保存后自动生成，否则随文档入库生成；未就绪时回退分块。'
                   : '基础分块：问答按文本分块检索。'
               }
             >

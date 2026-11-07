@@ -428,7 +428,7 @@ async function wikiRefreshAfterBuild(browser) {
   try {
     const { page } = env
     await loginAndOpen(page, 'wiki')
-    await page.getByText('该知识库还没有 Wiki 页面').waitFor()
+    await page.getByText('暂无可查看的 Wiki 页面').waitFor()
     finished = true
     await wikiHeading(page, 'Alpha page')
     await page.getByText('BODY-alpha-original').waitFor()

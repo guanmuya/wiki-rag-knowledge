@@ -589,6 +589,8 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
                 db.commit()
                 result.pages_skipped += 1
                 result.notes.append(f"《{title}》已人工校对，本次生成进入待审，不覆盖")
+                if on_progress:
+                    on_progress("pages", order + 1, len(topics))
                 continue
 
         if page is None:

@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -99,7 +99,37 @@ def update_kb(kb_id: int, body: schemas.KbUpdateIn, db: Session = Depends(get_db
     if body.mode is not None and body.mode != kb.mode:
         kb.mode = body.mode
         if body.mode == models.KbMode.wiki.value:
-            kb.status_detail = "已切换为 Wiki 增强，需重建 Wiki 后才会生成页面"
+            # 先持有写锁，再检查并排队，避免并发切换重复创建首次生成任务。
+            db.flush()
+            has_pages = db.execute(
+                select(models.WikiPage.id).where(models.WikiPage.kb_id == kb.id).limit(1)
+            ).first()
+            if has_pages:
+                if kb.status in (models.KbStatus.ready.value, models.KbStatus.empty.value):
+                    kb.status_detail = "已切换为 Wiki 增强；如需更新现有页面，请手动重建 Wiki"
+            else:
+                active = db.execute(select(models.Task.id).where(
+                    models.Task.kb_id == kb.id,
+                    models.Task.status.in_([models.TaskStatus.queued.value, models.TaskStatus.running.value]),
+                ).limit(1)).first()
+                has_chunks = db.execute(
+                    select(models.Chunk.id).where(models.Chunk.kb_id == kb.id).limit(1)
+                ).first()
+                initial_key = f"{models.WIKI_INITIAL_TASK_PREFIX}{kb.id}"
+                pending_initial = db.execute(select(models.Task.id).where(
+                    models.Task.kb_id == kb.id, models.Task.dedupe_key == initial_key,
+                    models.Task.status.in_([models.TaskStatus.queued.value, models.TaskStatus.running.value]),
+                ).limit(1)).first()
+                if (has_chunks or active) and not pending_initial:
+                    db.add(models.Task(kind=models.TaskKind.rebuild_wiki.value,
+                                       status=models.TaskStatus.queued.value, stage="排队中",
+                                       kb_id=kb.id, dedupe_key=initial_key, created_by=admin.id))
+                if has_chunks or active:
+                    if kb.status not in (models.KbStatus.failed.value, models.KbStatus.partial.value):
+                        kb.status = models.KbStatus.indexing.value
+                        kb.status_detail = "已切换为 Wiki 增强，首次生成 Wiki 页面已排队"
+                elif kb.status not in (models.KbStatus.failed.value, models.KbStatus.partial.value):
+                    kb.status_detail = "已切换为 Wiki 增强，文档入库后将自动生成 Wiki 页面"
     db.add(kb)
     audit(db, admin, "update_kb", target=kb.name, detail=f"mode={kb.mode}")
     db.commit()
@@ -148,7 +178,8 @@ def _index_status(db: Session, kb: models.KnowledgeBase) -> dict:
         .join(models.WikiPage, models.WikiPage.id == models.WikiSection.page_id)
         .where(models.WikiSection.kb_id == kb.id,
                models.WikiPage.status != models.WikiPageStatus.draft.value,
-               models.WikiPage.current_version_id == models.WikiSection.page_version_id)
+               models.WikiPage.current_version_id == models.WikiSection.page_version_id,
+               wiki_visibility.visible_page())
     ).scalar() or 0
     pending = db.execute(
         select(func.count(models.Task.id)).where(
@@ -616,6 +647,22 @@ def delete_document(doc_id: int, db: Session = Depends(get_db),
     kb = db.get(models.KnowledgeBase, doc.kb_id)
     if grant_level(db, user, doc.kb_id) != models.GrantLevel.manage.value:
         raise HTTPException(status_code=403, detail="需要该知识库的管理权限")
+    if kb:
+        # 与模式切换排队、worker 抢任务共用 SQLite 写锁，避免检查后首次生成才开始。
+        locked = db.execute(update(models.KnowledgeBase).where(models.KnowledgeBase.id == kb.id)
+                            .values(status=models.KnowledgeBase.status))
+        if not locked.rowcount:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="文档不存在")
+        db.refresh(kb)
+        initial = db.execute(select(models.Task.id).where(
+            models.Task.kb_id == kb.id,
+            models.Task.dedupe_key == f"{models.WIKI_INITIAL_TASK_PREFIX}{kb.id}",
+            models.Task.status.in_([models.TaskStatus.queued.value, models.TaskStatus.running.value]),
+        ).limit(1)).first()
+        if initial:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="该知识库切换模式后的首次 Wiki 生成尚未完成，请稍后再删除文档")
     paths = db.execute(
         select(models.DocumentVersion.storage_path).where(models.DocumentVersion.doc_id == doc.id)
     ).scalars().all()
@@ -690,6 +737,23 @@ def retry_task(task_id: int, db: Session = Depends(get_db),
         raise HTTPException(status_code=403, detail="需要该知识库的管理权限")
     if task.status in (models.TaskStatus.queued.value, models.TaskStatus.running.value):
         raise HTTPException(status_code=409, detail="任务已在队列中或正在执行，无需重试")
+    if (task.dedupe_key or "").startswith(models.WIKI_INITIAL_TASK_PREFIX):
+        # 先持写锁，再检查同库的首次生成任务；与切换模式时的排队互斥。
+        claimed = db.execute(update(models.Task).where(
+            models.Task.id == task.id,
+            models.Task.status.notin_([models.TaskStatus.queued.value, models.TaskStatus.running.value]),
+        ).values(status=models.TaskStatus.queued.value))
+        if not claimed.rowcount:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="任务已在队列中或正在执行，无需重试")
+        other = db.execute(select(models.Task.id).where(
+            models.Task.kb_id == task.kb_id, models.Task.id != task.id,
+            models.Task.dedupe_key == task.dedupe_key,
+            models.Task.status.in_([models.TaskStatus.queued.value, models.TaskStatus.running.value]),
+        ).limit(1)).first()
+        if other:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="该库已有首次生成 Wiki 任务，请等待完成")
     hist = taskflow.requeue(db, task)
     taskflow.sync_running(db, task)
     audit(db, user, "retry_task", target=str(task.id),

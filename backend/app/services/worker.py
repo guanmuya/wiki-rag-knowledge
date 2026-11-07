@@ -13,8 +13,9 @@ import threading
 import traceback
 from typing import Literal
 
-from sqlalchemy import select, text, update
+from sqlalchemy import and_, exists, or_, select, text, update
 from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutError
+from sqlalchemy.orm import aliased
 
 from .. import config, models
 from ..db import (apply_busy_timeout, is_lock_error, retry_on_locked,
@@ -73,8 +74,19 @@ def _claim_locked(db, worker_id: str) -> models.Task | None:
         return None
 
     db.execute(text("BEGIN IMMEDIATE"))
+    # 首次 Wiki 生成等同库中先前任务结束；后续任务也等首次生成结束，
+    # 避免多个 worker 同时写 Wiki。其他知识库及普通任务不受影响。
+    other = aliased(models.Task)
+    initial = models.Task.dedupe_key.like(f"{models.WIKI_INITIAL_TASK_PREFIX}%")
+    other_initial = other.dedupe_key.like(f"{models.WIKI_INITIAL_TASK_PREFIX}%")
+    blocked = exists(select(other.id).where(
+        other.kb_id == models.Task.kb_id, other.id != models.Task.id,
+        or_(initial, other_initial),
+        or_(other.status == models.TaskStatus.running.value,
+            and_(other.status == models.TaskStatus.queued.value, other.id < models.Task.id)),
+    ))
     task = db.execute(
-        select(models.Task).where(models.Task.status == models.TaskStatus.queued.value)
+        select(models.Task).where(models.Task.status == models.TaskStatus.queued.value, ~blocked)
         .order_by(models.Task.id)
     ).scalars().first()
     if not task:
@@ -111,6 +123,25 @@ def _refresh_kb_after_rebuild(db, task: models.Task, result: dict) -> None:
         kb.status = models.KbStatus.partial.value
         kb.status_detail = f"分块索引已重建，Wiki 生成失败：{result['wiki_error']}"
     db.add(kb)
+
+
+def _retain_index_failures(db, kb: models.KnowledgeBase) -> None:
+    """首次生成 Wiki 不代表失败的文档或全库索引重建已恢复。"""
+    failed_doc = db.execute(select(models.Document).where(
+        models.Document.kb_id == kb.id, models.Document.deleted.is_(False),
+        models.Document.status == models.KbStatus.failed.value,
+    ).order_by(models.Document.id.desc()).limit(1)).scalars().first()
+    last_rebuild = db.execute(select(models.Task).where(
+        models.Task.kb_id == kb.id,
+        models.Task.kind.in_([models.TaskKind.reindex_kb.value, models.TaskKind.embedding_rebuild.value]),
+        models.Task.status.in_([models.TaskStatus.success.value, models.TaskStatus.failed.value]),
+    ).order_by(models.Task.finished_at.desc().nullslast(), models.Task.id.desc()).limit(1)).scalars().first()
+    if failed_doc:
+        kb.status = models.KbStatus.partial.value
+        kb.status_detail = f"Wiki 已生成；文档 {failed_doc.filename} 处理失败：{failed_doc.status_detail[:200]}"
+    elif last_rebuild and last_rebuild.status == models.TaskStatus.failed.value:
+        kb.status = models.KbStatus.partial.value
+        kb.status_detail = f"Wiki 已生成；分块索引重建失败：{(last_rebuild.error or '请重试')[:200]}"
 
 
 def _report_wiki_progress(task_id: int, phase: Literal["topics", "pages"],
@@ -161,20 +192,52 @@ def run_once(worker_id: str = "inline") -> bool:
                 kb = db.get(models.KnowledgeBase, task.kb_id)
                 if not kb:
                     raise RuntimeError("知识库不存在")
-                task_id = task.id
-                wres = wiki.build_wiki(
-                    db, kb, stats=stats,
-                    on_progress=lambda phase, done, total: _report_wiki_progress(
-                        task_id, phase, done, total),
+                initial = (task.dedupe_key or "").startswith(models.WIKI_INITIAL_TASK_PREFIX)
+                payload = taskflow.task_payload(task)
+                has_pages = db.execute(select(models.WikiPage.id).where(
+                    models.WikiPage.kb_id == kb.id).limit(1)).first() if initial else None
+                has_chunks = db.execute(select(models.Chunk.id).where(
+                    models.Chunk.kb_id == kb.id).limit(1)).first() if initial else True
+                skip_initial = initial and (
+                    kb.mode != models.KbMode.wiki.value or not has_chunks or
+                    (has_pages and not payload.get("initial_wiki_started"))
                 )
-                result = {"created": wres.pages_created, "updated": wres.pages_updated,
-                          "skipped": wres.pages_skipped, "sections": wres.sections,
-                          "notes": wres.notes or []}
-                # build_wiki 的阶段统计就是任务本身，不需要再拆
+                if skip_initial:
+                    result = {"notes": ["无需首次生成 Wiki"]}
+                    # 保留前一任务的失败状态；仅清除没有其他活动任务的陈旧索引状态。
+                    pending = db.execute(select(models.Task.id).where(
+                        models.Task.kb_id == kb.id, models.Task.id != task.id,
+                        models.Task.status.in_([models.TaskStatus.queued.value, models.TaskStatus.running.value]),
+                    ).limit(1)).first()
+                    if not pending and kb.status == models.KbStatus.indexing.value:
+                        ingest._refresh_kb_status(db, kb, commit=False)
+                else:
+                    if initial and not payload.get("initial_wiki_started"):
+                        # 部分页面已提交后被中断，重试必须能继续这次首次生成。
+                        payload["initial_wiki_started"] = True
+                        task.payload = json.dumps(payload, ensure_ascii=False)
+                        db.add(task)
+                        db.commit()
+                    task_id = task.id
+                    wres = wiki.build_wiki(
+                        db, kb, stats=stats,
+                        on_progress=lambda phase, done, total: _report_wiki_progress(
+                            task_id, phase, done, total),
+                    )
+                    result = {"created": wres.pages_created, "updated": wres.pages_updated,
+                              "skipped": wres.pages_skipped, "sections": wres.sections,
+                              "notes": wres.notes or []}
+                    ingest._refresh_kb_status(db, kb, commit=False)
+                    if initial:
+                        _retain_index_failures(db, kb)
+                        pending = db.execute(select(models.Task.id).where(
+                            models.Task.kb_id == kb.id, models.Task.id != task.id,
+                            models.Task.status.in_([models.TaskStatus.queued.value, models.TaskStatus.running.value]),
+                        ).limit(1)).first()
+                        if pending and kb.status == models.KbStatus.ready.value:
+                            kb.status = models.KbStatus.indexing.value
+                            kb.status_detail = "还有任务排队或处理中"
                 result["usage_by_phase"] = {task.kind: stats.as_dict()}
-                # 重建成功后必须刷新 status_detail：排队时写的是「重建任务已排队」，
-                # 不刷新就会永远停在那一句（真实缺陷，实测重建完仍显示「已排队」）。
-                ingest._refresh_kb_status(db, kb, commit=False)
             elif task.kind == models.TaskKind.reindex_kb.value:
                 result = ingest.reindex_kb(db, task, stats=stats)
                 _refresh_kb_after_rebuild(db, task, result)
@@ -199,6 +262,12 @@ def run_once(worker_id: str = "inline") -> bool:
             task.progress = 100
             task.result = json.dumps(result, ensure_ascii=False)
             task.finished_at = models.utcnow()
+            if task.kind != models.TaskKind.rebuild_wiki.value and task.kb_id:
+                kb = db.get(models.KnowledgeBase, task.kb_id)
+                if (kb and kb.status == models.KbStatus.ready.value and
+                        ingest._initial_wiki_pending(db, task.kb_id)):
+                    kb.status = models.KbStatus.indexing.value
+                    kb.status_detail = "首次生成 Wiki 页面已排队"
             if task.doc_version_id:
                 ver = db.get(models.DocumentVersion, task.doc_version_id)
                 if ver:
