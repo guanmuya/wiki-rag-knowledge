@@ -1072,8 +1072,11 @@ code {
 .tab.active .tab-badge { background: var(--c-primary-soft); color: var(--c-primary); }
 
 /* 页签放进卡片里时不要自带底色：卡片本身已是白底，子元素的不透明背景会盖住
-   卡片的圆角，四个角看起来就是方的（模型设置页的页签条就是这样）。 */
-.card > .tabs { background: transparent; }
+   卡片的圆角，四个角看起来就是方的（模型设置页的页签条就是这样）。
+   也不要让页签条成为滚动容器：.tabs 的 overflow-x: auto 会连带把 overflow-y 算成
+   auto，激活项 2px 下划线（bottom: -1px）多出的 1px 就会挤出一条竖向滚动条，
+   卡片右端因此看起来像一块带滚轮的方块。卡片里的页签不需要横向滚动。 */
+.card > .tabs { background: transparent; overflow: visible; }
 
 /* 卡片 / 表格视图切换：页头里的分段控件。
    不复用 .tabs —— 页签容器带 overflow-x: auto，放在这里会挤出横竖两条滚动条，
