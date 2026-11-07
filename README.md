@@ -4,9 +4,9 @@
 
 后端是 FastAPI + SQLAlchemy + SQLite 的单机进程，前端是 React + Vite，Electron 负责把后端作为 **sidecar 子进程**拉起并动态分配端口。没有外部队列、没有独立数据库服务、不需要运维。
 
-- 应用名 `企业知识库文档整理与问答系统`，版本 `1.0.15`（`backend/app/main.py:34`；`frontend/package.json` 的 `version` 同为 `1.0.15`）
+- 应用名 `企业知识库文档整理与问答系统`，版本 `1.0.16`（`backend/app/main.py:34`；`frontend/package.json` 的 `version` 同为 `1.0.16`）
 - 安装包产品名 `企业知识库`，appId `com.wikiraq.knowledge`（`frontend/electron-builder.yml`）
-- 后端测试基线 **316 passed, 1 skipped**（`backend/tests/`，30 个文件；含个人 Agent 核心/插件、检索链路与 SSE 回归）
+- 后端测试基线 **322 passed, 1 skipped**（`backend/tests/`，32 个测试文件；含个人 Agent 核心/插件、检索链路与 SSE 回归）
 
 ---
 
