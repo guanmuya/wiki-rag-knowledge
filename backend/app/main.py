@@ -112,6 +112,11 @@ async def lifespan(app: FastAPI):
         recovered = worker.recover_interrupted()
         if recovered:
             log.info("已恢复 %d 个上次未完成的任务", recovered)
+        # 再校正「任务已成功、知识库仍停在索引中」的陈旧状态：旧版本在换模型
+        # / 重建成功后没有刷新知识库，升级后必须自动恢复，不能等用户再点一次。
+        stale_kbs = worker.reconcile_kb_statuses()
+        if stale_kbs:
+            log.info("已校正 %d 个知识库的陈旧状态", stale_kbs)
         # 预热重模块：daemon 线程，不阻塞启动、不碰数据库。
         # 目的是让用户第一次上传文档时不必现场加载原生 DLL
         # （打包版首次加载要拿 Windows loader lock，杀软扫描时能到几十秒）。

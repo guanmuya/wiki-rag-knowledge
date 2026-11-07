@@ -1,6 +1,12 @@
 """检索层单元测试：RRF 融合、关键词打分、跨库不霸占、路由回退。"""
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import types
+from pathlib import Path
+
 import pytest
 from sqlalchemy import delete
 
@@ -157,3 +163,47 @@ def test_build_context_respects_budget():
     )
     ctx = retrieval.build_context([ev], budget=1000)
     assert len(ctx) <= 1100
+
+
+# ---------------------------------------------------------------- numpy 首次导入
+# 现场：问答请求在查询向量化之后停住，46s 内没有任何 /chat/completions 调用，
+# 前端一直「正在检索」；同时预热线程报告 openpyxl: 479357ms。打包版首次 import
+# numpy 要拿 Windows loader lock，请求路径一旦懒加载就会被按停几分钟。
+def _make_pairs(count=120):
+    return [(i, [float((i * 7) % 11), float((i * 3) % 5), 1.0, -0.25, 0.5])
+            for i in range(count)]
+
+
+def test_retrieval_does_not_import_numpy(isolated_env):
+    backend_dir = Path(__file__).resolve().parent.parent
+    code = (
+        "import sys\n"
+        "from app.services import retrieval\n"
+        "pairs = [(i, [float(i), 1.0, 0.5, -0.25]) for i in range(80)]\n"
+        "assert retrieval.vector_rank(pairs, [1.0, 0.0, 0.5, 0.25], limit=10)\n"
+        "assert 'numpy' not in sys.modules, '检索把 numpy 懒加载进来了'\n"
+    )
+    env = dict(os.environ, WRK_DATA_DIR=isolated_env, PYTHONPATH=str(backend_dir),
+               PYTHONIOENCODING="utf-8")
+    result = subprocess.run([sys.executable, "-c", code], cwd=str(backend_dir), env=env,
+                            capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr
+
+
+def test_batch_cosine_matches_pure_python_and_falls_back(monkeypatch):
+    pytest.importorskip("numpy")
+    pairs = _make_pairs()
+    q = [1.0, 0.5, 0.25, -0.1, 0.75]
+    fast = dict(retrieval._batch_cosine(pairs, q))
+    assert len(fast) == len(pairs)
+    for rid, vec in pairs:
+        assert fast[rid] == pytest.approx(retrieval.cosine(q, vec), abs=1e-12)
+    monkeypatch.setattr(retrieval, "_loaded_numpy", lambda: None)
+    assert retrieval._batch_cosine(pairs, q) is None
+    assert retrieval.vector_rank(pairs, q, limit=20)
+
+
+def test_loaded_numpy_ignores_half_imported_module(monkeypatch):
+    monkeypatch.setitem(sys.modules, "numpy", types.ModuleType("numpy"))
+    assert retrieval._loaded_numpy() is None
+
