@@ -255,7 +255,6 @@ export default function Layout() {
           <div className="brand-mark">知</div>
           <div className="brand-text">
             <strong>{orgName || '企业知识库'}</strong>
-            <span>文档整理 · 智能问答</span>
           </div>
           <button
             type="button"

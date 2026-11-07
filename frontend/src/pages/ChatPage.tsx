@@ -761,7 +761,7 @@ export default function ChatPage() {
               </div>
             ) : !convLoaded && convError ? null : conversations.length === 0 ? (
               <div className="tiny muted" style={{ padding: 12, textAlign: 'center' }}>
-                还没有会话，点上方新建
+                还没有会话
               </div>
             ) : (
               conversations.map((c) => (

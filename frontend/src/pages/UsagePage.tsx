@@ -45,7 +45,6 @@ export default function UsagePage() {
       <div className="page-head usage-heading">
         <div>
           <h1>用量概览</h1>
-          <div className="sub">查看知识库处理和已保存问答的模型用量记录</div>
         </div>
         <button type="button" className="btn" onClick={refresh} disabled={loading}>刷新</button>
       </div>

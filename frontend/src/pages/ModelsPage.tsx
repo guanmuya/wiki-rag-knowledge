@@ -613,11 +613,6 @@ export default function ModelsPage() {
       <div className="page-head">
         <div>
           <h1>模型设置</h1>
-          <div className="sub">
-            {tab === 'models'
-              ? '配置模型供应商与用途模型。API Key 仅写入不读取，留空表示不修改。'
-              : '记录登录、上传、授权、模型变更等管理操作，按时间倒序。'}
-          </div>
         </div>
         <div className="spacer" />
         <div className="page-head-actions">

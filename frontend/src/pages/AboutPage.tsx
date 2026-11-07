@@ -218,7 +218,6 @@ export default function AboutPage() {
       <div className="page-head">
         <div>
           <h1>关于</h1>
-          <div className="sub">版本信息、安装位置、运行环境与后端连通性。用于排查部署问题。</div>
         </div>
         <div className="spacer" />
         <div className="page-head-actions">
