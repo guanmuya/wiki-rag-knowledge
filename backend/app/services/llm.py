@@ -28,7 +28,7 @@ from typing import Any, Iterable, Iterator
 from urllib.parse import urlsplit
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
 from .. import config, models, security
@@ -54,6 +54,14 @@ def _client() -> httpx.Client:
 
 class ModelUnavailable(RuntimeError):
     """没有可用模型配置，或供应商调用失败。"""
+
+
+class ModelNotConfigured(ModelUnavailable):
+    """一条可用的模型配置都没有。
+
+    单独成类是为了把「没配模型」和「配了但调用失败」分开：前者回答里的
+    离线提示不应该写成「生成模型调用失败」，否则用户会以为自己配错了。
+    """
 
 
 @dataclass
@@ -103,6 +111,9 @@ class CallStats:
     # ---- 模式
     mode: str = "live"          # 生成通道：live | offline
     embed_mode: str = "live"    # 向量通道：live | offline
+    # 生成通道降级的原因（供应商报错 / 空响应）。只给界面解释用，完整错误在 notes。
+    # 未配置模型时留空：那种情况下界面继续显示「未调用生成模型」，不能误报成调用失败。
+    offline_reason: str = ""
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -193,6 +204,8 @@ class CallStats:
             self.mode = "offline"
         if other.embed_mode == "offline":
             self.embed_mode = "offline"
+        if other.offline_reason and not self.offline_reason:
+            self.offline_reason = other.offline_reason
         for note in other.notes:
             self.add_note(note)
 
@@ -214,12 +227,49 @@ class CallStats:
             "latency_embed_ms": self.latency_embed_ms,
             "mode": self.mode,
             "embed_mode": self.embed_mode,
+            "offline_reason": self.offline_reason,
             "degraded": self.degraded,
             "notes": list(self.notes),
         }
 
 
 # ------------------------------------------------------------------ 解析配置
+_ERROR_BODY_RE = re.compile(r"^供应商返回 (\d{3}):\s*(\{.*\})$", re.S)
+
+
+def error_summary(exc: BaseException | str, limit: int = 200) -> str:
+    """把供应商异常压成一句可展示的原因：只取错误体里的 message 并截断，
+    完整原文仍保留在 `CallStats.notes`，排障以 notes 为准。"""
+    text = re.sub(r"\s+", " ", str(exc or "")).strip()
+    match = _ERROR_BODY_RE.match(text)
+    if match:
+        try:
+            data = json.loads(match.group(2))
+        except (TypeError, ValueError):
+            data = None
+        message = ""
+        if isinstance(data, dict):
+            error = data.get("error")
+            if isinstance(error, dict):
+                message = str(error.get("message") or error.get("msg") or "")
+            elif isinstance(error, str):
+                message = error
+            if not message:
+                message = str(data.get("message") or data.get("detail") or "")
+        if message.strip():
+            text = f"供应商返回 {match.group(1)}：{message.strip()}"
+    if not text or len(text) <= limit:
+        return text
+    # 优先在句末/分号处截断：供应商常在错误信息后面附带升级链接，
+    # 把 URL 切一半比少说一句更难读。完整原文仍在 notes 里。
+    window = text[:limit]
+    for sep in ("。", ". ", "；", "; "):
+        pos = window.rfind(sep)
+        if pos >= max(20, limit // 3):
+            return window[: pos + len(sep)].rstrip()
+    return window[: limit - 1] + "…"
+
+
 def _join(base: str, path: str) -> str:
     """拼接 OpenAI 兼容端点。兼容 base_url 带/不带 /v1，以及误带端口方括号的写法。"""
     base = (base or "").strip().rstrip("/")
@@ -235,7 +285,19 @@ def _join(base: str, path: str) -> str:
 
 
 def resolve_model(db: Session, purpose: str) -> tuple[models.ModelConfig, models.Provider] | None:
-    """按用途取默认模型；没有显式默认则取最新可用的一条。"""
+    """按用途取默认模型。
+
+    排序规则（「明明配了模型却走离线」的修复点）：
+    1. 显式默认优先；
+    2. 其次优先最近一次连接测试成功的模型：用户测过说明当前网络/密钥下可用，
+       批量导入的免费/限流模型不能因为「最后导入」就抢占问答；
+    3. 其余沿用原来的「最新添加优先」。
+    """
+    test_rank = case(
+        (models.ModelConfig.last_test_ok.is_(True), 0),
+        (models.ModelConfig.last_test_ok.is_(None), 1),
+        else_=2,
+    )
     stmt = (
         select(models.ModelConfig)
         .join(models.Provider, models.Provider.id == models.ModelConfig.provider_id)
@@ -244,7 +306,12 @@ def resolve_model(db: Session, purpose: str) -> tuple[models.ModelConfig, models
             models.ModelConfig.enabled.is_(True),
             models.Provider.enabled.is_(True),
         )
-        .order_by(models.ModelConfig.is_default.desc(), models.ModelConfig.id.desc())
+        .order_by(
+            models.ModelConfig.is_default.desc(),
+            test_rank,
+            models.ModelConfig.last_test_at.desc().nulls_last(),
+            models.ModelConfig.id.desc(),
+        )
     )
     cfg = db.execute(stmt).scalars().first()
     if not cfg:
@@ -596,7 +663,7 @@ def chat(
     else:
         resolved = resolve_model(db, purpose)
         if not resolved:
-            raise ModelUnavailable("未配置可用的对话模型")
+            raise ModelNotConfigured("未配置可用的对话模型")
         cfg, provider = resolved
     protocol = provider_protocol(provider)
     params = json.loads(cfg.params or "{}")
@@ -701,7 +768,7 @@ def chat_stream(
     else:
         resolved = resolve_model(db, purpose)
         if not resolved:
-            raise ModelUnavailable("未配置可用的对话模型")
+            raise ModelNotConfigured("未配置可用的对话模型")
         cfg, provider = resolved
     protocol = provider_protocol(provider)
 
@@ -1117,7 +1184,7 @@ def test_model(db: Session, cfg: models.ModelConfig) -> dict:
             ok = bool(text.strip())
             message = f"模型返回：{text.strip()[:60]}"
     except ModelUnavailable as exc:
-        message = str(exc)
+        message = error_summary(exc, limit=300)
     except Exception as exc:  # pragma: no cover - 兜底
         message = f"{exc.__class__.__name__}: {exc}"
     latency = int((time.time() - started) * 1000)
