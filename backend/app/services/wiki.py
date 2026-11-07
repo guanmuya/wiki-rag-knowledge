@@ -12,15 +12,18 @@
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 import re
+import sqlite3
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Callable, Literal
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import ObjectDeletedError
 
 from .. import config, models, wiki_visibility
 from . import chunking, llm
@@ -78,18 +81,81 @@ class WikiBuildResult:
     notes: list[str] | None = None
 
 
+@dataclass(frozen=True)
+class _SourceSnapshot:
+    """生成时的输入身份及内容；不依赖会过期或被复用的 ORM 实例。"""
+    id: int
+    kb_id: int
+    doc_id: int
+    doc_version_id: int
+    ordinal: int
+    text: str
+    heading: str
+    locator: str
+    kind: str
+    created_at: dt.datetime | None
+
+    def __post_init__(self) -> None:
+        # SQLite drops timezone information; repository timestamps are UTC.
+        value = self.created_at
+        if value is not None:
+            if value.utcoffset() is None:
+                value = value.replace(tzinfo=dt.timezone.utc)
+            else:
+                value = value.astimezone(dt.timezone.utc)
+            object.__setattr__(self, "created_at", value)
+
+
 def _chunks_for_kb(db: Session, kb_id: int) -> list[models.Chunk]:
-    doc_ids = [d.id for d in db.execute(
-        select(models.Document).where(
-            models.Document.kb_id == kb_id, models.Document.deleted.is_(False))
-    ).scalars()]
-    if not doc_ids:
-        return []
+    # A subquery retains the original filter without binding every document ID;
+    # an IN list for 1000 documents can exceed SQLite's variable limit.
+    doc_ids = select(models.Document.id).where(
+        models.Document.kb_id == kb_id, models.Document.deleted.is_(False))
     return list(db.execute(
         select(models.Chunk).where(
             models.Chunk.kb_id == kb_id, models.Chunk.doc_id.in_(doc_ids)
         ).order_by(models.Chunk.doc_id, models.Chunk.ordinal)
     ).scalars())
+
+
+def _snapshot_source(c: models.Chunk) -> _SourceSnapshot:
+    try:
+        return _SourceSnapshot(
+            c.id, c.kb_id, c.doc_id, c.doc_version_id, c.ordinal, c.text,
+            c.heading, c.locator, c.kind, c.created_at,
+        )
+    except ObjectDeletedError as exc:
+        raise RuntimeError("Wiki 生成期间来源已删除或更新，请重新生成") from exc
+
+
+def _validate_sources(db: Session, snapshots: dict[int, _SourceSnapshot]) -> None:
+    """在发布写事务内核验实际输入，按数据库支持的参数上限分批。"""
+    batch_size = 500  # also below the historical SQLite limit of 999
+    if db.get_bind().dialect.name == "sqlite":
+        raw = db.connection().connection.driver_connection
+        getlimit = getattr(raw, "getlimit", None)
+        variable_limit = getattr(sqlite3, "SQLITE_LIMIT_VARIABLE_NUMBER", None)
+        if getlimit is not None and variable_limit is not None:
+            batch_size = max(1, min(batch_size, getlimit(variable_limit)))
+
+    ids = list(snapshots)
+    for start in range(0, len(ids), batch_size):
+        batch = ids[start:start + batch_size]
+        # Select columns, not ORM entities: an identity-mapped Chunk may still
+        # contain the old values even after its row was deleted and ID reused.
+        rows = db.execute(
+            select(models.Chunk.id, models.Chunk.kb_id, models.Chunk.doc_id,
+                   models.Chunk.doc_version_id, models.Chunk.ordinal, models.Chunk.text,
+                   models.Chunk.heading, models.Chunk.locator, models.Chunk.kind,
+                   models.Chunk.created_at)
+            .join(models.Document, models.Document.id == models.Chunk.doc_id)
+            .where(models.Chunk.id.in_(batch), models.Document.deleted.is_(False),
+                   models.Document.kb_id == models.Chunk.kb_id)
+        ).all()
+        if len(rows) != len(batch) or any(
+            snapshots.get(row[0]) != _SourceSnapshot(*row) for row in rows
+        ):
+            raise RuntimeError("Wiki 生成期间来源已删除或更新，请重新生成")
 
 
 def _cluster_topics_offline(entries: list[tuple[int, models.Chunk]]) -> list[dict]:
@@ -299,10 +365,13 @@ def _merge_topics(topics: list[dict]) -> list[dict]:
                 "summary": topic.get("summary", ""),
                 "chunk_ids": list(dict.fromkeys(topic.get("chunk_ids") or []))[:MAX_TOPIC_CHUNK_IDS],
                 "offline": bool(topic.get("offline")),
+                "_map_sources": dict(topic.get("_map_sources") or {}),
             })
             continue
         target["chunk_ids"] = list(dict.fromkeys(
             target["chunk_ids"] + list(topic.get("chunk_ids") or [])))[:MAX_TOPIC_CHUNK_IDS]
+        # Source dependencies are independent of the capped evidence IDs.
+        target["_map_sources"].update(topic.get("_map_sources") or {})
         if not target.get("summary") and topic.get("summary"):
             target["summary"] = topic["summary"]
         target["offline"] = bool(target.get("offline")) and bool(topic.get("offline"))
@@ -471,7 +540,8 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
     """
     stats = stats or llm.CallStats()
     result = WikiBuildResult(notes=[])
-    chunks = _chunks_for_kb(db, kb.id)
+    kb_id = kb.id
+    chunks = _chunks_for_kb(db, kb_id)
     if not chunks:
         raise RuntimeError("知识库还没有已入库的分块，无法生成 Wiki")
 
@@ -483,15 +553,24 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
     # 现在按字符预算切片，逐片归纳，片内编号一律用全库序号。
     shards, excerpt = _plan_shards(chunks)
     topics: list[dict] = []
+    sources_by_index: dict[int, _SourceSnapshot] = {}
+    sources_by_object: dict[int, _SourceSnapshot] = {}
     if on_progress:
         on_progress("topics", 0, len(shards))
     for shard_no, entries in enumerate(shards, start=1):
         if not entries:
             continue
-        topics.extend(_map_topics(
+        # A Map topic may reflect any input in its shard, regardless of which
+        # numbers the model reports. Snapshot before calling even a stubbed Map.
+        shard_sources = {idx: _snapshot_source(c) for idx, c in entries}
+        sources_by_index.update(shard_sources)
+        sources_by_object.update({id(c): shard_sources[idx] for idx, c in entries})
+        map_sources = {source.id: source for source in shard_sources.values()}
+        mapped = _map_topics(
             db, entries, shard_no=shard_no, shard_total=len(shards),
             total_chunks=len(chunks), excerpt=excerpt, stats=stats,
-        ))
+        )
+        topics.extend({**topic, "_map_sources": map_sources} for topic in mapped)
         if on_progress:
             on_progress("topics", shard_no, len(shards))
 
@@ -522,12 +601,15 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
         title = str(topic.get("title") or "未命名主题")[:80]
         ids = [int(i) for i in topic.get("chunk_ids") or []
                if isinstance(i, int) and 1 <= i <= len(chunks)]
-        summary = str(topic.get("summary") or "")
-        if topic.get("offline") and ids:
-            # 离线摘要里带「等 N 个片段」，合并后片段数变了，必须按并集重算
-            first = chunks[ids[0] - 1]
-            summary = f"依据《{first.locator or '原文'}》等 {len(ids)} 个片段整理。"
-        ctx, picked = _build_context(chunks, ids)
+        try:
+            summary = str(topic.get("summary") or "")
+            if topic.get("offline") and ids:
+                # 离线摘要里带「等 N 个片段」，合并后片段数变了，必须按并集重算
+                first = chunks[ids[0] - 1]
+                summary = f"依据《{first.locator or '原文'}》等 {len(ids)} 个片段整理。"
+            ctx, picked = _build_context(chunks, ids)
+        except ObjectDeletedError as exc:
+            raise RuntimeError("Wiki 生成期间来源已删除或更新，请重新生成") from exc
         if not picked:
             result.pages_skipped += 1
             # 跳过必须有原因，否则用户看到「页面数少于主题数」却无从排查
@@ -561,6 +643,10 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
                 on_progress("pages", order + 1, len(topics))
             continue
 
+        # A Session may expire Chunk objects between Map and page generation.
+        # Do not let a refreshed object silently become a different page input.
+        if any(_snapshot_source(chunks[i - 1]) != sources_by_index.get(i) for i in ids):
+            raise RuntimeError("Wiki 生成期间来源已删除或更新，请重新生成")
         content = ""
         try:
             content = llm.chat(
@@ -572,17 +658,41 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
             stats.mode = "offline"
             stats.add_note(f"页面生成降级为抽取式：{exc}")
         if len(content) < 40:
-            content = _offline_page(title, summary, picked)
+            try:
+                content = _offline_page(title, summary, picked)
+            except ObjectDeletedError as exc:
+                raise RuntimeError("Wiki 生成期间来源已删除或更新，请重新生成") from exc
             if stats.mode != "offline":
                 stats.mode = "offline"
                 stats.add_note("页面正文使用抽取式拼装")
 
-        links = _extract_evidence(content, [chunks[i - 1] for i in ids], chunks)
+        try:
+            links = _extract_evidence(content, [chunks[i - 1] for i in ids], chunks)
+        except ObjectDeletedError as exc:
+            raise RuntimeError("Wiki 生成期间来源已删除或更新，请重新生成") from exc
+        source_snapshots = dict(topic.get("_map_sources") or {})
+        for link in links:
+            c = link["chunk"]
+            source = sources_by_object.get(id(c))
+            if source is None or _snapshot_source(c) != source:
+                raise RuntimeError("Wiki 生成期间来源已删除或更新，请重新生成")
+            # Keep validating any evidence IDs the page model produced outside
+            # this topic too, as the existing publishing check already did.
+            source_snapshots[source.id] = source
+
+        # Serialize with document deletion before changing this page. A caller
+        # may catch a source error and commit the Session without rolling back.
+        locked = db.execute(
+            update(models.KnowledgeBase).where(models.KnowledgeBase.id == kb_id)
+            .values(status=models.KnowledgeBase.status)
+            .execution_options(synchronize_session=False)
+        )
+        if not locked.rowcount:
+            raise RuntimeError("Wiki 生成期间知识库已删除，无法生成")
+
         if page is not None:
-            # Acquire the write lock, then re-read: a human may have edited and
-            # locked this page while the model was generating its replacement.
-            db.execute(update(models.WikiPage).where(models.WikiPage.id == page.id)
-                       .values(updated_at=models.WikiPage.updated_at))
+            # The write lock is held: re-read in case a human edited and locked
+            # the page while the model was generating its replacement.
             db.refresh(page)
             if page.human_locked and not force:
                 page.status = models.WikiPageStatus.needs_review.value
@@ -593,6 +703,7 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
                     on_progress("pages", order + 1, len(topics))
                 continue
 
+        _validate_sources(db, source_snapshots)
         if page is None:
             page = models.WikiPage(
                 kb_id=kb.id, slug=slug, title=title, summary=summary,
@@ -626,15 +737,6 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
         page.status = models.WikiPageStatus.published.value
         db.add(page)
 
-        # The write lock is now held. Revalidate every source before publishing:
-        # deletion may have completed while the model was generating this page.
-        source_ids = {link["chunk"].id for link in links}
-        active_ids = set(db.execute(
-            select(models.Chunk.id).join(models.Document, models.Document.id == models.Chunk.doc_id)
-            .where(models.Chunk.id.in_(source_ids), models.Document.deleted.is_(False))
-        ).scalars())
-        if active_ids != source_ids:
-            raise RuntimeError("Wiki 生成期间来源已删除或更新，请重新生成")
         for link in links:
             c = link["chunk"]
             db.add(models.WikiEvidence(
