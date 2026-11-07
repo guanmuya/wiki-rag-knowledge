@@ -365,6 +365,11 @@ code {
   max-width: none;
   display: flex;
   flex-direction: column;
+  /* 问答 / Agent 是整屏布局：内容区高度钉在视口内，由消息区自己滚动。
+     否则长会话会把整页撑高，左侧会话列表随页面一起滚走，看起来「停在上面」。 */
+  flex: 0 0 auto;
+  height: calc(100vh - var(--topbar-h));
+  height: calc(100dvh - var(--topbar-h));
   overflow: hidden;
 }
 
@@ -1561,10 +1566,13 @@ code {
 .chat-shell {
   display: grid;
   grid-template-columns: 264px minmax(0, 1fr);
-  height: 100%;
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1;
   min-height: 0;
   background: var(--c-surface);
 }
+/* 右侧会话区收成圆角描边卡片：原先是一整块贴着窗口与侧栏边缘的方形白板。 */
+.chat-shell:not(.agent-shell) { background: var(--c-bg); }
 .chat-sidebar {
   display: flex;
   flex-direction: column;
@@ -1696,6 +1704,14 @@ code {
 }
 
 .chat-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.chat-shell:not(.agent-shell) .chat-main {
+  margin: 12px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-xs);
+  overflow: hidden;
+}
 .chat-toolbar {
   display: flex;
   align-items: center;
