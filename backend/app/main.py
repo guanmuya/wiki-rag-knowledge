@@ -28,6 +28,8 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
+# HTTPX 的 INFO 请求日志包含完整供应商 URL；桌面端日志对登录用户可见。
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("wrk")
 
 APP_NAME = "企业知识库文档整理与问答系统"

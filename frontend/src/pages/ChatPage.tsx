@@ -6,6 +6,8 @@ import type {
   AskResponse,
   AskStreamEvent,
   ChatMessage,
+  ChatModelOption,
+  ChatModelOptions,
   Conversation,
   ConversationDetail,
   KnowledgeBase,
@@ -13,7 +15,7 @@ import type {
   ThinkingStream,
 } from '../types'
 import { errorText, formatMs, formatTime, parseApiTime } from '../utils'
-import { Button, ErrorState, Modal, SkeletonLines, Spinner, TextInput } from '../components/ui'
+import { Button, ErrorState, Modal, Select, SkeletonLines, Spinner, TextInput } from '../components/ui'
 import { Markdown } from '../components/Markdown'
 import { MessageInsights } from '../components/Evidence'
 import { IconChevronDown, IconChevronRight, IconClose, IconMenu, IconMessage } from '../components/icons'
@@ -254,6 +256,18 @@ export default function ChatPage() {
   const [kbsLoading, setKbsLoading] = useState(true)
   const [kbsError, setKbsError] = useState<unknown>(null)
 
+  // null 跟随设置中的默认模型；显式选择的模型只用于当前页面。
+  const [modelOptions, setModelOptions] = useState<ChatModelOption[]>([])
+  const [modelDefaultId, setModelDefaultId] = useState<number | null>(null)
+  const [selectedModelId, setSelectedModelId] = useState<number | null>(null)
+  const [modelsLoading, setModelsLoading] = useState(true)
+  const [modelsError, setModelsError] = useState<unknown>(null)
+  const modelSequence = useRef(0)
+  const modelRequest = useRef<{
+    userId: number | null; session: string | null; sequence: number
+    promise: Promise<ChatModelOptions | null>
+  } | null>(null)
+
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [convLoaded, setConvLoaded] = useState(false)
   const [convLoading, setConvLoading] = useState(true)
@@ -303,6 +317,11 @@ export default function ChatPage() {
     setKbsOwner(null)
     setKbsLoading(true)
     setKbsError(null)
+    setModelOptions([])
+    setModelDefaultId(null)
+    setSelectedModelId(null)
+    setModelsLoading(true)
+    setModelsError(null)
     setConversations([])
     setConvLoaded(false)
     setConvLoading(true)
@@ -359,10 +378,55 @@ export default function ChatPage() {
     }
   }, [])
 
+  const loadModels = useCallback((): Promise<ChatModelOptions | null> => {
+    const requestSession = getToken()
+    const requestUser = viewRef.current?.userId ?? null
+    const pending = modelRequest.current
+    // 聚焦与提交同时触发时共用请求，避免显示和提交不同的默认模型。
+    if (pending && pending.session === requestSession && pending.userId === requestUser) return pending.promise
+    const sequence = ++modelSequence.current
+    const current = () => mountedRef.current && sequence === modelSequence.current &&
+      requestSession === getToken() && requestUser === viewRef.current?.userId
+    setModelsLoading(true)
+    const promise = (async () => {
+      try {
+        const data = await chatApi.models()
+        if (!current()) return null
+        const items = data.items ?? []
+        setModelOptions(items)
+        setModelDefaultId(data.default_id ?? null)
+        // 已选模型失效时回到默认，未显式选择时始终跟随服务端默认值。
+        setSelectedModelId((previous) =>
+          previous !== null && items.some((m) => m.id === previous) ? previous : null)
+        setModelsError(null)
+        return data
+      } catch (err) {
+        if (current()) setModelsError(err)
+        return null
+      } finally {
+        if (modelRequest.current?.sequence === sequence) modelRequest.current = null
+        if (current()) setModelsLoading(false)
+      }
+    })()
+    modelRequest.current = { userId: requestUser, session: requestSession, sequence, promise }
+    return promise
+  }, [])
+
   useEffect(() => {
     void loadKbs()
     void loadConversations()
-  }, [loadKbs, loadConversations, userId, session])
+    void loadModels()
+  }, [loadKbs, loadConversations, loadModels, userId, session])
+
+  useEffect(() => {
+    const refresh = () => { if (document.visibilityState === 'visible') void loadModels() }
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [loadModels])
 
   useEffect(() => {
     if (sidebarOpen) newConversationRef.current?.focus()
@@ -497,6 +561,7 @@ export default function ChatPage() {
   const capacityBlocked = userJobCount >= MAX_CHAT_JOBS && !retryCandidate
   const busy = !detailReady || reconciling || asking || Boolean(pendingMessage) || capacityBlocked
   const shownSelectedKbs = detailReady ? selectedKbs : []
+  const displayedModelId = selectedModelId ?? modelDefaultId
   const askError = validationError?.visit === visit ? validationError.text : ''
   const successfulJobKeys = successfulJobs.map((job) => job.key).join(',')
 
@@ -626,6 +691,29 @@ export default function ChatPage() {
     publishJob('change', job)
 
     try {
+      // 提交前刷新默认模型，并把当前显示的模型固定到这一轮请求。
+      // 若刷新失败，保留已显示的默认模型；从未加载成功则由服务端选择。
+      let requestModelId = selectedModelId
+      if (requestModelId === null) {
+        // 聚焦时可能已有一次旧请求；等它结束后再获取提交时的最新默认值。
+        let fallbackDefaultId = modelDefaultId
+        const pending = modelRequest.current
+        if (pending && pending.session === session && pending.userId === userId) {
+          const previous = await pending.promise
+          if (previous) fallbackDefaultId = previous.default_id
+        }
+        if (session === getToken()) {
+          const refreshed = await loadModels()
+          requestModelId = refreshed ? refreshed.default_id : fallbackDefaultId
+        }
+      }
+      if (session !== getToken()) {
+        job.error = '登录状态已更改，请重新登录后恢复提问。'
+        job.ambiguous = false
+        job.phase = 'error'
+        publishJob('change', job)
+        return
+      }
       if (!job.targetId) {
         const title = text.slice(0, 28) + (text.length > 28 ? '…' : '')
         const created = await chatApi.create(title, job.kbIds)
@@ -661,7 +749,7 @@ export default function ChatPage() {
         if (askJobs.get(job.key) !== job || session !== getToken()) return
         applyStreamEvent(job, event)
         publishJob('change', job)
-      })
+      }, undefined, requestModelId)
       if (askJobs.get(job.key) !== job || session !== getToken()) {
         forgetJob(job)
         return
@@ -689,8 +777,10 @@ export default function ChatPage() {
       }
       const sameSession = session === getToken()
       job.error = errorText(err)
-      job.ambiguous = job.phase === 'asking' && !(err instanceof ApiError && [403, 404, 422].includes(err.status))
+      job.ambiguous = job.phase === 'asking' && !(err instanceof ApiError && [400, 403, 404, 422].includes(err.status))
       job.phase = 'error'
+      // 模型被删除或停用时，服务端在写入前返回 400；更新列表供用户重试。
+      if (sameSession && err instanceof ApiError && err.status === 400) void loadModels()
       publishJob(sameSession ? 'settled' : 'change', job)
     }
   }
@@ -948,6 +1038,29 @@ export default function ChatPage() {
               )}
             </div>
             <div className="spacer" />
+            <label className="chat-model-picker">
+              <span className="tiny muted nowrap">模型：</span>
+              <Select
+                className="chat-model-select"
+                value={displayedModelId ?? ''}
+                onChange={(e) => {
+                  const id = e.target.value ? Number(e.target.value) : null
+                  setSelectedModelId(id === modelDefaultId ? null : id)
+                }}
+                disabled={modelsLoading || modelOptions.length === 0}
+                aria-label="选择回答使用的模型"
+                title="选择回答使用的模型"
+              >
+                {modelOptions.length === 0 ? (
+                  <option value="">{modelsLoading ? '加载中…' : modelsError ? '模型加载失败' : '默认模型'}</option>
+                ) : modelOptions.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.display}{m.id === modelDefaultId ? '（默认）' : ''}
+                  </option>
+                ))}
+              </Select>
+            </label>
+            {modelsError ? <button type="button" className="btn-link" onClick={() => void loadModels()}>重试模型列表</button> : null}
             {shownSelectedKbs.length > 0 ? (
               <button type="button" className="btn-link" onClick={clearKbSelection}>
                 清空选择

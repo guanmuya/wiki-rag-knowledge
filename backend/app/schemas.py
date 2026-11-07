@@ -124,6 +124,8 @@ class AskIn(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
     kb_ids: list[int] | None = None       # 覆盖会话选择
     top_k: int | None = None
+    # 本轮问答使用的对话模型；不传则沿用模型设置里解析出的默认模型。
+    model_config_id: int | None = None
 
 
 class SearchPreviewIn(BaseModel):

@@ -18,7 +18,7 @@ from ..services import answering, llm, qa_pipeline, retrieval
 router = APIRouter(tags=["chat"])
 log = logging.getLogger("wrk.chat")
 
-# 生成失败/被中断时给用户看的话。技术细节写进 route.error，只留在库里给排障用。
+# 生成失败/被中断时给用户看的话；显式选模型时不向会话历史暴露异常原文。
 ASK_FAILED_TEXT = "这次回答没有生成完成，可以重新提问。"
 # 同一会话又来了新提问时，上一条没写完的回答按「已跳过」收尾。
 SUPERSEDED_TEXT = "上一次回答没有生成完成，已跳过。"
@@ -183,13 +183,14 @@ def delete_conversation(cid: int, db: Session = Depends(get_db),
 
 
 def _mark_answer_failed(db: Session, answer_id: int, started: float,
-                        exc: BaseException) -> None:
+                        exc: BaseException, *, hide_details: bool = False) -> None:
     """生成失败时把 pending 占位收尾成 failed；本身绝不再往外抛。
 
     先 rollback：`answering.answer` 失败后会话可能停在「必须先回滚」的状态，
     不回滚的话这次收尾写也会失败，pending 就永远留在库里了。
     """
-    log.warning("回答生成失败（消息 #%s）：%s", answer_id, exc)
+    # 桌面日志也可由用户查看，显式选模型时不得记录可能包含私有配置的异常。
+    log.warning("回答生成失败（消息 #%s）：%s", answer_id, ASK_FAILED_TEXT if hide_details else exc)
     try:
         db.rollback()
         answer = db.get(models.Message, answer_id)
@@ -198,11 +199,11 @@ def _mark_answer_failed(db: Session, answer_id: int, started: float,
         answer.status = "failed"
         answer.content = ASK_FAILED_TEXT
         answer.latency_ms = int((time.time() - started) * 1000)
-        answer.route = json.dumps({"error": str(exc)[:500]}, ensure_ascii=False)
+        answer.route = json.dumps({"error": ASK_FAILED_TEXT if hide_details else str(exc)[:500]}, ensure_ascii=False)
         db.add(answer)
         db.commit()
     except Exception:  # noqa: BLE001 - 收尾失败不能覆盖原始异常
-        log.warning("标记回答失败状态时又出错（忽略）", exc_info=True)
+        log.warning("标记回答失败状态时又出错（忽略）", exc_info=not hide_details)
         try:
             db.rollback()
         except Exception:  # pragma: no cover - 连接已坏
@@ -284,17 +285,92 @@ def _persist_result(db: Session, answer_id: int, result: dict, denied: list[dict
     return result
 
 
+def _model_display(cfg: models.ModelConfig, provider: models.Provider) -> str:
+    """下拉项文案：显示名 · 模型标识 · 供应商，同名模型也能分清。"""
+    name = (cfg.label or "").strip() or cfg.model
+    parts = [name]
+    if cfg.model and cfg.model != name:
+        parts.append(cfg.model)
+    if provider.name:
+        parts.append(provider.name)
+    return " · ".join(parts)
+
+
+def _ask_model(db: Session, model_config_id: int | None) -> models.ModelConfig | None:
+    """校验本轮问答指定的对话模型；None 表示沿用模型设置里的默认模型。
+
+    只接受启用中、且供应商也启用中的 llm 模型，避免用户选到一条离线/已停用的
+    配置后，问答链路拿着不可用的 cfg 去调用供应商。
+    """
+    if model_config_id is None:
+        return None
+    cfg = db.get(models.ModelConfig, model_config_id)
+    if cfg is None or cfg.purpose != models.ModelPurpose.llm.value or not cfg.enabled:
+        raise HTTPException(status_code=400, detail="所选对话模型不存在或未启用")
+    provider = db.get(models.Provider, cfg.provider_id)
+    if provider is None or not provider.enabled:
+        raise HTTPException(status_code=400, detail="所选对话模型的供应商已停用")
+    return cfg
+
+
+@router.get("/chat/models")
+def list_chat_models(db: Session = Depends(get_db),
+                     user: models.User = Depends(get_current_user)):
+    """智能问答页的模型下拉数据。
+
+    与 /settings/models 不同：这里对所有登录用户开放，且只暴露可用的对话模型
+    名称（不含 Key、Base URL 等配置）。`default_id` 用与问答相同的
+    `llm.resolve_model` 解析，保证下拉里标「默认」的那条就是未指定模型时
+    实际会用的那条。
+    """
+    rows = db.execute(
+        select(models.ModelConfig)
+        .join(models.Provider, models.Provider.id == models.ModelConfig.provider_id)
+        .where(
+            models.ModelConfig.purpose == models.ModelPurpose.llm.value,
+            models.ModelConfig.enabled.is_(True),
+            models.Provider.enabled.is_(True),
+        )
+        .order_by(models.ModelConfig.is_default.desc(), models.ModelConfig.id.desc())
+    ).scalars().all()
+    resolved = llm.resolve_model(db, models.ModelPurpose.llm.value)
+    items = [
+        {
+            "id": cfg.id,
+            "model": cfg.model,
+            "label": cfg.label,
+            "provider": cfg.provider.name,
+            "is_default": bool(cfg.is_default),
+            "display": _model_display(cfg, cfg.provider),
+        }
+        for cfg in rows
+    ]
+    return {"items": items, "default_id": resolved[0].id if resolved else None}
+
+
 @router.post("/conversations/{cid}/ask")
 def ask(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
         user: models.User = Depends(get_current_user)):
     conv = _my_conversation(db, user, cid)
+    cfg = _ask_model(db, body.model_config_id)   # 先校验，避免无效 id 先落库占位
     started = time.time()
     allowed, _kb_ids, denied, answer_id = _prepare_turn(db, conv, user, body)
 
     try:
-        result = answering.answer(db, body.question, allowed, top_k=body.top_k)
+        if cfg is not None:
+            # 提交占位消息后重新读取，避免已停用的配置留在会话缓存中。
+            db.expire_all()
+            cfg = _ask_model(db, body.model_config_id)
+        # 没选模型时保持原来的调用形状（不传 override），既有调用方不受影响。
+        extra = {"cfg_override": cfg} if cfg is not None else {}
+        result = answering.answer(db, body.question, allowed, top_k=body.top_k, **extra)
     except BaseException as exc:      # 含客户端断开导致的取消：都要把占位收尾
-        _mark_answer_failed(db, answer_id, started, exc)
+        hide_details = body.model_config_id is not None
+        _mark_answer_failed(db, answer_id, started, exc, hide_details=hide_details)
+        if hide_details and isinstance(exc, Exception):
+            # 不把带私有配置的 traceback 交给服务器及桌面日志；保留明确的 HTTP 状态。
+            status = exc.status_code if isinstance(exc, HTTPException) else 500
+            raise HTTPException(status_code=status, detail=ASK_FAILED_TEXT) from None
         raise
 
     return _persist_result(db, answer_id, result, denied, started)
@@ -321,6 +397,8 @@ def ask_stream(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
     鉴权与普通接口完全一致。
     """
     conv = _my_conversation(db, user, cid)
+    # 校验放在请求作用域：无效 id 要在 SSE 开始前返回 400，而不是流里报错。
+    _ask_model(db, body.model_config_id)
     started = time.time()
     _allowed, kb_ids, denied, answer_id = _prepare_turn(db, conv, user, body)
 
@@ -332,8 +410,11 @@ def ask_stream(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
             try:
                 kbs = [kb for kb in (sdb.get(models.KnowledgeBase, kid) for kid in kb_ids)
                        if kb is not None]
+                # 流开始前配置可能已被删除或停用；绝不能静默改用其他供应商。
+                cfg = _ask_model(sdb, body.model_config_id)
+                extra = {"cfg_override": cfg} if cfg is not None else {}
                 generator = qa_pipeline.iter_run(
-                    sdb, body.question, kbs, top_k=body.top_k, stream=True)
+                    sdb, body.question, kbs, top_k=body.top_k, stream=True, **extra)
                 while True:
                     try:
                         event = next(generator)
@@ -352,9 +433,10 @@ def ask_stream(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
                                         RuntimeError("客户端断开连接"))
                 raise
             except BaseException as exc:
-                _mark_answer_failed(sdb, answer_id, started, exc)
+                hide_details = body.model_config_id is not None
+                _mark_answer_failed(sdb, answer_id, started, exc, hide_details=hide_details)
                 yield _sse({"type": "error", "message": ASK_FAILED_TEXT,
-                            "detail": str(exc)[:500]})
+                            "detail": ASK_FAILED_TEXT if hide_details else str(exc)[:500]})
             finally:
                 if generator is not None:
                     try:
