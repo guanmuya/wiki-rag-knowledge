@@ -178,7 +178,7 @@
 `refusal_reason` 给出判定原因（如「回答开头即声明资料不足」）。
 历史消息与当次回答同口径：`chat.ask()` 把 `insufficient` / `usage` / `suggestions` / `refusal_reason` 一并写进 `route` 快照（`chat.py:154-161`），`serializers.message_out()` 再从 `route` 读回并展开成顶层字段（`serializers.py:237-242`）；老消息没有这两个键、或数据损坏时退回 `[]` / `""`（`serializers.py:225-230`），不会让一条脏消息把整个会话接口打挂。
 
-**问答是「先落库、再生成」的两段写**（`chat.py`）：`POST .../ask` 先写入提问与一条 `status="pending"` 的占位回答并提交，生成结束后把占位更新成 `status="ok"`。所以生成过程中 `GET /conversations/{id}` 就能读到「提问 + 正在生成」——用户离开页面再回来（甚至刷新）不会看到一个被清空的会话；前端在 `pending` 期间每 2 秒轮询一次，读到 `ok` 即停止（`ChatPage.tsx`）。生成失败时占位写成 `status="failed"`，`content` 是给用户看的说明、技术原因放进 `route.error`；进程重启时启动流程会把遗留的 `pending` 统一收尾成 `failed`，同一会话来了新提问也会把上一条未完成的回答收尾（`chat.recover_pending_messages()` / `chat._close_pending()`）。
+**问答是「先落库、再生成」的两段写**（`chat.py`）：`POST .../ask` 先写入提问与一条 `status="pending"` 的占位回答并提交，生成结束后把占位更新成 `status="ok"`。所以生成过程中 `GET /conversations/{id}` 就能读到「提问 + 正在生成」——用户离开页面再回来（甚至刷新）不会看到一个被清空的会话；前端在 `pending` 期间每 2 秒轮询一次，读到 `ok` 即停止（`ChatPage.tsx`）。生成失败时占位写成 `status="failed"`，`content` 与 `route.error` 均返回通用提示；普通接口保留 HTTP 状态码，流式接口的 `error.detail` 同样使用通用提示。模型降级原因只返回安全的错误类别和状态码，不返回供应商异常原文。旧历史消息读取时也会处理这些诊断字段，但不会改写已存数据库。进程重启时启动流程会把遗留的 `pending` 统一收尾成 `failed`，同一会话来了新提问也会把上一条未完成的回答收尾（`chat.recover_pending_messages()` / `chat._close_pending()`）。
 
 ### 7.1 检索链路与流式思考过程
 
@@ -254,7 +254,7 @@
 | `total_tokens` | 全通道合计 = `prompt_tokens + completion_tokens + embed_tokens` |
 | `latency_ms` | 总耗时；`latency_chat_ms` / `latency_embed_ms` 为分通道耗时 |
 | `mode` | **生成通道**模式（`live`/`offline`）；前端据此显示「未调用生成模型」 |
-| `offline_reason` | 生成通道降级原因（供应商错误摘要）；为空表示未配置模型，前端据此区分「没配」与「配了但调用失败」 |
+| `offline_reason` | 生成通道的安全降级类别（如供应商 HTTP 状态码）；不会包含供应商响应正文或地址 |
 | `embed_mode` | **向量通道**模式。单独存在，避免「只有向量走离线」被误报成整体离线 |
 | `degraded` | 任一通道降级 |
 

@@ -11,15 +11,16 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import models, schemas, serializers
-from ..db import SessionLocal, get_db
+from ..db import DB_BUSY_DETAIL, SessionLocal, get_db, is_lock_error
 from ..deps import audit, get_current_user, grant_level
 from ..services import answering, llm, qa_pipeline, retrieval
 
 router = APIRouter(tags=["chat"])
 log = logging.getLogger("wrk.chat")
 
-# 生成失败/被中断时给用户看的话；显式选模型时不向会话历史暴露异常原文。
+# 生成失败/被中断时给用户看的话，不向会话历史暴露异常原文。
 ASK_FAILED_TEXT = "这次回答没有生成完成，可以重新提问。"
+SEARCH_FAILED_TEXT = "这次检索没有完成，请稍后重试。"
 # 同一会话又来了新提问时，上一条没写完的回答按「已跳过」收尾。
 SUPERSEDED_TEXT = "上一次回答没有生成完成，已跳过。"
 # 进程重启后，上个进程里未完成的回答不可能再写完，统一标成失败。
@@ -182,15 +183,14 @@ def delete_conversation(cid: int, db: Session = Depends(get_db),
     return {"ok": True}
 
 
-def _mark_answer_failed(db: Session, answer_id: int, started: float,
-                        exc: BaseException, *, hide_details: bool = False) -> None:
+def _mark_answer_failed(db: Session, answer_id: int, started: float) -> None:
     """生成失败时把 pending 占位收尾成 failed；本身绝不再往外抛。
 
     先 rollback：`answering.answer` 失败后会话可能停在「必须先回滚」的状态，
     不回滚的话这次收尾写也会失败，pending 就永远留在库里了。
     """
-    # 桌面日志也可由用户查看，显式选模型时不得记录可能包含私有配置的异常。
-    log.warning("回答生成失败（消息 #%s）：%s", answer_id, ASK_FAILED_TEXT if hide_details else exc)
+    # 桌面日志及会话历史都可由用户查看，异常原文可能包含供应商配置。
+    log.warning("回答生成失败（消息 #%s）", answer_id)
     try:
         db.rollback()
         answer = db.get(models.Message, answer_id)
@@ -199,11 +199,11 @@ def _mark_answer_failed(db: Session, answer_id: int, started: float,
         answer.status = "failed"
         answer.content = ASK_FAILED_TEXT
         answer.latency_ms = int((time.time() - started) * 1000)
-        answer.route = json.dumps({"error": ASK_FAILED_TEXT if hide_details else str(exc)[:500]}, ensure_ascii=False)
+        answer.route = json.dumps({"error": ASK_FAILED_TEXT}, ensure_ascii=False)
         db.add(answer)
         db.commit()
     except Exception:  # noqa: BLE001 - 收尾失败不能覆盖原始异常
-        log.warning("标记回答失败状态时又出错（忽略）", exc_info=not hide_details)
+        log.warning("标记回答失败状态时又出错（忽略）")
         try:
             db.rollback()
         except Exception:  # pragma: no cover - 连接已坏
@@ -364,20 +364,21 @@ def ask(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
         # 没选模型时保持原来的调用形状（不传 override），既有调用方不受影响。
         extra = {"cfg_override": cfg} if cfg is not None else {}
         result = answering.answer(db, body.question, allowed, top_k=body.top_k, **extra)
+        return _persist_result(db, answer_id, result, denied, started)
     except BaseException as exc:      # 含客户端断开导致的取消：都要把占位收尾
-        hide_details = body.model_config_id is not None
-        _mark_answer_failed(db, answer_id, started, exc, hide_details=hide_details)
-        if hide_details and isinstance(exc, Exception):
-            # 不把带私有配置的 traceback 交给服务器及桌面日志；保留明确的 HTTP 状态。
+        _mark_answer_failed(db, answer_id, started)
+        if isinstance(exc, Exception):
+            # 旧客户端也会调用默认模型；异常原文不能进入响应或服务器日志。
+            if is_lock_error(exc):
+                raise HTTPException(status_code=503, detail=DB_BUSY_DETAIL) from None
             status = exc.status_code if isinstance(exc, HTTPException) else 500
             raise HTTPException(status_code=status, detail=ASK_FAILED_TEXT) from None
         raise
 
-    return _persist_result(db, answer_id, result, denied, started)
 
-
-def _sse(payload: dict) -> str:
-    return "data: " + json.dumps(payload, ensure_ascii=False, default=str) + "\n\n"
+def _sse(payload: dict) -> bytes:
+    # 在生成器内编码：供应商返回无效 Unicode 时仍能发送安全的 error 事件。
+    return ("data: " + json.dumps(payload, ensure_ascii=False, default=str) + "\n\n").encode("utf-8")
 
 
 @router.post("/conversations/{cid}/ask/stream")
@@ -429,14 +430,12 @@ def ask_stream(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
             except GeneratorExit:
                 # 客户端断开：回答没写完就标 failed，别让它永远 pending。
                 if not completed:
-                    _mark_answer_failed(sdb, answer_id, started,
-                                        RuntimeError("客户端断开连接"))
+                    _mark_answer_failed(sdb, answer_id, started)
                 raise
             except BaseException as exc:
-                hide_details = body.model_config_id is not None
-                _mark_answer_failed(sdb, answer_id, started, exc, hide_details=hide_details)
-                yield _sse({"type": "error", "message": ASK_FAILED_TEXT,
-                            "detail": ASK_FAILED_TEXT if hide_details else str(exc)[:500]})
+                _mark_answer_failed(sdb, answer_id, started)
+                detail = DB_BUSY_DETAIL if is_lock_error(exc) else ASK_FAILED_TEXT
+                yield _sse({"type": "error", "message": detail, "detail": detail})
             finally:
                 if generator is not None:
                     try:
@@ -464,7 +463,15 @@ def search_preview(body: schemas.SearchPreviewIn, db: Session = Depends(get_db),
     # 检索也有模型开销（查询向量化）。不传 stats 的话，这个接口的成本恒为 0，
     # 实验脚本用它做「分块 vs Wiki」对比时会得出「检索不花钱」的错误结论。
     stats = llm.CallStats()
-    evidence, routes, stats_out = retrieval.retrieve(db, allowed, body.query, stats=stats)
+    try:
+        evidence, routes, stats_out = retrieval.retrieve(db, allowed, body.query, stats=stats)
+    except Exception as exc:
+        # 配置解析等非 ModelUnavailable 异常也可能包含默认供应商的私有信息。
+        log.warning("检索预览失败")
+        if is_lock_error(exc):
+            raise HTTPException(status_code=503, detail=DB_BUSY_DETAIL) from None
+        status = exc.status_code if isinstance(exc, HTTPException) else 500
+        raise HTTPException(status_code=status, detail=SEARCH_FAILED_TEXT) from None
     return {
         "evidence": [ev.to_dict() for ev in evidence],
         "routes": [r.to_dict() for r in routes],
