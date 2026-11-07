@@ -330,6 +330,8 @@ export interface WikiPageDetail {
   version: WikiPageVersion | null
   evidence: WikiEvidenceRef[]
   related: WikiPage[]
+  /** 仅系统管理员可见：生成时读取或引用的已删除文档。 */
+  deleted_generation_sources?: Array<{ id: number; name: string }>
 }
 
 export interface EvidenceItem {
