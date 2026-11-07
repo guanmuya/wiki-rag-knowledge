@@ -307,7 +307,7 @@ def test_failed_answer_cleanup_does_not_log_private_details(caplog):
             raise RuntimeError(secret)
 
     caplog.set_level(logging.WARNING, logger="wrk.chat")
-    chat_router._mark_answer_failed(BrokenSession(), 1, 0, ValueError(secret), hide_details=True)
+    chat_router._mark_answer_failed(BrokenSession(), 1, 0)
     assert secret not in caplog.text
 
 

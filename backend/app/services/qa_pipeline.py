@@ -149,8 +149,7 @@ def _chat_json(db: Session, messages: list[dict], call_stats: llm.CallStats, *,
         text = llm.chat(db, messages, temperature=0.0, max_tokens=500,
                         json_mode=True, stats=call_stats, cfg_override=cfg_override)
     except llm.ModelUnavailable as exc:
-        detail = llm.public_error(exc) if cfg_override is not None else str(exc)
-        call_stats.add_note(f"{note}降级为规则判断：{detail}")
+        call_stats.add_note(f"{note}降级为规则判断：{llm.public_error(exc)}")
         return None
     data = _parse_json_object(text)
     if data is None:
@@ -158,11 +157,11 @@ def _chat_json(db: Session, messages: list[dict], call_stats: llm.CallStats, *,
     return data
 
 
-def _offline_reason(exc: llm.ModelUnavailable, *, selected: bool = False) -> str:
-    """生成通道降级原因：未配置模型不算「调用失败」，返回空串。"""
+def _offline_reason(exc: llm.ModelUnavailable) -> str:
+    """生成降级原因只暴露错误类别；未配置模型不算调用失败。"""
     if isinstance(exc, llm.ModelNotConfigured):
         return ""
-    return llm.public_error(exc) if selected else llm.error_summary(exc, limit=120)
+    return llm.public_error(exc)
 
 
 def _normalize_queries(raw, *, limit: int = MAX_QUERIES) -> list[str]:
@@ -520,8 +519,8 @@ def _general_reply(db: Session, question: str, call_stats: llm.CallStats, *,
                 yield {"type": "answer", "delta": text}
     except llm.ModelUnavailable as exc:
         call_stats.mode = "offline"
-        call_stats.offline_reason = _offline_reason(exc, selected=cfg_override is not None)
-        detail = llm.public_error(exc) if cfg_override is not None else str(exc)
+        call_stats.offline_reason = _offline_reason(exc)
+        detail = llm.public_error(exc)
         call_stats.add_note(f"通用回复降级为固定文案：{detail}")
     text = "".join(parts).strip()
     if not text:
@@ -596,11 +595,11 @@ def _generate_answer(db: Session, question: str, kbs: list[models.KnowledgeBase]
                 parts.append(delta)
                 yield {"type": "answer", "delta": delta}
         except llm.ModelUnavailable as exc:
-            detail = llm.public_error(exc) if cfg_override is not None else str(exc)
+            detail = llm.public_error(exc)
             call_stats.add_note(f"流式生成中断：{detail}")
             if not parts:
                 call_stats.mode = "offline"
-                call_stats.offline_reason = _offline_reason(exc, selected=cfg_override is not None)
+                call_stats.offline_reason = _offline_reason(exc)
                 text = answering._extractive_answer(
                     question, evidence, reason=call_stats.offline_reason)
                 parts.append(text)
@@ -613,8 +612,8 @@ def _generate_answer(db: Session, question: str, kbs: list[models.KnowledgeBase]
                 parts.append(text)
         except llm.ModelUnavailable as exc:
             call_stats.mode = "offline"
-            call_stats.offline_reason = _offline_reason(exc, selected=cfg_override is not None)
-            detail = llm.public_error(exc) if cfg_override is not None else str(exc)
+            call_stats.offline_reason = _offline_reason(exc)
+            detail = llm.public_error(exc)
             call_stats.add_note(f"生成模型不可用：{detail}")
     text = "".join(parts).strip()
     if not text:
