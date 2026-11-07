@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
+from functools import lru_cache
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -278,9 +280,151 @@ def provider_out(p: models.Provider) -> dict:
     }
 
 
-def message_out(m: models.Message) -> dict:
-    import json
+# 老版默认模型的异常可能已经写入问答历史。这里只净化读取结果，不能依赖
+# 当前配置里的密钥：供应商可能已删除/轮换，异常也可能包含 URL 或响应正文。
+_HISTORY_PUBLIC_ERRORS = {
+    "未配置可用模型", "供应商接口地址不合法", "无法连接供应商", "模型调用失败",
+    "生成模型返回空内容", "这次回答没有生成完成，可以重新提问。",
+}
+_HISTORY_SAFE_NOTES = {
+    "未配置 Embedding，使用离线哈希向量",
+    "流式调用未返回 usage，token 数按字符数估算",
+    "生成结果为空，已回退抽取式回答",
+    *(f"{node}返回非 JSON，已使用规则判断" for node in
+      ("意图分析节点", "查询路由节点", "覆盖度评估节点", "查询重写节点")),
+}
+_HISTORY_ERROR_NOTE_PREFIXES = (
+    *(f"{node}降级为规则判断：" for node in
+      ("意图分析节点", "查询路由节点", "覆盖度评估节点", "查询重写节点")),
+    "通用回复降级为固定文案：", "流式生成中断：", "生成模型不可用：",
+)
+_HISTORY_NOTE_HIDDEN = "诊断信息已隐藏"
+_EXTRACTIVE_PREFIX = "（离线演示模式：生成模型调用失败 —— "
+_EXTRACTIVE_SUFFIX = "；以下内容由检索片段抽取整理）"
+_EXTRACTIVE_FOOTER = "\n\n以上内容来自检索到的资料片段，可在右侧来源面板核对原文。"
+# _suggestion_block 也可能把抽取式回答作为详情接在这个固定拒答前置句之后。
+_REFUSAL_PREFIX = "现有资料不足以回答这个问题。\n\n"
 
+
+def _history_error(value, *, fallback: str = "模型调用失败") -> str:
+    """只返回确定安全的公开类别，绝不返回未知异常或供应商响应。"""
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        return fallback
+    if value in _HISTORY_PUBLIC_ERRORS:
+        return value
+    # 老版 error_summary 可能把响应正文接在状态码后；只提取固定格式的数字。
+    status = re.match(r"^供应商返回 ([0-9]{3})(?=$|[\s:：])", value)
+    if status:
+        return f"供应商返回 {status.group(1)}"
+    if value.startswith("供应商接口地址"):
+        return "供应商接口地址不合法"
+    if value.startswith("网络请求失败"):
+        return "无法连接供应商"
+    return fallback
+
+
+def _history_notes(value):
+    """已知的非错误提示可保留；无法确认的内容按诊断信息隐藏。"""
+    if not isinstance(value, list):
+        return [] if value is None else [_HISTORY_NOTE_HIDDEN]
+    cleaned = []
+    for note in value:
+        if isinstance(note, str) and note in _HISTORY_SAFE_NOTES:
+            cleaned.append(note)
+            continue
+        if isinstance(note, str):
+            prefix = next((p for p in _HISTORY_ERROR_NOTE_PREFIXES if note.startswith(p)), None)
+            if prefix:
+                cleaned.append(prefix + (_history_error(note[len(prefix):]) or "模型调用失败"))
+                continue
+        cleaned.append(_HISTORY_NOTE_HIDDEN)
+    return cleaned
+
+
+def _history_route(value, *, in_usage: bool = False, in_stats: bool = False,
+                   route_object: bool = False):
+    """净化 route 及其中各层 usage/stats 快照，不触及其他业务字段。"""
+    if isinstance(value, list):
+        return [_history_route(item, in_usage=in_usage, in_stats=in_stats,
+                               route_object=route_object) for item in value]
+    if not isinstance(value, dict):
+        return value
+    cleaned = {}
+    for key, item in value.items():
+        if key in {"hits", "kb_coverage"} and isinstance(item, dict):
+            # 这些映射的键是用户查询或知识库名称，可能恰好叫 usage / stats。
+            cleaned[key] = dict(item)
+        elif key == "error" and route_object:
+            cleaned[key] = _history_error(item, fallback="这次回答没有生成完成，可以重新提问。")
+        elif key == "offline_reason" and in_usage:
+            cleaned[key] = _history_error(item)
+        elif key == "notes" and in_usage:
+            cleaned[key] = _history_notes(item)
+        elif key == "embedding_error" and in_stats:
+            cleaned[key] = _history_error(item)
+        elif key in {"usage", "stats"} and not isinstance(item, dict):
+            # 这些快照应是对象；畸形字段可能整段都是异常，不能原样返回。
+            cleaned[key] = {}
+        else:
+            cleaned[key] = _history_route(
+                item, in_usage=in_usage or key == "usage", in_stats=in_stats or key == "stats",
+                route_object=key == "route")
+    return cleaned
+
+
+def _history_extractive_body_is_backed(content: str, offset: int, evidence) -> bool:
+    """核对旧抽取内容来自保存的证据，避免把伪造的错误正文当成回答。"""
+    if not isinstance(evidence, list) or not evidence:
+        return False
+    candidates_by_evidence = []
+    for item in evidence[:4]:
+        if not isinstance(item, dict) or not isinstance(item.get("text"), str):
+            return False
+        text = item["text"]
+        candidates = [part.strip() for part in re.split(r"(?<=[。！？；\n])", text)
+                      if len(part.strip()) >= 10]
+        candidates.extend([re.sub(r"\s*\|\s*", " · ", text.strip())[:220],
+                           text.strip()[:200]])
+        candidates_by_evidence.append(candidates)
+
+    @lru_cache(maxsize=None)
+    def matches(index: int, position: int) -> bool:
+        if index == len(candidates_by_evidence):
+            return content.startswith(_EXTRACTIVE_FOOTER, position)
+        prefix = "\n\n- " if index == 0 else "\n- "
+        for candidate in candidates_by_evidence[index]:
+            part = prefix + candidate + f" [{index + 1}]"
+            if content.startswith(part, position) and matches(index + 1, position + len(part)):
+                return True
+        return False
+
+    return matches(0, offset)
+
+
+def _history_content(content, route: dict, evidence):
+    """只处理旧抽取式降级的固定开头，保留可核对的正文及拒答建议。"""
+    if not isinstance(content, str):
+        return content
+    offset = len(_REFUSAL_PREFIX) if content.startswith(_REFUSAL_PREFIX) else 0
+    if not content.startswith(_EXTRACTIVE_PREFIX, offset):
+        return content
+    reason_start = offset + len(_EXTRACTIVE_PREFIX)
+    usage = route.get("usage")
+    raw_reason = usage.get("offline_reason") if isinstance(usage, dict) else None
+    # 整个 reason 必须与原始快照及头部匹配；供应商响应可伪造结束符和换行。
+    # 快照缺失或格式不匹配时，不能可靠区分正文与异常，隐藏余下内容。
+    end = reason_start + len(raw_reason) if isinstance(raw_reason, str) and raw_reason else -1
+    if (end < 0 or not content.startswith(raw_reason + _EXTRACTIVE_SUFFIX, reason_start)
+            or not _history_extractive_body_is_backed(
+                content, end + len(_EXTRACTIVE_SUFFIX), evidence)):
+        return content[:offset] + _EXTRACTIVE_PREFIX + "模型调用失败" + _EXTRACTIVE_SUFFIX
+    reason = _history_error(raw_reason) or "模型调用失败"
+    return content[:reason_start] + reason + content[end:]
+
+
+def message_out(m: models.Message) -> dict:
     def _load(raw, default):
         try:
             return json.loads(raw or "")
@@ -288,7 +432,12 @@ def message_out(m: models.Message) -> dict:
             return default
 
     route = _load(m.route, {})
+    route = route if isinstance(route, dict) else {}
     evidence = _load(m.evidence, [])
+    content = m.content
+    if m.role == "assistant":
+        content = _history_content(content, route, evidence)
+        route = _history_route(route, route_object=True)
     # 老消息（suggestions / refusal_reason 还没落库时写入的）与损坏数据都要能读：
     # 类型不对就退回缺省值，绝不让一条历史消息把整个会话接口打挂。
     suggestions = route.get("suggestions")
@@ -298,7 +447,7 @@ def message_out(m: models.Message) -> dict:
     if not isinstance(refusal_reason, str):
         refusal_reason = ""
     return {
-        "id": m.id, "role": m.role, "content": m.content,
+        "id": m.id, "role": m.role, "content": content,
         "kb_ids": _load(m.kb_ids, []), "evidence": evidence,
         "route": route, "latency_ms": m.latency_ms, "created_at": iso(m.created_at),
         # 生成状态（ok / pending / failed）：离开页面再回来时，前端靠它判断

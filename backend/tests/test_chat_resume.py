@@ -11,7 +11,6 @@
 """
 from __future__ import annotations
 
-import pytest
 from sqlalchemy import select
 
 from app import models
@@ -94,16 +93,17 @@ def test_generation_failure_keeps_question_and_marks_answer_failed(
         raise RuntimeError("模型连接被重置")
 
     monkeypatch.setattr(chat_router.answering, "answer", boom)
-    with pytest.raises(RuntimeError):
-        app_client.post(f"/api/conversations/{conv['id']}/ask", headers=admin_headers,
-                        json={"question": "会失败的提问", "kb_ids": [kb["id"]]})
+    response = app_client.post(f"/api/conversations/{conv['id']}/ask", headers=admin_headers,
+                               json={"question": "会失败的提问", "kb_ids": [kb["id"]]})
+    assert response.status_code == 500
+    assert response.json()["detail"] == chat_router.ASK_FAILED_TEXT
 
     messages = _messages(app_client, admin_headers, conv["id"])
     assert [m["role"] for m in messages] == ["user", "assistant"]
     assert messages[0]["content"] == "会失败的提问", "提问必须保留，否则用户重进会话就看不到问过什么"
     assert messages[1]["status"] == "failed"
     assert messages[1]["content"] == chat_router.ASK_FAILED_TEXT
-    assert "模型连接被重置" in messages[1]["route"].get("error", "")
+    assert messages[1]["route"]["error"] == chat_router.ASK_FAILED_TEXT
 
 
 def test_new_ask_supersedes_stale_pending(app_client, admin_headers, monkeypatch):
