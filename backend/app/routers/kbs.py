@@ -143,6 +143,13 @@ def _index_status(db: Session, kb: models.KnowledgeBase) -> dict:
         select(func.count(models.WikiSection.id)).where(
             models.WikiSection.kb_id == kb.id, models.WikiSection.page_version_id.in_(live_versions))
     ).scalar() or 0
+    wiki_current_units = db.execute(
+        select(func.count(models.WikiSection.id))
+        .join(models.WikiPage, models.WikiPage.id == models.WikiSection.page_id)
+        .where(models.WikiSection.kb_id == kb.id,
+               models.WikiPage.status != models.WikiPageStatus.draft.value,
+               models.WikiPage.current_version_id == models.WikiSection.page_version_id)
+    ).scalar() or 0
     pending = db.execute(
         select(func.count(models.Task.id)).where(
             models.Task.kb_id == kb.id,
@@ -157,6 +164,7 @@ def _index_status(db: Session, kb: models.KnowledgeBase) -> dict:
         # 都会被算成就绪，与列表页的结论相反。
         "wiki_ready": serializers.wiki_ready(db, kb.id),
         "wiki_units": wiki_units,
+        "wiki_current_units": wiki_current_units,
         "embed_signature": kb.embed_signature,
         "embed_dim": kb.embed_dim,
         "active_embed_signature": active_sig,

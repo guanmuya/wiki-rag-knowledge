@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useAuth, useToast } from '../auth'
 import { kbApi } from '../api'
 import type { KnowledgeBase } from '../types'
-import { formatTime, kbStatusLabel, modeLabel, taskStatusClass } from '../utils'
+import { formatTime, kbStatusLabel, modeLabel, taskStatusClass, usePolling } from '../utils'
 import { Badge, Button, ErrorState, SkeletonLines, Tabs } from '../components/ui'
 import DocumentsTab from '../components/DocumentsTab'
 import WikiTab from '../components/WikiTab'
@@ -23,6 +23,7 @@ export default function KbDetailPage() {
   const [kb, setKb] = useState<KnowledgeBase | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<unknown>(null)
+  const kbRequestRef = useRef(0)
 
   const tabParam = searchParams.get('tab')
   const tab: TabKey =
@@ -30,6 +31,7 @@ export default function KbDetailPage() {
   const slugParam = searchParams.get('slug')
 
   const load = useCallback(async () => {
+    const requestId = ++kbRequestRef.current
     if (!Number.isFinite(kbId)) {
       setError(new Error('知识库 ID 不合法'))
       setLoading(false)
@@ -37,19 +39,39 @@ export default function KbDetailPage() {
     }
     try {
       const data = await kbApi.get(kbId)
+      if (requestId !== kbRequestRef.current) return
       setKb(data)
       setError(null)
     } catch (err) {
-      setError(err)
+      if (requestId === kbRequestRef.current) setError(err)
     } finally {
-      setLoading(false)
+      if (requestId === kbRequestRef.current) setLoading(false)
     }
   }, [kbId])
 
   useEffect(() => {
     setLoading(true)
     void load()
+    return () => { kbRequestRef.current += 1 }
   }, [load])
+
+  const refreshStatus = useCallback(async () => {
+    const requestId = ++kbRequestRef.current
+    try {
+      const data = await kbApi.get(kbId)
+      if (requestId === kbRequestRef.current) {
+        setKb(data)
+        setError(null)
+        setLoading(false)
+      }
+    } catch {
+      // 短暂刷新失败时保留现有页面，下一次轮询继续尝试。
+    }
+  }, [kbId])
+  // 任务可能在同一次详情请求的库状态读取和任务计数之间结束；
+  // 继续刷新 indexing 状态，直到读到最终的库状态。
+  usePolling(refreshStatus, 2000, kb?.id === kbId &&
+    ((kb.index?.pending_tasks ?? 0) > 0 || kb.status === 'indexing'))
 
   const setTab = (next: TabKey) => {
     const params = new URLSearchParams(searchParams)

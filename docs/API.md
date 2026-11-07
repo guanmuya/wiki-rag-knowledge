@@ -80,13 +80,13 @@
 ```json
 {
   "chunk_ready": true, "chunk_units": 42,
-  "wiki_ready": false, "wiki_units": 0,
+  "wiki_ready": false, "wiki_units": 0, "wiki_current_units": 0,
   "embed_signature": "openai:text-embedding-3-small:1536", "embed_dim": 1536,
   "active_embed_signature": "openai:text-embedding-3-small:1536", "active_embed_dim": 1536,
   "signature_mismatch": false, "pending_tasks": 0
 }
 ```
-`index.wiki_ready` 与顶层 `wiki_ready` 同源（`serializers.wiki_ready()`，`serializers.py:58`）；`signature_mismatch` / `active_embed_*` 用于判断「换 Embedding 后该库是否需要重建」，`pending_tasks` 是该库排队中与进行中的任务数。
+`index.wiki_ready` 与顶层 `wiki_ready` 同源（`serializers.wiki_ready()`，`serializers.py:58`）；`wiki_current_units` 只统计非草稿页面当前版本的章节，`wiki_units` 仍包含历史章节。`signature_mismatch` / `active_embed_*` 用于判断「换 Embedding 后该库是否需要重建」，`pending_tasks` 是该库排队中与进行中的任务数。
 
 ## 5. 文档与任务
 

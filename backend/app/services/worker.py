@@ -11,12 +11,14 @@ import json
 import logging
 import threading
 import traceback
+from typing import Literal
 
 from sqlalchemy import select, text, update
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, TimeoutError as SQLAlchemyTimeoutError
 
 from .. import config, models
-from ..db import is_lock_error, retry_on_locked, session_scope
+from ..db import (apply_busy_timeout, is_lock_error, retry_on_locked,
+                  run_with_lock_retry, session_scope)
 from . import cost, ingest, llm, taskflow, wiki
 
 log = logging.getLogger("wrk.worker")
@@ -111,6 +113,39 @@ def _refresh_kb_after_rebuild(db, task: models.Task, result: dict) -> None:
     db.add(kb)
 
 
+def _report_wiki_progress(task_id: int, phase: Literal["topics", "pages"],
+                          done: int, total: int) -> None:
+    """独立任务的阶段计数单独提交，不提交 Wiki 会话中尚未落库的业务修改。"""
+    if phase == "topics":
+        stage = f"Wiki 主题归纳 {done}/{total}"
+        progress = 5 + (35 * done // total if total else 0)
+    else:
+        stage = f"Wiki 页面处理 {done}/{total}"
+        progress = 40 + (55 * done // total if total else 0)
+    # 进度值为兼容已有任务契约的阶段权重，并非总耗时的精确百分比；
+    # 已完成工作以 stage 中的计数为准，100 只在任务成功提交时写入。
+    def write_progress() -> None:
+        # 外层 Wiki 会话占用 worker 连接；进度使用独立池，池满也只短等一次。
+        with session_scope(role="progress") as progress_db:
+            apply_busy_timeout(progress_db, min(config.BUSY_TIMEOUT_INTERACTIVE,
+                                                config.BUSY_TIMEOUT_PROGRESS))
+            task = progress_db.get(models.Task, task_id)
+            if task and task.status == models.TaskStatus.running.value:
+                task.stage = stage
+                task.progress = progress
+                progress_db.add(task)
+
+    try:
+        # 和 WorkerSession 的进度提交一致，最多短暂重试一次写锁冲突。
+        run_with_lock_retry(write_progress, attempts=min(config.LOCK_RETRY_ATTEMPTS, 2))
+    except OperationalError as exc:
+        if not is_lock_error(exc):
+            raise
+        log.warning("Wiki 进度写入被锁挡住，跳过本次更新：%s", getattr(exc, "orig", exc))
+    except SQLAlchemyTimeoutError as exc:
+        log.warning("Wiki 进度连接池等待超时，跳过本次更新：%s", exc)
+
+
 def run_once(worker_id: str = "inline") -> bool:
     """执行一个任务；返回是否真的处理了任务（供测试同步驱动）。"""
     # role="worker"：busy_timeout 提到 30s，且进度写撞锁不会让任务失败
@@ -126,7 +161,12 @@ def run_once(worker_id: str = "inline") -> bool:
                 kb = db.get(models.KnowledgeBase, task.kb_id)
                 if not kb:
                     raise RuntimeError("知识库不存在")
-                wres = wiki.build_wiki(db, kb, stats=stats)
+                task_id = task.id
+                wres = wiki.build_wiki(
+                    db, kb, stats=stats,
+                    on_progress=lambda phase, done, total: _report_wiki_progress(
+                        task_id, phase, done, total),
+                )
                 result = {"created": wres.pages_created, "updated": wres.pages_updated,
                           "skipped": wres.pages_skipped, "sections": wres.sections,
                           "notes": wres.notes or []}

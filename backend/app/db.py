@@ -24,6 +24,7 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import QueuePool
 
 from . import config
 
@@ -52,11 +53,15 @@ def is_lock_error(exc: BaseException | None) -> bool:
 
 connect_args = {"check_same_thread": False} if IS_SQLITE else {}
 
+# 进度是 best-effort：专用池全部占满时，不能让每次更新等待默认 30s。
+PROGRESS_POOL_SIZE = 5
+PROGRESS_POOL_TIMEOUT_SECONDS = 0.25
+
 
 def _make_engine(role: str):
-    """按角色建 engine：交互（3s 等锁）与 worker（30s 等锁）。
+    """按角色建 engine：交互、worker 与短等待的独立进度池。
 
-    为什么必须是两个 engine，而不是「一个 engine + 会话里改 PRAGMA」：
+    为什么使用独立 engine，而不是「一个 engine + 会话里改 PRAGMA」：
     `Session.rollback()` 一结束事务就把连接还给了池子，之后再执行 PRAGMA 拿到
     的是**另一条**连接——真正带着 30s 的那条还留在池里（实测：worker 跑完，
     池里必有一条连接是 30000，下一个交互请求又卡 30 秒）。PRAGMA 是连接级状态，
@@ -66,14 +71,23 @@ def _make_engine(role: str):
     会话中途可能临时改过（进度写 1.5s、审计 0.5s），不复位就会漏给下一个使用者。
     """
     def _timeout() -> int:
-        return int(config.BUSY_TIMEOUT_WORKER if role == "worker"
-                   else config.BUSY_TIMEOUT_INTERACTIVE)
+        if role == "worker":
+            return int(config.BUSY_TIMEOUT_WORKER)
+        if role == "progress":
+            return max(0, int(min(config.BUSY_TIMEOUT_INTERACTIVE, config.BUSY_TIMEOUT_PROGRESS)))
+        return int(config.BUSY_TIMEOUT_INTERACTIVE)
 
+    # 明确使用 QueuePool：包括 SQLite 内存 URL 在内，各同步驱动的默认池类型
+    # 并不相同，有些默认池不接受 pool_timeout / max_overflow 参数。
+    pool_options = ({"poolclass": QueuePool, "pool_size": PROGRESS_POOL_SIZE,
+                     "max_overflow": 0, "pool_timeout": PROGRESS_POOL_TIMEOUT_SECONDS}
+                    if role == "progress" else {})
     eng = create_engine(
         config.DATABASE_URL,
         connect_args=connect_args,
         future=True,
         pool_pre_ping=True,
+        **pool_options,
     )
     if not IS_SQLITE:
         return eng
@@ -81,6 +95,9 @@ def _make_engine(role: str):
     @event.listens_for(eng, "connect")
     def _sqlite_pragmas(dbapi_conn, _rec):  # pragma: no cover - 驱动回调
         cur = dbapi_conn.cursor()
+        if role == "progress":
+            # 新连接设置 WAL 时也可能撞写锁；先设短等待再访问数据库。
+            cur.execute(f"PRAGMA busy_timeout={_timeout()}")
         cur.execute("PRAGMA journal_mode=WAL")
         cur.execute("PRAGMA synchronous=NORMAL")
         cur.execute("PRAGMA foreign_keys=ON")
@@ -106,9 +123,13 @@ def _make_engine(role: str):
 engine = _make_engine("interactive")
 # worker 专用池：同一份 SQLite 文件，只是等锁时间更长。WAL 下多连接是安全的。
 worker_engine = _make_engine("worker")
+# Wiki 进度不占 worker/交互池，池满时短暂等待后跳过。
+progress_engine = _make_engine("progress")
 
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+ProgressSessionLocal = sessionmaker(bind=progress_engine, autoflush=False,
+                                    expire_on_commit=False, future=True)
 
 
 class Base(DeclarativeBase):
@@ -332,11 +353,13 @@ def session_scope(role: str = "interactive") -> Iterator[Session]:
     """给 Worker / 脚本使用的独立事务作用域。
 
     `role="worker"`：走 worker_engine（连接默认 30s 等锁）+ WorkerSession
-    （进度写容忍写锁冲突）。其它角色（含默认）保持原有语义——`get_db` 与
-    `session_scope()` 被大量代码依赖，默认行为不能变。
+    （进度写容忍写锁冲突）。`role="progress"`：使用短 checkout 等待的进度池。
+    其它角色（含默认）保持原有交互会话语义。
     """
     worker_role = role == "worker"
-    db = (WorkerSessionLocal if worker_role else SessionLocal)()
+    session_factory = (WorkerSessionLocal if worker_role else
+                       ProgressSessionLocal if role == "progress" else SessionLocal)
+    db = session_factory()
     try:
         if worker_role:
             apply_busy_timeout(db, config.BUSY_TIMEOUT_WORKER)

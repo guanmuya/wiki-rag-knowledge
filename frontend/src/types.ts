@@ -150,7 +150,9 @@ export interface KbStats {
 export interface KbIndexState {
   chunk_ready?: boolean
   wiki_ready?: boolean
+  wiki_current_units?: number
   embed_signature?: string
+  pending_tasks?: number
 }
 
 export interface KnowledgeBase {
