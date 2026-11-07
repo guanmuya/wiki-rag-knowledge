@@ -1924,12 +1924,31 @@ code {
 
 .model-group { display: flex; flex-direction: column; gap: 10px; }
 .model-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--c-text-muted);
 }
+/* 分组标题本身是折叠开关：图标 + 用途名 + 数量，点标题收/展该用途的模型表。 */
+.model-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.model-group-toggle:hover { color: var(--c-text); }
+.model-group-toggle .icon { color: var(--c-text-muted); }
 /* 三个用途各一张表：固定布局 + 同一套 colgroup 宽度，跨表的列头才会纵向对齐。
    固定布局不再按内容撑列，长模型名/长测试信息靠换行兜住。
    末尾几列按视口宽度取 clamp：窗口从 1440 收到最小 1100 时它们一起收窄，
