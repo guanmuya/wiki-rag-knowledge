@@ -21,6 +21,10 @@ import {
   IconChevronDown,
   IconChevronRight,
   IconClose,
+  IconEye,
+  IconLayers,
+  IconMessage,
+  IconPlus,
 } from '../components/icons'
 import {
   Badge,
@@ -40,6 +44,13 @@ const PURPOSE_LABEL: Record<ModelPurpose, string> = {
   llm: '对话模型',
   embedding: '向量模型',
   vision: '视觉模型',
+}
+
+/** 三个用途各配一枚线性图标，颜色跟随文本角色，不靠彩色徽标区分。 */
+const PURPOSE_ICON: Record<ModelPurpose, typeof IconMessage> = {
+  llm: IconMessage,
+  embedding: IconLayers,
+  vision: IconEye,
 }
 
 const PURPOSE_ORDER: ModelPurpose[] = ['llm', 'embedding', 'vision']
@@ -785,33 +796,37 @@ export default function ModelsPage() {
                 PURPOSE_ORDER.map((purpose) => {
                   const group = models.filter((m) => m.purpose === purpose)
                   if (group.length === 0) return null
+                  const PurposeIcon = PURPOSE_ICON[purpose]
+                  const collapsed = collapsedGroups[purpose]
                   return (
-                    <div className="model-group" key={purpose}>
+                    <div className={`model-group${collapsed ? ' is-collapsed' : ''}`} key={purpose}>
                       <div className="model-group-title">
                         <button
                           type="button"
                           className="model-group-toggle"
                           onClick={() => toggleGroup(purpose)}
-                          aria-expanded={!collapsedGroups[purpose]}
-                          title={collapsedGroups[purpose] ? '展开该用途的模型' : '折叠该用途的模型'}
+                          aria-expanded={!collapsed}
+                          title={collapsed ? '展开该用途的模型' : '折叠该用途的模型'}
                         >
-                          {collapsedGroups[purpose] ? (
-                            <IconChevronRight size={13} />
-                          ) : (
-                            <IconChevronDown size={13} />
-                          )}
-                          <span>{PURPOSE_LABEL[purpose]}</span>
-                          <span className="tiny muted">{group.length}</span>
+                          <span className="model-group-chevron">
+                            {collapsed ? <IconChevronRight size={16} /> : <IconChevronDown size={16} />}
+                          </span>
+                          <span className="model-group-icon">
+                            <PurposeIcon size={16} />
+                          </span>
+                          <span className="model-group-name">{PURPOSE_LABEL[purpose]}</span>
+                          <span className="model-group-count">{group.length} 个</span>
                         </button>
                         <button
                           type="button"
-                          className="btn-link"
+                          className="model-group-add"
                           onClick={() => openModel('create', purpose)}
                         >
-                          + 添加
+                          <IconPlus size={14} />
+                          添加模型
                         </button>
                       </div>
-                      <div className="table-wrap" hidden={collapsedGroups[purpose]}>
+                      <div className="table-wrap" hidden={collapsed}>
                         {/* 三个用途的表共用同一套列宽（.model-table 固定布局）：
                             维度列在非向量表里显示「—」，这样跨表的列头才对得齐。 */}
                         <table className="table model-table">
