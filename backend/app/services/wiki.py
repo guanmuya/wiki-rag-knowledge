@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Callable, Literal
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import ObjectDeletedError
 
@@ -475,30 +475,19 @@ def _extract_evidence(page_md: str, picked: list[models.Chunk], all_chunks: list
     return links
 
 
-def _index_sections(db: Session, kb: models.KnowledgeBase, page: models.WikiPage,
-                    version: models.WikiPageVersion, *,
-                    stats: llm.CallStats | None = None) -> int:
-    """把页面正文按章节切分并向量化，写入 WikiSection。
-
-    stats 为什么必须传进来（真实缺陷修复）：
-    Wiki 库的整理成本**主要就在这里** —— 每个页面 3~8 个章节，一次 Wiki 生成
-    可能有几十次向量化调用。之前没传 stats，等于把 Wiki 成本的大头完全丢掉，
-    只剩主题归纳和页面生成那几次 chat 调用，测出来的「Wiki 整理成本」偏低数倍。
-    """
-    units = chunking.split_markdown(version.content_md)
+def _prepare_sections(db: Session, kb: models.KnowledgeBase, title: str, content: str, *,
+                      stats: llm.CallStats | None = None) -> list[dict]:
+    """在发布事务外准备章节、向量及关键词，避免网络调用或向量打包持写锁。"""
+    units = chunking.split_markdown(content)
     if not units:
-        # 正文为空：清掉旧章节（这里没有向量化，DELETE 不会造成长锁）
-        db.execute(delete(models.WikiSection).where(models.WikiSection.page_version_id == version.id))
-        return 0
-    # 章节标题带上页面名，检索命中时能区分是哪个页面的哪一节，
-    # 也避免不同页面的同名小节（如「审批流程」）互相混淆。
-    for u in units:
-        u.heading = f"{page.title} / {u.heading}" if u.heading else page.title
-    texts = [u.text for u in units]
+        return []
+    for unit in units:
+        unit.heading = f"{title} / {unit.heading}" if unit.heading else title
+    texts = [unit.text for unit in units]
     vectors: list[list[float]] = []
     sig = kb.embed_signature
     try:
-        # 关键修复：stats 必须透传，否则 Wiki 章节向量化不计入成本
+        # 章节向量化是 Wiki 成本的重要部分，必须继续透传统计。
         vectors = llm.embed(db, texts, stats=stats)
         if vectors:
             sig = llm.active_embedding(db)[2]
@@ -507,27 +496,44 @@ def _index_sections(db: Session, kb: models.KnowledgeBase, page: models.WikiPage
         if stats:
             stats.add_note(f"Wiki 章节向量化失败，仅建关键词索引：{exc}")
         vectors = []
-    # 清旧章节放在向量化之后：DELETE 会立刻开启 SQLite 写事务，
-    # 如果放在 embed 之前，整段章节向量化都占着写锁（本地 Ollama 可能几十秒），
-    # 另一个 worker 的提交就会 database is locked。现在写事务只覆盖毫秒级插入。
-    db.execute(delete(models.WikiSection).where(models.WikiSection.page_version_id == version.id))
-    count = 0
-    for unit, vec in zip(units, vectors or [None] * len(units)):
-        db.add(models.WikiSection(
-            kb_id=kb.id, page_id=page.id, page_version_id=version.id, ordinal=unit.ordinal,
-            heading_path=unit.heading, text=unit.text,
-            keywords=chunking.keyword_field(unit.text),
-            vector_blob=llm.pack_vector(vec) if vec else None,
-            dim=len(vec) if vec else 0, embed_signature=sig if vec else "",
-        ))
-        count += 1
-    return count
+    return [
+        {"ordinal": unit.ordinal, "heading_path": unit.heading, "text": unit.text,
+         "keywords": chunking.keyword_field(unit.text),
+         "vector_blob": llm.pack_vector(vec) if vec else None,
+         "dim": len(vec) if vec else 0, "embed_signature": sig if vec else ""}
+        for unit, vec in zip(units, vectors or [None] * len(units))
+    ]
+
+
+def _lock_wiki_write(db: Session, kb_id: int) -> None:
+    """在重新读取页面前取得短写锁，防止并发生成或人工校对覆盖已提交版本。"""
+    locked = db.execute(
+        update(models.KnowledgeBase).where(models.KnowledgeBase.id == kb_id)
+        .values(status=models.KnowledgeBase.status)
+        .execution_options(synchronize_session=False)
+    )
+    if not locked.rowcount:
+        raise RuntimeError("Wiki 生成期间知识库已删除，无法生成")
+
+
+def _page_by_slug(db: Session, kb_id: int, slug: str, *,
+                  for_update: bool = False) -> models.WikiPage | None:
+    statement = (
+        select(models.WikiPage)
+        .where(models.WikiPage.kb_id == kb_id, models.WikiPage.slug == slug)
+        .execution_options(populate_existing=True)
+    )
+    # SQLite 已由知识库行更新取得写锁；支持行级锁的数据库还需锁住页面本身。
+    if for_update:
+        statement = statement.with_for_update()
+    return db.execute(statement).scalar_one_or_none()
 
 
 def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
                stats: llm.CallStats | None = None,
-               on_progress: Callable[[Literal["topics", "pages"], int, int], None] | None = None
-               ) -> WikiBuildResult:
+               on_progress: Callable[[Literal["topics", "pages"], int, int], None] | None = None,
+               check_cancel: Callable[[], None] | None = None,
+               on_publish: Callable[[], None] | None = None) -> WikiBuildResult:
     """生成整库 Wiki：分片 Map 归纳 → Reduce 合并 → 逐主题写页面。
 
     覆盖范围是这里最重要的语义：**全库每一个分块都必须进入某一分片**。
@@ -535,12 +541,15 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
     扩料做「Wiki vs 分块」对比时 Wiki 天然少看到 2/3 资料，结论不可用。
 
     `stats` 必须透传：Wiki 的成本大头是章节向量化（每页 3~8 节），
-    不传就等于把整理成本记成 0。可选回调只报告阶段和已处理/总数；
-    页面处理包含有原因的跳过，成功页面在章节提交后才算处理完成。
+    不传就等于把整理成本记成 0。`on_progress` 报告阶段及已处理/总数，
+    包含有原因的跳过，成功页面在完整发布后才算处理完成。`check_cancel`
+    在分片、页面准备和发布的安全检查点调用；异常原样传给调用方处理。
     """
     stats = stats or llm.CallStats()
     result = WikiBuildResult(notes=[])
     kb_id = kb.id
+    if check_cancel:
+        check_cancel()
     chunks = _chunks_for_kb(db, kb_id)
     if not chunks:
         raise RuntimeError("知识库还没有已入库的分块，无法生成 Wiki")
@@ -573,6 +582,8 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
         topics.extend({**topic, "_map_sources": map_sources} for topic in mapped)
         if on_progress:
             on_progress("topics", shard_no, len(shards))
+        if check_cancel:
+            check_cancel()
 
     # 2. Reduce：合并各片归纳出的相近主题
     topics = _merge_topics(topics)
@@ -595,6 +606,17 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
         topics = [topics[i] for i in sorted(keep)]
 
     taken: set[str] = set()
+    pending_review: list[str] = []
+
+    def mark_pending_review() -> None:
+        # 由调用方持短写锁。重新读取以免覆盖生成期间的人工解锁或修改。
+        for pending_slug in pending_review:
+            pending = _page_by_slug(db, kb.id, pending_slug, for_update=True)
+            if pending and pending.human_locked:
+                pending.status = models.WikiPageStatus.needs_review.value
+                db.add(pending)
+        pending_review.clear()
+
     if on_progress:
         on_progress("pages", 0, len(topics))
     for order, topic in enumerate(topics):
@@ -617,6 +639,8 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
                 f"《{title}》未能定位到有效原文片段（编号 {ids[:5]}），已跳过")
             if on_progress:
                 on_progress("pages", order + 1, len(topics))
+            if check_cancel:
+                check_cancel()
             continue
 
         # 去重只针对「本次生成内的同名主题」，**刻意避开已存在的页面 slug**：
@@ -630,18 +654,26 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
                 n += 1
             slug = f"{slug}-{n}"
         taken.add(slug)
-        page = db.execute(
-            select(models.WikiPage).where(models.WikiPage.kb_id == kb.id, models.WikiPage.slug == slug)
-        ).scalar_one_or_none()
-
+        page = _page_by_slug(db, kb.id, slug)
         if page and page.human_locked and not force:
-            page.status = models.WikiPageStatus.needs_review.value
-            db.add(page)
-            result.pages_skipped += 1
-            result.notes.append(f"《{title}》已人工校对，本次生成进入待审，不覆盖")
-            if on_progress:
-                on_progress("pages", order + 1, len(topics))
-            continue
+            # 先短锁复查；待审变更延后到下一个页面发布事务，避免进度回调
+            # 或模型调用内部的提交提前落库，也不在网络调用期间持有写锁。
+            _lock_wiki_write(db, kb.id)
+            if check_cancel:
+                check_cancel()
+            page = _page_by_slug(db, kb.id, slug, for_update=True)
+            locked = bool(page and page.human_locked)
+            if locked:
+                pending_review.append(slug)
+            db.commit()
+            if locked:
+                result.pages_skipped += 1
+                result.notes.append(f"《{title}》已人工校对，本次生成进入待审，不覆盖")
+                if on_progress:
+                    on_progress("pages", order + 1, len(topics))
+                if check_cancel:
+                    check_cancel()
+                continue
 
         # A Session may expire Chunk objects between Map and page generation.
         # Do not let a refreshed object silently become a different page input.
@@ -665,7 +697,10 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
             if stats.mode != "offline":
                 stats.mode = "offline"
                 stats.add_note("页面正文使用抽取式拼装")
+        if check_cancel:
+            check_cancel()
 
+        # Prepare the page outside the write lock, including section embedding.
         try:
             links = _extract_evidence(content, [chunks[i - 1] for i in ids], chunks)
         except ObjectDeletedError as exc:
@@ -676,35 +711,44 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
             source = sources_by_object.get(id(c))
             if source is None or _snapshot_source(c) != source:
                 raise RuntimeError("Wiki 生成期间来源已删除或更新，请重新生成")
-            # Keep validating any evidence IDs the page model produced outside
-            # this topic too, as the existing publishing check already did.
+            # A page model can cite a chunk outside its topic; keep validating it.
             source_snapshots[source.id] = source
 
-        # Serialize with document deletion before changing this page. A caller
-        # may catch a source error and commit the Session without rolling back.
-        locked = db.execute(
-            update(models.KnowledgeBase).where(models.KnowledgeBase.id == kb_id)
-            .values(status=models.KnowledgeBase.status)
-            .execution_options(synchronize_session=False)
-        )
-        if not locked.rowcount:
-            raise RuntimeError("Wiki 生成期间知识库已删除，无法生成")
+        sections = _prepare_sections(db, kb, title, content, stats=stats)
+        if not sections:
+            result.pages_skipped += 1
+            result.notes.append(f"《{title}》没有可索引的正文，已跳过")
+            if on_progress:
+                on_progress("pages", order + 1, len(topics))
+            if check_cancel:
+                check_cancel()
+            continue
 
-        if page is not None:
-            # The write lock is held: re-read in case a human edited and locked
-            # the page while the model was generating its replacement.
-            db.refresh(page)
-            if page.human_locked and not force:
-                page.status = models.WikiPageStatus.needs_review.value
-                db.commit()
-                result.pages_skipped += 1
-                result.notes.append(f"《{title}》已人工校对，本次生成进入待审，不覆盖")
-                if on_progress:
-                    on_progress("pages", order + 1, len(topics))
-                continue
+        # Hold the same write lock as document deletion through publication.
+        _lock_wiki_write(db, kb_id)
+        if check_cancel:
+            check_cancel()
+        page = _page_by_slug(db, kb_id, slug, for_update=True)
+        if page and page.human_locked and not force:
+            mark_pending_review()
+            page.status = models.WikiPageStatus.needs_review.value
+            db.add(page)
+            if on_publish:
+                on_publish()
+            db.commit()
+            result.pages_skipped += 1
+            result.notes.append(f"《{title}》已人工校对，本次生成进入待审，不覆盖")
+            if on_progress:
+                on_progress("pages", order + 1, len(topics))
+            if check_cancel:
+                check_cancel()
+            continue
 
+        # A caller may catch this error and commit; check before changing pages.
         _validate_sources(db, source_snapshots)
-        if page is None:
+        mark_pending_review()
+        created = page is None
+        if created:
             page = models.WikiPage(
                 kb_id=kb.id, slug=slug, title=title, summary=summary,
                 status=models.WikiPageStatus.draft.value, order_index=order,
@@ -712,15 +756,12 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
             )
             db.add(page)
             db.flush()
-            result.pages_created += 1
         else:
             page.title = title
             page.summary = summary
             page.order_index = order
-            page.status = models.WikiPageStatus.published.value
             page.updated_at = models.utcnow()
             db.add(page)
-            result.pages_updated += 1
 
         last_no = db.execute(
             select(models.WikiPageVersion.version_no)
@@ -733,27 +774,42 @@ def build_wiki(db: Session, kb: models.KnowledgeBase, *, force: bool = False,
         )
         db.add(version)
         db.flush()
-        page.current_version_id = version.id
-        page.status = models.WikiPageStatus.published.value
-        db.add(page)
-
         for link in links:
             c = link["chunk"]
             db.add(models.WikiEvidence(
                 kb_id=kb.id, page_version_id=version.id, chunk_id=c.id, doc_id=c.doc_id,
                 doc_version_id=c.doc_version_id, quote=link["quote"], locator=link["locator"],
             ))
-            result.evidence_links += 1
-
-        # Publish the version and its source links together. The potentially slow
-        # section embedding still happens after this short write transaction.
+        for section in sections:
+            db.add(models.WikiSection(kb_id=kb.id, page_id=page.id,
+                                      page_version_id=version.id, **section))
+        page.current_version_id = version.id
+        page.status = models.WikiPageStatus.published.value
+        db.add(page)
+        if on_publish:
+            on_publish()
         db.commit()
 
-        result.sections += _index_sections(db, kb, page, version, stats=stats)
-        # 本章节写完立刻提交，别把写锁带到下一页的 LLM 调用里
-        db.commit()
+        if created:
+            result.pages_created += 1
+        else:
+            result.pages_updated += 1
+        result.evidence_links += len(links)
+        result.sections += len(sections)
         if on_progress:
             on_progress("pages", order + 1, len(topics))
+        if check_cancel:
+            check_cancel()
+
+    if pending_review:
+        # 没有后续页面发布时也要落下待审状态；检查后再在短锁内复查。
+        _lock_wiki_write(db, kb.id)
+        if check_cancel:
+            check_cancel()
+        mark_pending_review()
+        if on_publish:
+            on_publish()
+        db.commit()
 
     # 2. 页面间关联：同主题共享证据的页面互为关联
     db.flush()

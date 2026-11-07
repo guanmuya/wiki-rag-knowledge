@@ -60,13 +60,13 @@ export default function SettingsTab({
     try {
       const [recent, active] = await Promise.all([
         taskApi.list({ kb_id: kb.id }),
-        taskApi.list({ kb_id: kb.id, status: 'queued,running' }),
+        taskApi.list({ kb_id: kb.id, status: 'queued,running', include_running: true }),
       ])
       if (requestId !== taskRequestRef.current) return
       const running = active.items ?? []
       const activeIds = new Set(running.map((task) => task.id))
       setActiveTasks(running)
-      // 重试复用旧任务 ID；优先显示所有活动任务，再补足最近记录。
+      // 重试复用旧任务 ID；优先显示活动任务，再补足最近记录。
       setTasks([...running, ...(recent.items ?? []).filter((task) => !activeIds.has(task.id))]
         .slice(0, Math.max(8, running.length)))
     } catch {
@@ -129,6 +129,16 @@ export default function SettingsTab({
     onToast(`任务 #${res.task_id} 已重新排队（第 ${res.retry_count || 1} 次）`, 'success')
     await loadTasks()
     onChanged()
+  }
+
+  const stopWiki = async (task: Task) => {
+    try {
+      await taskApi.stopWiki(task.id, task.run_token)
+      onToast('已发送停止请求', 'info')
+    } finally {
+      await loadTasks()
+      onChanged()
+    }
   }
 
   return (
@@ -303,6 +313,8 @@ export default function SettingsTab({
                 tasks={tasks}
                 onRetry={canManage ? retryTask : undefined}
                 onRetryError={(err) => onToast(errorText(err), 'error')}
+                onStopWiki={canManage ? stopWiki : undefined}
+                onStopWikiError={(err) => onToast(errorText(err), 'error')}
                 emptyText="暂无任务记录"
               />
             </div>

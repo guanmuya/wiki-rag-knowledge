@@ -16,14 +16,156 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.orm import Session
 
-from .. import models, serializers
+from .. import db as db_module, models, serializers
+from ..db import SessionLocal
 from . import cost
 
 log = logging.getLogger("wrk.taskflow")
+
+
+class WikiStopped(Exception):
+    """用户请求停止当前任务的 Wiki 阶段。"""
+
+
+class StaleRun(Exception):
+    """任务已被恢复或重试，旧执行不得再提交结果。"""
+
+
+def start_wiki(db: Session, task: models.Task, run_token: str, *,
+               progress: int | None = None) -> int:
+    """公开 Wiki 阶段，返回开始时的停止代次。"""
+    values = {"wiki_active": True, "stage": "生成 Wiki 页面", "wiki_started_at": models.utcnow()}
+    if progress is not None:
+        values["progress"] = progress
+    changed = db.execute(update(models.Task).where(
+        models.Task.id == task.id, models.Task.status == models.TaskStatus.running.value,
+        models.Task.run_token == run_token,
+    ).values(**values))
+    if changed.rowcount != 1:
+        raise StaleRun()
+    db.commit()
+    return db.execute(select(models.KnowledgeBase.wiki_stop_epoch).where(
+        models.KnowledgeBase.id == task.kb_id
+    )).scalar_one()
+
+
+def check_wiki_stop(task_id: int, run_token: str, worker_db: Session) -> None:
+    """使用同一数据库的独立短会话检查停止信号及执行代次。"""
+    bind = worker_db.get_bind()
+    # 首选独立进度池，池满时尝试交互池；自定义数据库则直接使用其自身的连接池。
+    # 内存 SQLite 的同名 URL 可能对应完全不同的数据库，不能只比较 URL。
+    memory = bind.dialect.name == "sqlite" and bind.url.database in (None, "", ":memory:")
+    candidates = []
+    for factory in (db_module.ProgressSessionLocal, db_module.SessionLocal, SessionLocal):
+        candidate_bind = factory.kw.get("bind")
+        if factory in candidates or candidate_bind is None:
+            continue
+        if candidate_bind is bind or (not memory and candidate_bind.url == bind.url):
+            candidates.append(factory)
+    candidates.append(lambda: Session(bind=bind, autoflush=False, expire_on_commit=False))
+    statement = select(
+        models.Task.status, models.Task.run_token, models.Task.wiki_active,
+        models.Task.wiki_stop_requested,
+    ).where(models.Task.id == task_id)
+    for index, factory in enumerate(candidates):
+        try:
+            with factory() as db:
+                row = db.execute(statement).one_or_none()
+            break
+        except SQLAlchemyTimeoutError:
+            if index == len(candidates) - 1:
+                raise
+    if not row or row.status != models.TaskStatus.running.value or row.run_token != run_token or not row.wiki_active:
+        raise StaleRun()
+    if row.wiki_stop_requested:
+        raise WikiStopped()
+
+
+def finish_wiki(db: Session, task: models.Task, run_token: str, epoch: int, *,
+                complete: bool) -> None:
+    """与停止请求原子竞争；旧生成不能清除较新的停止标记。"""
+    changed = db.execute(
+        update(models.Task).where(
+            models.Task.id == task.id,
+            models.Task.status == models.TaskStatus.running.value,
+            models.Task.run_token == run_token,
+            models.Task.wiki_active.is_(True),
+            models.Task.wiki_stop_requested.is_(False),
+        ).values(wiki_active=False, stage="Wiki 生成完成")
+    )
+    if changed.rowcount != 1:
+        db.rollback()
+        check_wiki_stop(task.id, run_token, db)
+        raise StaleRun()
+    if complete:
+        db.execute(update(models.KnowledgeBase).where(
+            models.KnowledgeBase.id == task.kb_id,
+            models.KnowledgeBase.wiki_stop_epoch == epoch,
+        ).values(wiki_incomplete=False, wiki_ready_started_at=task.wiki_started_at)
+          .execution_options(synchronize_session=False))
+    kb = db.get(models.KnowledgeBase, task.kb_id)
+    if kb:
+        db.refresh(kb, attribute_names=["wiki_incomplete"])
+        if kb.wiki_incomplete:
+            kb.status = models.KbStatus.partial.value
+            kb.status_detail = "Wiki 尚未完整生成，正在使用分块索引"
+            db.add(kb)
+
+
+def record_wiki_publication(db: Session, task_id: int, run_token: str) -> None:
+    """与页面同一事务记录最后一次发布，用于判断恢复队列是否仍影响索引。"""
+    changed = db.execute(update(models.Task).where(
+        models.Task.id == task_id,
+        models.Task.status == models.TaskStatus.running.value,
+        models.Task.run_token == run_token,
+        models.Task.wiki_active.is_(True),
+        models.Task.wiki_stop_requested.is_(False),
+    ).values(wiki_last_changed_at=models.utcnow()))
+    if changed.rowcount != 1:
+        check_wiki_stop(task_id, run_token, db)
+        raise StaleRun()
+
+
+def sync_wiki_stopped(db: Session, task: models.Task) -> None:
+    """保留文档索引，并根据当前 Wiki 完整状态同步知识库。"""
+    task.wiki_active = False
+    if not task.kb_id:
+        return
+    kb = db.get(models.KnowledgeBase, task.kb_id)
+    if not kb:
+        return
+    db.flush()
+    # 此时调用方已取得任务写锁；重读知识库以免旧执行覆盖较新重建的状态。
+    db.refresh(kb)
+    other_active = db.execute(
+        select(models.Task.id).where(
+            models.Task.kb_id == task.kb_id, models.Task.id != task.id,
+            models.Task.status.in_([models.TaskStatus.queued.value, models.TaskStatus.running.value]),
+        ).limit(1)
+    ).first()
+    if other_active:
+        return
+    if not kb.wiki_incomplete:
+        # 另一轮完整重建可能已经覆盖此次停止，或排队任务尚未改变索引。
+        from . import ingest
+        ingest._refresh_kb_status(db, kb, commit=False)
+        return
+    chunks = db.execute(select(func.count(models.Chunk.id)).where(
+        models.Chunk.kb_id == kb.id
+    )).scalar() or 0
+    if chunks:
+        kb.status = models.KbStatus.partial.value
+        kb.status_detail = "Wiki 生成已停止，已有分块索引仍可使用"
+    else:
+        kb.status = models.KbStatus.empty.value
+        kb.status_detail = "Wiki 生成已停止"
+    db.add(kb)
 
 
 # ------------------------------------------------------------------ payload
@@ -73,6 +215,11 @@ def requeue(db: Session, task: models.Task, *, reason: str = "已重新排队") 
     task.status = models.TaskStatus.queued.value
     task.stage = "排队中"
     task.progress = 0
+    task.wiki_active = False
+    task.wiki_stop_requested = False
+    task.wiki_stop_requested_at = None
+    # 重试复用任务 ID；新排队代次也必须与旧请求区分。
+    task.run_token = uuid.uuid4().hex
     task.error = ""
     cost.preserve_legacy_before_retry(db, task)
     task.result = "{}"

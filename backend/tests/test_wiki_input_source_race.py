@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 
 import pytest
 from fastapi import FastAPI
@@ -704,3 +704,162 @@ def test_source_validation_error_preserves_pending_kb_status(race_env, tmp_path,
     with sessions() as observer:
         assert observer.get(models.KnowledgeBase, case["kb"]).status == models.KbStatus.partial.value
     _assert_rejected_and_old_page_preserved(race_env, case, error)
+
+
+def _page_snapshot(sessions, page_id):
+    """Capture the page and all its versions, evidence and indexed sections."""
+    with sessions() as db:
+        versions = select(models.WikiPageVersion.id).where(models.WikiPageVersion.page_id == page_id)
+        return (
+            db.execute(select(models.WikiPage.__table__).where(
+                models.WikiPage.id == page_id)).one(),
+            db.execute(select(models.WikiPageVersion.__table__).where(
+                models.WikiPageVersion.page_id == page_id).order_by(models.WikiPageVersion.id)).all(),
+            db.execute(select(models.WikiEvidence.__table__).where(
+                models.WikiEvidence.page_version_id.in_(versions)).order_by(models.WikiEvidence.id)).all(),
+            db.execute(select(models.WikiSection.__table__).where(
+                models.WikiSection.page_id == page_id).order_by(models.WikiSection.id)).all(),
+        )
+
+
+def _add_old_section(db, case):
+    db.add(models.WikiSection(
+        kb_id=case["kb"], page_id=case["page"], page_version_id=case["old_version"],
+        ordinal=0, heading_path="旧章节", text=OLD_CONTENT, keywords="旧页面",
+    ))
+
+
+def test_unreported_source_deleted_during_section_embedding(race_env, tmp_path, monkeypatch):
+    """An input deleted during section preparation is checked under the publish lock."""
+    sessions = race_env[0]
+    case = _prepare(race_env, tmp_path, count=2, secret_no=1, old_source_no=2)
+    with sessions() as db:
+        _add_old_section(db, case)
+        db.commit()
+    before = _page_snapshot(sessions, case["page"])
+    delete, state = _delete_during_page(race_env, case, 1)
+    calls = _model(monkeypatch, shards=[([1, 2], [2])], secret_no=1, on_page=lambda db: None)
+
+    def delete_during_embed(db, texts, **kwargs):
+        assert calls[-1] == "page" and SECRET in " ".join(texts)
+        assert not state.get("deleted")
+        delete(db)
+        return []
+
+    monkeypatch.setattr(llm, "embed", delete_during_embed)
+    real_validate = wiki._validate_sources
+    validation = []
+
+    def validate_with_lock(db, snapshots):
+        assert state.get("deleted")
+        assert set(snapshots) == {source["chunk"] for source in case["sources"]}
+        assert db.connection().connection.driver_connection.in_transaction
+        # An independent connection cannot write while this validation runs.
+        # This tests the real SQLite lock, not just the order of helper calls.
+        database = sessions.kw["bind"].url.database
+        with closing(sqlite3.connect(database, timeout=0)) as other:
+            with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+                other.execute("UPDATE knowledge_bases SET status = status WHERE id = ?", (case["kb"],))
+        validation.append(True)
+        return real_validate(db, snapshots)
+
+    monkeypatch.setattr(wiki, "_validate_sources", validate_with_lock)
+    _, error = _build(sessions, case)
+
+    assert state.get("deleted") and calls[-1] == "page" and validation == [True]
+    assert _page_snapshot(sessions, case["page"]) == before
+    _assert_rejected_and_old_page_preserved(race_env, case, error)
+
+
+def test_pending_review_not_committed_after_source_deleted_during_section_embedding(
+    race_env, tmp_path, monkeypatch,
+):
+    """A caller committing a caught error must not persist deferred review changes."""
+    sessions = race_env[0]
+    case = _prepare(race_env, tmp_path, count=2, secret_no=1, old_source_no=2)
+    locked_title = "人工审核的库存指南"
+    locked_content = "## 人工审核\n\n这些内容依据仍然存在的第二份资料，必须保持原状。"
+    source = case["sources"][1]
+    with sessions() as db:
+        _add_old_section(db, case)
+        page = models.WikiPage(
+            kb_id=case["kb"], slug=chunking.slugify(locked_title), title=locked_title,
+            summary="人工摘要", status=models.WikiPageStatus.published.value, human_locked=True,
+        )
+        db.add(page)
+        db.flush()
+        version = models.WikiPageVersion(
+            page_id=page.id, version_no=1, content_md=locked_content,
+            summary="人工摘要", origin="human",
+        )
+        db.add(version)
+        db.flush()
+        page.current_version_id = version.id
+        db.add_all([
+            models.WikiEvidence(
+                kb_id=case["kb"], page_version_id=version.id, chunk_id=source["chunk"],
+                doc_id=source["doc"], doc_version_id=source["version"], quote="人工证据", locator="旧位置",
+            ),
+            models.WikiSection(
+                kb_id=case["kb"], page_id=page.id, page_version_id=version.id,
+                ordinal=0, heading_path="人工章节", text=locked_content, keywords="人工审核",
+            ),
+        ])
+        db.commit()
+        locked_id, locked_slug = page.id, page.slug
+
+    locked_before = _page_snapshot(sessions, locked_id)
+    generated_before = _page_snapshot(sessions, case["page"])
+    assert locked_before[0].status == models.WikiPageStatus.published.value
+    assert locked_before[0].human_locked is True
+    delete, state = _delete_during_page(race_env, case, 1)
+    calls = _model(monkeypatch, shards=[([1, 2], [2])], secret_no=1, on_page=lambda db: None)
+    real_chat = llm.chat
+
+    def map_locked_page_first(db, messages, **kwargs):
+        result = real_chat(db, messages, **kwargs)
+        if kwargs.get("json_mode"):
+            topics = json.loads(result)
+            topics["topics"].insert(0, {
+                "title": locked_title, "summary": "人工整理的资料", "chunk_ids": [2],
+            })
+            return json.dumps(topics)
+        return result
+
+    monkeypatch.setattr(llm, "chat", map_locked_page_first)
+    progress = []
+
+    def on_progress(stage, done, total):
+        progress.append((stage, done, total))
+        if (stage, done, total) == ("pages", 1, 2):
+            assert _page_snapshot(sessions, locked_id) == locked_before
+
+    def delete_during_embed(db, texts, **kwargs):
+        assert ("pages", 1, 2) in progress, "the locked topic must be processed first"
+        assert calls[-1] == "page" and SECRET in " ".join(texts)
+        assert _page_snapshot(sessions, locked_id) == locked_before
+        delete(db)
+        return []
+
+    monkeypatch.setattr(llm, "embed", delete_during_embed)
+    with sessions() as db:
+        try:
+            wiki.build_wiki(db, db.get(models.KnowledgeBase, case["kb"]), on_progress=on_progress)
+        except RuntimeError as exc:
+            error = exc
+        else:
+            pytest.fail("generation must detect the deleted Map input")
+        # Model a reindex caller which catches the error and commits anyway.
+        # A rollback here would hide a premature pending_review update.
+        db.commit()
+
+    assert state.get("deleted") and calls[-1] == "page"
+    assert ("pages", 1, 2) in progress and ("pages", 2, 2) not in progress
+    assert _page_snapshot(sessions, locked_id) == locked_before
+    assert _page_snapshot(sessions, case["page"]) == generated_before
+    _assert_rejected_and_old_page_preserved(race_env, case, error)
+    url = f"/api/kbs/{case['kb']}/wiki/pages/{locked_slug}"
+    response = race_env[1].get(url, headers=case["reader"])
+    assert response.status_code == 200, response.text
+    assert response.json()["version"]["content_md"] == locked_content
+    assert SECRET not in response.text

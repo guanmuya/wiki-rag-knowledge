@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 from contextlib import contextmanager
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, event, select, update
@@ -77,6 +78,16 @@ def _prepare_ingest(sessions, tmp_path):
         db.add(task)
         db.commit()
         return kb.id, doc.id, version.id, task.id
+
+
+def _claim_for_direct_ingest(db, task_id):
+    """Model a worker claim before directly invoking the ingest function."""
+    task = db.get(models.Task, task_id)
+    assert task.status == models.TaskStatus.queued.value
+    task.status = models.TaskStatus.running.value
+    task.run_token = uuid4().hex
+    db.commit()
+    return task
 
 
 def _watch_new_chunks(db, state):
@@ -172,7 +183,8 @@ def test_ingest_publishes_wiki_for_equivalent_aware_and_naive_timestamps(
     if execution == "ingest":
         with sessions() as db:
             _watch_new_chunks(db, state)
-            result = ingest.ingest_version(db, db.get(models.Task, task_id), stats=llm.CallStats())
+            task = _claim_for_direct_ingest(db, task_id)
+            result = ingest.ingest_version(db, task, stats=llm.CallStats())
             db.commit()
     else:
         @contextmanager
@@ -250,7 +262,8 @@ def test_ingest_rejects_a_real_timestamp_change_during_generation(sessions, tmp_
     calls = _stub_chat(monkeypatch, on_page=change_timestamp)
     with sessions() as db:
         _watch_new_chunks(db, state)
-        result = ingest.ingest_version(db, db.get(models.Task, task_id), stats=llm.CallStats())
+        task = _claim_for_direct_ingest(db, task_id)
+        result = ingest.ingest_version(db, task, stats=llm.CallStats())
         db.commit()
 
     assert calls == ["map", "page"] and state.get("changed")

@@ -181,6 +181,7 @@ def test_current_wiki_section_count_excludes_old_versions(app_client, admin_head
                                       ordinal=0, heading_path="当前章节", text="当前正文"))
     db_session.commit()
     detail = app_client.get(f"/api/kbs/{kb_id}", headers=admin_headers).json()
+    assert detail["index"]["wiki_units"] == 1
     assert detail["index"]["wiki_current_units"] == 1
 
 
