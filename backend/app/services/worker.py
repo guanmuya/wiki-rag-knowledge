@@ -91,6 +91,26 @@ def _claim_locked(db, worker_id: str) -> models.Task | None:
     return db.get(models.Task, task.id)
 
 
+def _refresh_kb_after_rebuild(db, task: models.Task, result: dict) -> None:
+    """重建成功后重算知识库状态（不提前提交）。
+
+    换模型 / 手动重建排队时把 kb.status 置为「索引中」，任务成功却只改任务行，
+    用户会一直看到「任务成功 + 知识库索引中」。状态必须和 task.result 在同一次
+    提交里落库，避免「库已就绪但任务还没标成功」的半截状态。
+    """
+    if not task.kb_id:
+        return
+    kb = db.get(models.KnowledgeBase, task.kb_id)
+    if kb is None:
+        return
+    ingest._refresh_kb_status(db, kb, commit=False)
+    if result.get("wiki_error"):
+        # Wiki 重建失败不影响分块索引可用，但不能把状态说成完全就绪。
+        kb.status = models.KbStatus.partial.value
+        kb.status_detail = f"分块索引已重建，Wiki 生成失败：{result['wiki_error']}"
+    db.add(kb)
+
+
 def run_once(worker_id: str = "inline") -> bool:
     """执行一个任务；返回是否真的处理了任务（供测试同步驱动）。"""
     # role="worker"：busy_timeout 提到 30s，且进度写撞锁不会让任务失败
@@ -117,8 +137,10 @@ def run_once(worker_id: str = "inline") -> bool:
                 ingest._refresh_kb_status(db, kb, commit=False)
             elif task.kind == models.TaskKind.reindex_kb.value:
                 result = ingest.reindex_kb(db, task, stats=stats)
+                _refresh_kb_after_rebuild(db, task, result)
             elif task.kind == models.TaskKind.embedding_rebuild.value:
                 result = ingest.reindex_kb(db, task, stats=stats)
+                _refresh_kb_after_rebuild(db, task, result)
             else:
                 raise RuntimeError(f"未知任务类型：{task.kind}")
 
@@ -240,6 +262,44 @@ def recover_interrupted(max_attempts: int = MAX_RESUME_ATTEMPTS) -> int:
         db.commit()
         log.info("启动恢复：%d 个被中断的任务已重新排队", len(tasks))
         return len(tasks)
+
+
+def reconcile_kb_statuses() -> int:
+    """启动时修复「任务已结束、知识库仍显示索引中」的陈旧状态。
+
+    旧版本在 embedding_rebuild / reindex_kb 成功后不刷新知识库，升级前卡住的库
+    不会自己恢复。没有排队/执行中任务的 indexing 库按实际文档/分块重算；
+    有活动任务的库跳过——那是真的在重建，不能提前标成就绪。
+    """
+    with session_scope(role="worker") as db:
+        return _reconcile_kb_statuses(db)
+
+
+def _reconcile_kb_statuses(db) -> int:
+    """`reconcile_kb_statuses` 的实现；db 参数让测试能用独立会话验证。"""
+    active_kb_ids = {
+        row[0] for row in db.execute(
+            select(models.Task.kb_id).where(
+                models.Task.status.in_([models.TaskStatus.queued.value,
+                                        models.TaskStatus.running.value]),
+                models.Task.kb_id.is_not(None),
+            )
+        ).all()
+    }
+    stale = db.execute(
+        select(models.KnowledgeBase).where(
+            models.KnowledgeBase.status == models.KbStatus.indexing.value)
+    ).scalars().all()
+    fixed = 0
+    for kb in stale:
+        if kb.id in active_kb_ids:
+            continue
+        ingest._refresh_kb_status(db, kb, commit=False)
+        fixed += 1
+    if fixed:
+        db.commit()
+        log.info("启动校正：%d 个知识库的陈旧「索引中」状态已按实际索引重算", fixed)
+    return fixed
 
 
 def start() -> None:

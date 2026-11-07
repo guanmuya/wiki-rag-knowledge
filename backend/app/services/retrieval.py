@@ -15,8 +15,9 @@
 
 规模约束（实测，单库 1000 文档 ≈ 5000 块 / 213 万字符）：
 朴素实现要把全库向量逐条 unpack 成 list、再用纯 Python 循环算余弦，
-单次查询仅这一项就占 0.58 s（4800 条 × 256 维）。改为 numpy 矩阵一次算完，
+单次查询仅这一项就占 0.58 s（4800 条 × 256 维）。numpy 就绪时用矩阵一次算完，
 结果**完全等价**（同一余弦公式、同一 float32 输入），只是不再有 Python 层循环。
+numpy 未就绪时（见 `_loaded_numpy()` 的说明）仍走纯 Python，绝不懒加载。
 `cosine()` 保留原样：它是公开函数、有单测覆盖，且单对向量场景下更直观。
 
 剩余耗时主要是 SQLite 把全库文本取回 Python（约 0.59 s / 2.1 MB），
@@ -28,6 +29,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import sys
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -212,6 +214,21 @@ def cosine(a: list[float], b: list[float]) -> float:
 _MATMUL_MIN_ROWS = 64
 
 
+def _loaded_numpy():
+    """返回已经**完全**导入的 numpy；没有就返回 None，绝不触发首次导入。
+
+    打包版首次 import numpy 要拿 Windows loader lock，杀软扫描 `_MEI` 目录时
+    实测能卡几分钟（现场日志：openpyxl→numpy 479s）。问答请求若在这里懒加载，
+    前端会永远停在「正在检索」。预热线程会在后台加载；就绪前走纯 Python
+    `cosine()`（几百个分块约 2s），卡死不可接受。半初始化的模块（其他线程正在
+    导入，`sys.modules` 里已有对象但缺 `asarray`）同样返回 None。
+    """
+    np = sys.modules.get("numpy")
+    if np is None or not hasattr(np, "asarray") or not hasattr(np, "ndarray"):
+        return None
+    return np
+
+
 def _batch_cosine(pairs: list[tuple[int, list[float]]],
                   qvec: list[float]) -> list[tuple[int, float]] | None:
     """批量余弦，返回 [(id, sim)]，只保留 sim >= 0 的项。
@@ -222,14 +239,14 @@ def _batch_cosine(pairs: list[tuple[int, list[float]]],
     - 维度不一致的行按 `cosine()` 的约定当作 0.0 丢弃（返回 None 让调用方回退
       逐条路径，保证异常数据下的行为与原来完全一致）。
 
-    返回 None 表示「这批数据不适合矩阵化」（维度不一致 / numpy 不可用），
-    调用方必须回退到逐条 `cosine()`。
+    返回 None 表示「这批数据不适合矩阵化」（维度不一致 / numpy 尚未就绪），
+    调用方必须回退到逐条 `cosine()`。numpy 就绪判断见 `_loaded_numpy()`：
+    这里**不能**用 `import numpy`，否则打包版首次导入会把问答请求卡死。
     """
     if not qvec:
         return None
-    try:
-        import numpy as np
-    except ImportError:                      # pragma: no cover - numpy 是硬依赖
+    np = _loaded_numpy()
+    if np is None:
         return None
 
     dims = {len(v) for _, v in pairs if v}
@@ -247,17 +264,21 @@ def _batch_cosine(pairs: list[tuple[int, list[float]]],
     if not rows:
         return []
 
-    mat = np.asarray(rows, dtype="float64")
-    q = np.asarray(qvec, dtype="float64")
-    dots = mat @ q
-    row_norms = np.sqrt((mat * mat).sum(axis=1))
-    q_norm = math.sqrt(float((q * q).sum()))
-    if q_norm <= 0:
-        return []
-    denom = row_norms * q_norm
-    # 模长为 0 的行（全零向量）按 cosine() 的约定算 0，并避免除零告警
-    with np.errstate(divide="ignore", invalid="ignore"):
-        sims = np.where(denom > 0, dots / denom, 0.0)
+    try:
+        mat = np.asarray(rows, dtype="float64")
+        q = np.asarray(qvec, dtype="float64")
+        dots = mat @ q
+        row_norms = np.sqrt((mat * mat).sum(axis=1))
+        q_norm = math.sqrt(float((q * q).sum()))
+        if q_norm <= 0:
+            return []
+        denom = row_norms * q_norm
+        # 模长为 0 的行（全零向量）按 cosine() 的约定算 0，并避免除零告警
+        with np.errstate(divide="ignore", invalid="ignore"):
+            sims = np.where(denom > 0, dots / denom, 0.0)
+    except (TypeError, ValueError, AttributeError):
+        # 半个 numpy（其他线程正在导入）或异常数据：回退逐条路径，别把请求打成 500
+        return None
     return [(rid, float(s)) for rid, s in zip(ids, sims)]
 
 

@@ -6,7 +6,7 @@
 
 - 应用名 `企业知识库文档整理与问答系统`，版本 `1.0.14`（`backend/app/main.py:34`；`frontend/package.json` 的 `version` 同为 `1.0.14`）
 - 安装包产品名 `企业知识库`，appId `com.wikiraq.knowledge`（`frontend/electron-builder.yml`）
-- 后端测试基线 **306 passed, 1 skipped**（`backend/tests/`，29 个文件；含个人 Agent 核心/插件、检索链路与 SSE 回归）
+- 后端测试基线 **313 passed, 1 skipped**（`backend/tests/`，30 个文件；含个人 Agent 核心/插件、检索链路与 SSE 回归）
 
 ---
 
