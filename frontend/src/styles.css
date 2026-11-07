@@ -5,12 +5,17 @@
    ========================================================================= */
 
 :root {
-  /* 画布与表面（淡蓝灰底，不用纯灰） */
-  --c-bg: #f4f7fb;
+  /* 画布：纯白底 + 22px 点阵，替代原先整片淡蓝灰的空白留白。
+     用一条变量统一 body / 应用外壳 / 启动页，避免三处各写一遍。 */
+  --c-bg: #ffffff;
   --c-bg-elevated: #ffffff;
   --c-surface: #ffffff;
   --c-surface-alt: #f8fafc;
   --c-surface-sunken: #edf2f8;
+
+  --c-dot: #d2ddec;
+  --canvas-bg: radial-gradient(circle, var(--c-dot) 1px, transparent 1.2px) 0 0 / 22px 22px,
+    var(--c-bg);
 
   /* 描边 */
   --c-border: #dce5ef;
@@ -70,7 +75,7 @@ html, body, #root { height: 100%; }
 
 body {
   margin: 0;
-  background: var(--c-bg);
+  background: var(--canvas-bg);
   color: var(--c-text);
   font-family: var(--font-sans);
   font-size: 14px;
@@ -155,7 +160,7 @@ code {
 .app-shell {
   display: flex;
   min-height: 100vh;
-  background: var(--c-bg);
+  background: var(--canvas-bg);
 }
 
 .sidebar {
@@ -310,6 +315,11 @@ code {
 
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
+/* 智能问答 / 个人 Agent 是整屏布局：main 必须有确定高度，content 的 flex:1 与
+   chat-shell 的 height:100% 才能把消息区约束在视口内。否则整页随会话一起变高，
+   flex:1 的消息区不会自己滚动，底部输入框会被顶到视口外面。 */
+.main-flush { height: 100vh; height: 100dvh; min-height: 0; }
+
 .topbar {
   height: var(--topbar-h);
   flex: 0 0 var(--topbar-h);
@@ -365,6 +375,11 @@ code {
   max-width: none;
   display: flex;
   flex-direction: column;
+  /* 问答 / Agent 是整屏布局：内容区高度钉在视口内，由消息区自己滚动。
+     否则长会话会把整页撑高，左侧会话列表随页面一起滚走，看起来「停在上面」。 */
+  flex: 0 0 auto;
+  height: calc(100vh - var(--topbar-h));
+  height: calc(100dvh - var(--topbar-h));
   overflow: hidden;
 }
 
@@ -781,7 +796,7 @@ code {
   min-height: 100vh;
   display: grid;
   place-items: center;
-  background: var(--c-bg);
+  background: var(--canvas-bg);
   padding: 32px;
 }
 .boot-screen .state-block { padding: 0; }
@@ -1067,8 +1082,11 @@ code {
 .tab.active .tab-badge { background: var(--c-primary-soft); color: var(--c-primary); }
 
 /* 页签放进卡片里时不要自带底色：卡片本身已是白底，子元素的不透明背景会盖住
-   卡片的圆角，四个角看起来就是方的（模型设置页的页签条就是这样）。 */
-.card > .tabs { background: transparent; }
+   卡片的圆角，四个角看起来就是方的（模型设置页的页签条就是这样）。
+   也不要让页签条成为滚动容器：.tabs 的 overflow-x: auto 会连带把 overflow-y 算成
+   auto，激活项 2px 下划线（bottom: -1px）多出的 1px 就会挤出一条竖向滚动条，
+   卡片右端因此看起来像一块带滚轮的方块。卡片里的页签不需要横向滚动。 */
+.card > .tabs { background: transparent; overflow: visible; }
 
 /* 卡片 / 表格视图切换：页头里的分段控件。
    不复用 .tabs —— 页签容器带 overflow-x: auto，放在这里会挤出横竖两条滚动条，
@@ -1561,10 +1579,14 @@ code {
 .chat-shell {
   display: grid;
   grid-template-columns: 264px minmax(0, 1fr);
-  height: 100%;
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1;
   min-height: 0;
   background: var(--c-surface);
 }
+/* 右侧会话区收成圆角描边卡片：原先是一整块贴着窗口与侧栏边缘的方形白板。
+   外层沿用全局点阵画布，让圆角卡片落在点阵白底上，和其余内容页一致。 */
+.chat-shell:not(.agent-shell) { background: var(--canvas-bg); }
 .chat-sidebar {
   display: flex;
   flex-direction: column;
@@ -1696,6 +1718,14 @@ code {
 }
 
 .chat-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.chat-shell:not(.agent-shell) .chat-main {
+  margin: 12px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-xs);
+  overflow: hidden;
+}
 .chat-toolbar {
   display: flex;
   align-items: center;
@@ -2007,33 +2037,89 @@ code {
 }
 .grant-name { font-size: 12.5px; font-weight: 500; flex: 1; min-width: 0; }
 
-.model-group { display: flex; flex-direction: column; gap: 10px; }
+/* 模型按用途分组：每组是一张可折叠的卡片。刻意不用 overflow:hidden 收圆角，
+   否则会破坏 .table thead th 相对视口的 sticky 吸顶（见 9 表格的注释）。 */
+.model-group {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+}
+.model-group + .model-group { margin-top: 16px; }
 .model-group-title {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--c-text-muted);
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--c-hairline);
 }
-/* 分组标题本身是折叠开关：图标 + 用途名 + 数量，点标题收/展该用途的模型表。 */
+.model-group.is-collapsed .model-group-title { border-bottom: none; }
+/* 标题本身是折叠开关：箭头 / 用途图标 / 名称 / 数量按固定列对齐，三组之间不会错位。 */
 .model-group-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 10px;
+  min-width: 0;
   border: none;
   background: none;
   padding: 0;
-  font: inherit;
-  letter-spacing: inherit;
-  text-transform: inherit;
-  color: inherit;
+  color: var(--c-text);
+  text-align: left;
   cursor: pointer;
 }
-.model-group-toggle:hover { color: var(--c-text); }
-.model-group-toggle .icon { color: var(--c-text-muted); }
+.model-group-chevron { display: inline-flex; flex: 0 0 16px; color: var(--c-text-muted); }
+.model-group-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 8px;
+  background: var(--c-surface-sunken);
+  color: var(--c-text-secondary);
+}
+.model-group-name { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.model-group-count {
+  font-size: 12px;
+  color: var(--c-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.model-group-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-surface);
+  color: var(--c-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.model-group-add:hover {
+  background: var(--c-primary-soft);
+  border-color: var(--c-primary-soft-strong);
+  color: var(--c-primary-hover);
+}
+/* 展开时表格是卡片下半部分：去掉自己的外框，只留底部圆角。 */
+.model-group .table-wrap {
+  border: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.model-group .table-wrap .table thead tr:first-child th:first-child,
+.model-group .table-wrap .table thead tr:first-child th:last-child {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+.model-group .table tbody tr:last-child td:first-child { border-bottom-left-radius: calc(var(--radius) - 1px); }
+.model-group .table tbody tr:last-child td:last-child { border-bottom-right-radius: calc(var(--radius) - 1px); }
 /* 三个用途各一张表：固定布局 + 同一套 colgroup 宽度，跨表的列头才会纵向对齐。
    固定布局不再按内容撑列，长模型名/长测试信息靠换行兜住。
    末尾几列按视口宽度取 clamp：窗口从 1440 收到最小 1100 时它们一起收窄，
@@ -2107,6 +2193,9 @@ code {
 /* ---------------------------------------------------------------- 23 响应式 */
 @media (max-width: 1180px) {
   .content { padding: 20px 20px 36px; }
+  /* 问答 / Agent 是整屏布局，不能继承普通页面的内边距，否则底部输入框会被
+     这圈留白顶离视口底边，长会话时看起来仍「没有固定在最底下」。 */
+  .content.content-flush { padding: 0; }
   .wiki-layout { grid-template-columns: 1fr; }
   .wiki-tree {
     position: static;

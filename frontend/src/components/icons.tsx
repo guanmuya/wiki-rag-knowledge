@@ -84,6 +84,27 @@ export function IconMessage(props: IconProps) {
   )
 }
 
+/** 向量模型：叠放的向量层。 */
+export function IconLayers(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M10 2.8 17.2 6.6 10 10.4 2.8 6.6 10 2.8Z" />
+      <path d="m2.8 10.1 7.2 3.8 7.2-3.8" />
+      <path d="m2.8 13.5 7.2 3.8 7.2-3.8" />
+    </Svg>
+  )
+}
+
+/** 视觉模型：图片内容理解。 */
+export function IconEye(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M2.2 10s2.8-4.6 7.8-4.6 7.8 4.6 7.8 4.6-2.8 4.6-7.8 4.6S2.2 10 2.2 10Z" />
+      <circle cx="10" cy="10" r="2.4" />
+    </Svg>
+  )
+}
+
 export function IconChevronRight(props: IconProps) {
   return (
     <Svg {...props}>
