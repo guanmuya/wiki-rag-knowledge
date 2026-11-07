@@ -44,6 +44,26 @@ const PURPOSE_LABEL: Record<ModelPurpose, string> = {
 
 const PURPOSE_ORDER: ModelPurpose[] = ['llm', 'embedding', 'vision']
 
+/** 折叠状态只影响本地展示，存 localStorage，刷新或再次进入页面后保持。 */
+const COLLAPSED_GROUPS_KEY = 'wrk_model_groups_collapsed'
+
+function readCollapsedGroups(): Record<ModelPurpose, boolean> {
+  const collapsed: Record<ModelPurpose, boolean> = { llm: false, embedding: false, vision: false }
+  try {
+    const raw = localStorage.getItem(COLLAPSED_GROUPS_KEY)
+    if (!raw) return collapsed
+    const saved: unknown = JSON.parse(raw)
+    if (Array.isArray(saved)) {
+      for (const purpose of PURPOSE_ORDER) {
+        if (saved.some((item) => item === purpose)) collapsed[purpose] = true
+      }
+    }
+  } catch {
+    /* 隐私模式或本地数据损坏：按全部展开处理 */
+  }
+  return collapsed
+}
+
 /** 供应商协议中文短名，表格里用。 */
 const PROTOCOL_SHORT: Record<ProviderProtocol, string> = {
   openai: 'OpenAI 兼容',
@@ -98,6 +118,8 @@ export default function ModelsPage() {
 
   const [providers, setProviders] = useState<Provider[]>([])
   const [models, setModels] = useState<ModelConfig[]>([])
+  const [collapsedGroups, setCollapsedGroups] =
+    useState<Record<ModelPurpose, boolean>>(readCollapsedGroups)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<unknown>(null)
 
@@ -320,6 +342,22 @@ export default function ModelsPage() {
       setMParams(JSON.stringify(target.params ?? {}, null, 2))
       setMParamsOpen(false)
     }
+  }
+
+  /** 折叠/展开某个用途的模型表；状态写 localStorage，刷新后保持。 */
+  const toggleGroup = (purpose: ModelPurpose) => {
+    setCollapsedGroups((prev) => {
+      const next = { ...prev, [purpose]: !prev[purpose] }
+      try {
+        localStorage.setItem(
+          COLLAPSED_GROUPS_KEY,
+          JSON.stringify(PURPOSE_ORDER.filter((item) => next[item])),
+        )
+      } catch {
+        /* 隐私模式忽略 */
+      }
+      return next
+    })
   }
 
   const submitModel = async () => {
@@ -755,8 +793,21 @@ export default function ModelsPage() {
                   return (
                     <div className="model-group" key={purpose}>
                       <div className="model-group-title">
-                        {PURPOSE_LABEL[purpose]}
-                        <span className="tiny muted">{group.length}</span>
+                        <button
+                          type="button"
+                          className="model-group-toggle"
+                          onClick={() => toggleGroup(purpose)}
+                          aria-expanded={!collapsedGroups[purpose]}
+                          title={collapsedGroups[purpose] ? '展开该用途的模型' : '折叠该用途的模型'}
+                        >
+                          {collapsedGroups[purpose] ? (
+                            <IconChevronRight size={13} />
+                          ) : (
+                            <IconChevronDown size={13} />
+                          )}
+                          <span>{PURPOSE_LABEL[purpose]}</span>
+                          <span className="tiny muted">{group.length}</span>
+                        </button>
                         <button
                           type="button"
                           className="btn-link"
@@ -765,7 +816,7 @@ export default function ModelsPage() {
                           + 添加
                         </button>
                       </div>
-                      <div className="table-wrap">
+                      <div className="table-wrap" hidden={collapsedGroups[purpose]}>
                         {/* 三个用途的表共用同一套列宽（.model-table 固定布局）：
                             维度列在非向量表里显示「—」，这样跨表的列头才对得齐。 */}
                         <table className="table model-table">
