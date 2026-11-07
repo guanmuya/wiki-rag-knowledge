@@ -370,6 +370,63 @@ export interface RouteStats {
   embedding_error?: string
   per_kb_limit?: number
   kb_coverage?: Record<string, number>
+  /** 检索链路：本轮实际使用的查询、检索轮次与重试次数 */
+  queries?: string[]
+  rounds?: number
+  retries?: number
+}
+
+/** 检索链路中的一个思考步骤（意图/路由/检索/评估/重试/生成）。 */
+export interface PipelineStep {
+  id: string
+  title: string
+  status: 'running' | 'done' | 'error'
+  detail?: string
+}
+
+export interface PipelineRound {
+  round: number
+  queries: string[]
+  hits: Record<string, number>
+  evidence_total: number
+  evaluation?: {
+    sufficient: boolean
+    missing_queries: string[]
+    reason: string
+    source?: string
+  }
+}
+
+export interface PipelineInfo {
+  mode?: 'rag' | 'chitchat'
+  intent?: {
+    label: string
+    needs_retrieval: boolean
+    reason: string
+    source?: string
+  } | null
+  route?: {
+    mode: string
+    queries: string[]
+    reason: string
+    source?: string
+  } | null
+  rounds?: PipelineRound[]
+  retries?: number
+  evaluation?: {
+    sufficient: boolean
+    missing_queries: string[]
+    reason: string
+    source?: string
+  } | null
+  steps?: PipelineStep[]
+}
+
+/** 流式问答期间前端维护的思考过程与答案增量。 */
+export interface ThinkingStream {
+  steps: PipelineStep[]
+  answer: string
+  phase: 'thinking' | 'answering' | 'done'
 }
 
 export interface RouteInfo {
@@ -377,6 +434,8 @@ export interface RouteInfo {
   stats: RouteStats
   /** search/preview 与 ask 在库被拒绝时携带 */
   denied?: DeniedKb[]
+  /** 检索链路快照：历史消息靠它还原「当时是怎么检索的」 */
+  pipeline?: PipelineInfo
 }
 
 export interface UsageInfo {
@@ -459,7 +518,17 @@ export interface AskResponse {
   /** 后端扩展：本次被拒绝的知识库（无权限/已删除） */
   denied?: DeniedKb[]
   citations?: { cited: number[]; invalid: number[]; citation_ok: boolean }
+  /** 检索链路快照（与 route.pipeline 相同，便于流式 done 事件直接读取） */
+  pipeline?: PipelineInfo
 }
+
+/** SSE 事件：data: {type: ...}。 */
+export type AskStreamEvent =
+  | { type: 'step'; id: string; title: string; status: PipelineStep['status']; detail?: string }
+  | { type: 'answer'; delta: string }
+  | { type: 'answer_replace'; content: string }
+  | ({ type: 'done' } & AskResponse)
+  | { type: 'error'; message: string; detail?: string }
 
 export interface SearchPreviewResponse {
   evidence: EvidenceItem[]

@@ -6,7 +6,7 @@
 
 - 应用名 `企业知识库文档整理与问答系统`，版本 `1.0.14`（`backend/app/main.py:34`；`frontend/package.json` 的 `version` 同为 `1.0.14`）
 - 安装包产品名 `企业知识库`，appId `com.wikiraq.knowledge`（`frontend/electron-builder.yml`）
-- 后端测试基线 **300 passed, 1 skipped**（`backend/tests/`，28 个文件；含个人 Agent 核心/插件回归）
+- 后端测试基线 **306 passed, 1 skipped**（`backend/tests/`，29 个文件；含个人 Agent 核心/插件、检索链路与 SSE 回归）
 
 ---
 
@@ -20,6 +20,8 @@
 | 双形态索引 | `basic` = 分块；`wiki` = 主题归纳 → 页面 → 章节 | `backend/app/models.py:29`、`backend/app/services/wiki.py` |
 | Wiki Map-Reduce | 全库按字符预算分片归纳，片内用全库全局编号，合并去重 | `backend/app/services/wiki.py:119-308` |
 | 两层融合检索 | 库内**加权 RRF**；跨库**覆盖率 × 名次衰减 × 均衡因子** | `backend/app/services/retrieval.py:264`、`backend/app/services/retrieval.py:583` |
+| 检索链路 | 意图分析 → 查询路由（original/rewrite/multi_query）→ 多查询检索 → 覆盖度评估 → 缺失查询重写（最多 2 次）→ 回答生成 | `backend/app/services/qa_pipeline.py` |
+| 流式思考过程 | SSE 推送意图、查询、检索命中、评估、重试与答案增量；链路快照随消息落库 | `backend/app/routers/chat.py`、`frontend/src/pages/ChatPage.tsx` |
 | 逐库自动路由 | `wiki` 未就绪回退分块并标 `fallback`，不静默降级 | `backend/app/services/retrieval.py:557` |
 | 证据链 | 回答 `[编号]` → `Message.evidence` → `Chunk.locator` / `WikiEvidence` | `backend/app/services/answering.py:415` |
 | 结构化拒答 | 固定前置句 + 本次命中资料 + 可点击建议问题 | `backend/app/services/answering.py:122-177` |
@@ -168,6 +170,7 @@ Wiki-Rag-Knowledge/
 │   │   │   ├── ingest.py         # 入库流水线（解析→分块→向量化→下线旧版本）
 │   │   │   ├── worker.py         # 进程内任务队列
 │   │   │   ├── retrieval.py      # 两通道检索 + 两层融合
+│   │   │   ├── qa_pipeline.py    # 意图 → 路由 → 检索 → 评估 → 重试 → 回答（SSE 事件源）
 │   │   │   ├── answering.py      # 提示词、引用校验、拒答、建议
 │   │   │   ├── wiki.py           # Map-Reduce 主题归纳与页面生成
 │   │   │   ├── llm.py            # 三协议适配 + CallStats
@@ -318,7 +321,7 @@ Wiki-Rag-Knowledge/
 | 知识库 | `GET/POST /kbs`、`PATCH /kbs/{id}`、`POST /kbs/{id}/rebuild`、`GET /kbs/{id}/cost` |
 | 文档与任务 | `POST /kbs/{id}/documents`、`GET /documents/{id}/chunks`、`POST /documents/{id}/reindex`（文档级重试）、`GET /tasks`、`POST /tasks/{id}/retry` |
 | Wiki | `GET /kbs/{id}/wiki/tree`、`PUT /kbs/{id}/wiki/pages/{slug}`（人工校对）、`POST .../unlock` |
-| 问答 | `POST /conversations/{id}/ask`、`POST /search/preview`（只检索不生成，实验用） |
+| 问答 | `POST /conversations/{id}/ask`、`POST /conversations/{id}/ask/stream`（SSE 思考过程）、`POST /search/preview`（只检索不生成，实验用） |
 | 模型设置 | `GET/POST /settings/providers`、`POST /settings/providers/{id}/discover`、`POST /settings/embedding/switch` |
 | 个人 Agent（admin） | `GET /agent/cores`、`POST /agent/sessions`、`POST /agent/sessions/{id}/messages`、`GET /agent/runs/{id}/events`、`POST /agent/plugins/rescan` |
 

@@ -6,13 +6,14 @@ import logging
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import models, schemas, serializers
 from ..db import SessionLocal, get_db
 from ..deps import audit, get_current_user, grant_level
-from ..services import answering, llm, retrieval
+from ..services import answering, llm, qa_pipeline, retrieval
 
 router = APIRouter(tags=["chat"])
 log = logging.getLogger("wrk.chat")
@@ -206,12 +207,14 @@ def _mark_answer_failed(db: Session, answer_id: int, started: float,
             pass
 
 
-@router.post("/conversations/{cid}/ask")
-def ask(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
-        user: models.User = Depends(get_current_user)):
-    conv = _my_conversation(db, user, cid)
-    started = time.time()
+def _prepare_turn(db: Session, conv: models.Conversation, user: models.User,
+                  body: schemas.AskIn) -> tuple[list[models.KnowledgeBase], list[int],
+                                                list[dict], int]:
+    """校验权限并把「提问 + pending 回答」先落库，返回可检索的库与占位 id。
 
+    两个问答入口（普通 /ask 与流式 /ask/stream）共用这段逻辑，避免一边改了
+    权限校验、另一边忘了改，出现「流式入口能检索到没权限的库」这种漏洞。
+    """
     requested = body.kb_ids if body.kb_ids is not None else json.loads(conv.kb_ids or "[]")
     allowed, denied = _allowed_kbs(db, user, requested)
     if not allowed:
@@ -239,14 +242,12 @@ def ask(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
     conv.updated_at = models.utcnow()
     db.add(conv)
     db.commit()
-    answer_id = pending_answer.id
+    return allowed, [kb.id for kb in allowed], denied, pending_answer.id
 
-    try:
-        result = answering.answer(db, body.question, allowed, top_k=body.top_k)
-    except BaseException as exc:      # 含客户端断开导致的取消：都要把占位收尾
-        _mark_answer_failed(db, answer_id, started, exc)
-        raise
 
+def _persist_result(db: Session, answer_id: int, result: dict, denied: list[dict],
+                    started: float) -> dict:
+    """把链路结果写回 pending 消息；流式与非流式共用，保证历史可还原。"""
     if denied:
         result["route"]["denied"] = denied
 
@@ -262,18 +263,112 @@ def ask(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
     persisted_route["suggestions"] = result.get("suggestions") or []
     persisted_route["refusal_reason"] = result.get("refusal_reason") or ""
     answer_msg = db.get(models.Message, answer_id)
+    if answer_msg is None:
+        raise RuntimeError(f"回答占位消息 #{answer_id} 不存在")
     answer_msg.content = result["content"]
     answer_msg.evidence = json.dumps(result["evidence"], ensure_ascii=False)
     answer_msg.route = json.dumps(persisted_route, ensure_ascii=False)
     answer_msg.latency_ms = int((time.time() - started) * 1000)
     answer_msg.status = "ok"
-    conv.updated_at = models.utcnow()
-    db.add_all([answer_msg, conv])
+    conv = db.get(models.Conversation, answer_msg.conversation_id)
+    if conv is not None:
+        conv.updated_at = models.utcnow()
+        db.add(conv)
+    db.add(answer_msg)
     db.commit()
 
     result["message"] = serializers.message_out(answer_msg)
     result["denied"] = denied
     return result
+
+
+@router.post("/conversations/{cid}/ask")
+def ask(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
+        user: models.User = Depends(get_current_user)):
+    conv = _my_conversation(db, user, cid)
+    started = time.time()
+    allowed, _kb_ids, denied, answer_id = _prepare_turn(db, conv, user, body)
+
+    try:
+        result = answering.answer(db, body.question, allowed, top_k=body.top_k)
+    except BaseException as exc:      # 含客户端断开导致的取消：都要把占位收尾
+        _mark_answer_failed(db, answer_id, started, exc)
+        raise
+
+    return _persist_result(db, answer_id, result, denied, started)
+
+
+def _sse(payload: dict) -> str:
+    return "data: " + json.dumps(payload, ensure_ascii=False, default=str) + "\n\n"
+
+
+@router.post("/conversations/{cid}/ask/stream")
+def ask_stream(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
+               user: models.User = Depends(get_current_user)):
+    """流式问答：SSE 推送思考步骤、答案增量与最终结果。
+
+    事件格式（全部是 `data: {json}`）：
+      step          思考步骤开始/结束（id/title/status/detail）
+      answer        回答文本增量
+      answer_replace 最终正文被替换（拒答兜底 / 部分回答补说明）
+      done          最终结果，字段与普通 /ask 返回一致
+      error         生成失败（消息已按 failed 收尾）
+
+    为什么用 POST + fetch 而不是 EventSource：EventSource 不能带
+    `Authorization` 头，也不支持 POST body。前端用 fetch 读 ReadableStream，
+    鉴权与普通接口完全一致。
+    """
+    conv = _my_conversation(db, user, cid)
+    started = time.time()
+    _allowed, kb_ids, denied, answer_id = _prepare_turn(db, conv, user, body)
+
+    def event_stream():
+        completed = False
+        generator = None
+        # 请求级 Session 在响应开始后可能已被关闭，生成器必须用自己的会话。
+        with SessionLocal() as sdb:
+            try:
+                kbs = [kb for kb in (sdb.get(models.KnowledgeBase, kid) for kid in kb_ids)
+                       if kb is not None]
+                generator = qa_pipeline.iter_run(
+                    sdb, body.question, kbs, top_k=body.top_k, stream=True)
+                while True:
+                    try:
+                        event = next(generator)
+                    except StopIteration as stop:
+                        result = stop.value
+                        break
+                    yield _sse(event)
+
+                result = _persist_result(sdb, answer_id, result, denied, started)
+                completed = True
+                yield _sse({"type": "done", **result})
+            except GeneratorExit:
+                # 客户端断开：回答没写完就标 failed，别让它永远 pending。
+                if not completed:
+                    _mark_answer_failed(sdb, answer_id, started,
+                                        RuntimeError("客户端断开连接"))
+                raise
+            except BaseException as exc:
+                _mark_answer_failed(sdb, answer_id, started, exc)
+                yield _sse({"type": "error", "message": ASK_FAILED_TEXT,
+                            "detail": str(exc)[:500]})
+            finally:
+                if generator is not None:
+                    try:
+                        generator.close()
+                    except Exception:  # noqa: BLE001 - 关闭失败不能影响已发送内容
+                        pass
+
+    return StreamingResponse(
+        event_stream(), media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            # 避免 nginx 等反代把 SSE 缓冲成一整块，导致「流式」名存实亡。
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/search/preview")

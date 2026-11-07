@@ -136,6 +136,7 @@
 | PATCH | `/api/conversations/{id}` | 改标题 / 换知识库选择 |
 | DELETE | `/api/conversations/{id}` | 删除 |
 | POST | `/api/conversations/{id}/ask` | `{question,kb_ids?,top_k?}` → `{content, message, evidence, route, usage, insufficient, citations, suggestions, refusal_reason, denied}` |
+| POST | `/api/conversations/{id}/ask/stream` | 同上请求体；SSE 流式推送思考步骤、答案增量与最终结果（见 7.1） |
 | POST | `/api/search/preview` | `{kb_ids,query}` → `{evidence, routes, stats, denied, context_preview, usage}`（不生成回答，用于调参/实验） |
 
 `ask` 返回：
@@ -173,6 +174,50 @@
 历史消息与当次回答同口径：`chat.ask()` 把 `insufficient` / `usage` / `suggestions` / `refusal_reason` 一并写进 `route` 快照（`chat.py:154-161`），`serializers.message_out()` 再从 `route` 读回并展开成顶层字段（`serializers.py:237-242`）；老消息没有这两个键、或数据损坏时退回 `[]` / `""`（`serializers.py:225-230`），不会让一条脏消息把整个会话接口打挂。
 
 **问答是「先落库、再生成」的两段写**（`chat.py`）：`POST .../ask` 先写入提问与一条 `status="pending"` 的占位回答并提交，生成结束后把占位更新成 `status="ok"`。所以生成过程中 `GET /conversations/{id}` 就能读到「提问 + 正在生成」——用户离开页面再回来（甚至刷新）不会看到一个被清空的会话；前端在 `pending` 期间每 2 秒轮询一次，读到 `ok` 即停止（`ChatPage.tsx`）。生成失败时占位写成 `status="failed"`，`content` 是给用户看的说明、技术原因放进 `route.error`；进程重启时启动流程会把遗留的 `pending` 统一收尾成 `failed`，同一会话来了新提问也会把上一条未完成的回答收尾（`chat.recover_pending_messages()` / `chat._close_pending()`）。
+
+### 7.1 检索链路与流式思考过程
+
+`/ask` 与 `/ask/stream` 共用同一条链路（`backend/app/services/qa_pipeline.py`）：
+
+```
+意图分析 → 闲聊？→ 通用回复（不检索）
+        └→ 查询路由（original / rewrite / multi_query）
+              → 检索（每条 Query：关键词 + 向量 + RRF；多查询再融合去重）
+              → 覆盖度评估（sufficient / missing_queries）
+              → 不足且未到上限：只重写 missing_queries，回到检索（最多 2 次）
+              → 回答生成（原始问题 + Query 列表 + 参考资料）
+```
+
+链路快照写在 `route.pipeline`，随消息落库，刷新后可从历史还原：
+
+```json
+{
+  "mode": "rag",
+  "intent": {"label": "规范查询", "needs_retrieval": true, "reason": "...", "source": "model"},
+  "route": {"mode": "multi_query", "queries": ["...", "..."], "reason": "...", "source": "model"},
+  "rounds": [{"round": 1, "queries": ["..."], "hits": {"...": 5},
+              "evidence_total": 10,
+              "evaluation": {"sufficient": false, "missing_queries": ["..."],
+                             "reason": "...", "source": "model"}}],
+  "retries": 1,
+  "evaluation": {"sufficient": true, "missing_queries": [], "reason": "...", "source": "model"},
+  "steps": [{"id": "intent", "title": "理解问题", "status": "done", "detail": "..."}]
+}
+```
+
+`/ask/stream` 返回 `text/event-stream`，每个事件都是 `data: {json}`：
+
+| `type` | 字段 | 说明 |
+|---|---|---|
+| `step` | `id,title,status,detail` | 思考步骤开始（`running`）/结束（`done`）；前端按 `id` 原位更新 |
+| `answer` | `delta` | 回答文本增量（OpenAI 兼容协议原生流式；其它协议整段产出） |
+| `answer_replace` | `content` | 最终正文被替换（拒答兜底 / 部分回答补「未找到」说明） |
+| `done` | 与 `/ask` 返回同形 | 最终结果；同时已把消息落库 |
+| `error` | `message,detail` | 生成失败；占位消息已按 `failed` 收尾 |
+
+前端用 `fetch` + `ReadableStream` 读取（`api.ts` 的 `chatApi.askStream`），因为 `EventSource`
+不能携带 `Authorization` 头，也不支持 POST body。链路分析节点没有可用模型时退回规则判断，
+回答生成没有可用模型时退回抽取式回答；离线模式下事件流与步骤展示仍然完整。
 
 #### `top_k` 的两个语义（同一个参数）
 

@@ -378,6 +378,30 @@ Message.content          回答正文，结论后带 [编号]
 
 离线时 `_extractive_answer()` 从证据里按查询词命中数挑句子，每句后仍标 `[编号]`，证据链不降级；没有证据时直接返回 `REFUSAL_LEAD`。
 
+### 8.6 检索链路与流式思考过程
+
+`answering.answer()` 现在只是 `qa_pipeline.run()` 的非流式壳；真正的链路在 `backend/app/services/qa_pipeline.py`：
+
+```
+意图分析（规范/流程/精确标识/闲聊）
+  ├─ 闲聊 → 通用回复，不检索
+  └─ 查询路由（original / rewrite / multi_query）
+        → 每条 Query 检索（关键词 + 向量 + RRF）→ 多查询再融合去重
+        → 覆盖度评估（sufficient / missing_queries）
+        → 不足且未到上限：只重写 missing_queries，回到检索（最多 2 次）
+        → 回答生成（原始问题 + Query 列表 + 参考资料）
+```
+
+**为什么单独成模块**：链路有自己的状态机（轮次、缺失查询、重试），和拒答文案/引用校验是两类职责。`iter_run()` 是生成器，边跑边 `yield` 事件；`run()` 消费事件只返回最终结果，所以既有 `/ask`、Agent 运行器和测试不用改签名。
+
+**覆盖度阈值**：`coverage` 是查询词覆盖率（0~1），跨库、跨检索通道可比。规则兜底用 `COVERAGE_OK = 0.25`，或「至少 2 条相关证据且最高覆盖率 ≥ 0.15」。阈值偏保守：宁可多跑一轮重试，也不要把「只命中一个常见词」当成证据充分。有模型时由模型判断，模型不可用/返回非 JSON 时退回规则——分析节点降级**不会**把整个回答标成 offline，只有最终生成真的没调用到模型才标。
+
+**部分回答**：重试 2 次后仍不足、但已有部分证据时，不整块替换成拒答，而是保留模型答出的部分，再补一段「以下内容没有找到足够依据」；`insufficient=true` 让前端仍显示证据不足提示。完全没有证据才走统一拒答块。
+
+**流式思考过程**：`POST /conversations/{id}/ask/stream` 用 SSE 推送 `step / answer / answer_replace / done / error`。前端 `ChatPage` 把 `step` 按 `id` 原位更新成步骤列表，`answer` 增量直接渲染；完成后链路快照写进 `message.route.pipeline`，刷新页面后从历史消息还原成折叠的「思考过程」。展示的是**检索链路的状态**（意图、查询、命中数、评估、重试），不是模型的隐藏推理文本——后者不可验证，也不应该当作产品承诺。
+
+**为什么是 POST + fetch**：`EventSource` 不能带 `Authorization` 头，也不能发 POST body；前端用 `fetch` 读 `ReadableStream`，鉴权与普通接口一致。生成器使用独立的 `SessionLocal`，因为请求级 Session 在响应开始后可能已经关闭；客户端断开时把 pending 消息收尾成 failed，避免永远「正在生成」。
+
 ---
 
 ## 9. 权限模型

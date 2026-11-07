@@ -99,11 +99,16 @@ def test_connection_test_reports_failure_gracefully(app_client, admin_headers, p
         "label": "对话测试", "is_default": True, "enabled": True,
     })
     mid = r.json()["id"]
-    test = app_client.post(f"/api/settings/models/{mid}/test", headers=admin_headers)
-    assert test.status_code == 200, test.text
-    body = test.json()
-    assert body["ok"] is False, "不可达地址应返回失败而不是 500"
-    assert body["message"], "失败必须有可读原因"
+    try:
+        test = app_client.post(f"/api/settings/models/{mid}/test", headers=admin_headers)
+        assert test.status_code == 200, test.text
+        body = test.json()
+        assert body["ok"] is False, "不可达地址应返回失败而不是 500"
+        assert body["message"], "失败必须有可读原因"
+    finally:
+        # 清理这条「不可达的默认对话模型」：本用例只验证连接测试的失败语义，
+        # 留着它会让后续所有问答用例都去连 127.0.0.1:9，既慢又依赖端口行为。
+        app_client.delete(f"/api/settings/models/{mid}", headers=admin_headers)
 
 
 def test_non_admin_cannot_read_settings(app_client, admin_headers):
