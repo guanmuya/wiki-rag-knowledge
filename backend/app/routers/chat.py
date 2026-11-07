@@ -18,7 +18,7 @@ from ..services import answering, llm, qa_pipeline, retrieval
 router = APIRouter(tags=["chat"])
 log = logging.getLogger("wrk.chat")
 
-# 生成失败/被中断时给用户看的话。技术细节写进 route.error，只留在库里给排障用。
+# 生成失败/被中断时给用户看的话；显式选模型时不向会话历史暴露异常原文。
 ASK_FAILED_TEXT = "这次回答没有生成完成，可以重新提问。"
 # 同一会话又来了新提问时，上一条没写完的回答按「已跳过」收尾。
 SUPERSEDED_TEXT = "上一次回答没有生成完成，已跳过。"
@@ -183,7 +183,7 @@ def delete_conversation(cid: int, db: Session = Depends(get_db),
 
 
 def _mark_answer_failed(db: Session, answer_id: int, started: float,
-                        exc: BaseException) -> None:
+                        exc: BaseException, *, hide_details: bool = False) -> None:
     """生成失败时把 pending 占位收尾成 failed；本身绝不再往外抛。
 
     先 rollback：`answering.answer` 失败后会话可能停在「必须先回滚」的状态，
@@ -198,7 +198,7 @@ def _mark_answer_failed(db: Session, answer_id: int, started: float,
         answer.status = "failed"
         answer.content = ASK_FAILED_TEXT
         answer.latency_ms = int((time.time() - started) * 1000)
-        answer.route = json.dumps({"error": str(exc)[:500]}, ensure_ascii=False)
+        answer.route = json.dumps({"error": ASK_FAILED_TEXT if hide_details else str(exc)[:500]}, ensure_ascii=False)
         db.add(answer)
         db.commit()
     except Exception:  # noqa: BLE001 - 收尾失败不能覆盖原始异常
@@ -356,11 +356,16 @@ def ask(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
     allowed, _kb_ids, denied, answer_id = _prepare_turn(db, conv, user, body)
 
     try:
+        if cfg is not None:
+            # 提交占位消息后重新读取，避免已停用的配置留在会话缓存中。
+            db.expire_all()
+            cfg = _ask_model(db, body.model_config_id)
         # 没选模型时保持原来的调用形状（不传 override），既有调用方不受影响。
         extra = {"cfg_override": cfg} if cfg is not None else {}
         result = answering.answer(db, body.question, allowed, top_k=body.top_k, **extra)
     except BaseException as exc:      # 含客户端断开导致的取消：都要把占位收尾
-        _mark_answer_failed(db, answer_id, started, exc)
+        _mark_answer_failed(db, answer_id, started, exc,
+                            hide_details=body.model_config_id is not None)
         raise
 
     return _persist_result(db, answer_id, result, denied, started)
@@ -400,8 +405,8 @@ def ask_stream(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
             try:
                 kbs = [kb for kb in (sdb.get(models.KnowledgeBase, kid) for kid in kb_ids)
                        if kb is not None]
-                # 生成器用自己的会话，cfg 也必须绑到这个会话上（含 cfg.provider）。
-                cfg = sdb.get(models.ModelConfig, body.model_config_id) if body.model_config_id else None
+                # 流开始前配置可能已被删除或停用；绝不能静默改用其他供应商。
+                cfg = _ask_model(sdb, body.model_config_id)
                 extra = {"cfg_override": cfg} if cfg is not None else {}
                 generator = qa_pipeline.iter_run(
                     sdb, body.question, kbs, top_k=body.top_k, stream=True, **extra)
@@ -423,9 +428,10 @@ def ask_stream(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
                                         RuntimeError("客户端断开连接"))
                 raise
             except BaseException as exc:
-                _mark_answer_failed(sdb, answer_id, started, exc)
+                hide_details = body.model_config_id is not None
+                _mark_answer_failed(sdb, answer_id, started, exc, hide_details=hide_details)
                 yield _sse({"type": "error", "message": ASK_FAILED_TEXT,
-                            "detail": str(exc)[:500]})
+                            "detail": ASK_FAILED_TEXT if hide_details else str(exc)[:500]})
             finally:
                 if generator is not None:
                     try:

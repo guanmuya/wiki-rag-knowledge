@@ -600,7 +600,7 @@ export const wikiApi = {
 export const chatApi = {
   conversations: () => request<Paged<Conversation>>('/conversations'),
   /** 问答页模型下拉：对所有登录用户开放，只返回可用的对话模型。 */
-  models: () => request<ChatModelOptions>('/chat/models'),
+  models: () => request<ChatModelOptions>('/chat/models', { timeoutMs: 6000 }),
   create: (title: string, kb_ids: number[]) =>
     request<Conversation>('/conversations', { method: 'POST', body: { title, kb_ids } }),
   get: (id: number) => request<ConversationDetail>(`/conversations/${id}`),
@@ -625,8 +625,8 @@ export const chatApi = {
     question: string,
     kb_ids: number[] | undefined,
     onEvent: (event: AskStreamEvent) => void,
-    modelConfigId?: number | null,
     signal?: AbortSignal,
+    modelConfigId?: number | null,
   ): Promise<AskResponse> => {
     if (baseReady) await baseReady
     const headers: Record<string, string> = {

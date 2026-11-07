@@ -140,7 +140,7 @@
 | GET | `/api/chat/models` | 问答页模型下拉：`{items:[{id,model,label,provider,is_default,display}],default_id}`；对所有登录用户开放，只列启用中的对话模型 |
 | POST | `/api/search/preview` | `{kb_ids,query}` → `{evidence, routes, stats, denied, context_preview, usage}`（不生成回答，用于调参/实验） |
 
-`model_config_id` 可选：指定本轮问答使用的对话模型（`cfg_override`），不传则沿用模型设置里解析出的默认模型；传了未启用、非 `llm` 用途或供应商已停用的 id 会先于落库返回 400。`default_id` 用与问答相同的 `llm.resolve_model()` 解析，因此下拉里标「默认」的那条就是未指定模型时实际会用的那条。
+`model_config_id` 可选：指定本轮问答使用的对话模型（`cfg_override`），不传则沿用模型设置里解析出的默认模型；传了未启用、非 `llm` 用途或供应商已停用的 id 会先于落库返回 400。`default_id` 用与问答相同的 `llm.resolve_model()` 解析。界面在发送默认模型提问前刷新默认值，并将该模型固定到本轮。显式指定模型时，生成模型错误只返回类别与状态码；查询向量化错误同样只返回类别与状态码，避免暴露供应商地址或凭据。
 
 `ask` 返回：
 ```json

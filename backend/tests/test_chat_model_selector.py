@@ -8,12 +8,15 @@
 """
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
 from sqlalchemy import delete
 
 from app import models
+from app.db import SessionLocal
+from app.routers import chat as chat_router
 from app.services import answering, llm, qa_pipeline
 
 PASSWORD = "ChatModel#2026"
@@ -173,3 +176,158 @@ def test_ask_without_model_keeps_global_default(app_client, admin_headers, ask_t
                         json={"question": "你好"})
     assert r.status_code == 200, r.text
     assert seen == [None]
+
+
+@pytest.mark.parametrize("endpoint", ["ask", "ask/stream"])
+@pytest.mark.parametrize("change", ["delete", "disable", "disable_provider"])
+def test_model_revoked_before_generation_never_falls_back(
+        app_client, admin_headers, model_set, ask_target, monkeypatch, endpoint, change):
+    selected_id = model_set["alternate"].id
+    prepare = chat_router._prepare_turn
+
+    def revoke_after_prepare(db, conv, user, body):
+        result = prepare(db, conv, user, body)
+        with SessionLocal() as other:
+            cfg = other.get(models.ModelConfig, selected_id)
+            if change == "delete":
+                other.delete(cfg)
+            elif change == "disable":
+                cfg.enabled = False
+            else:
+                cfg.provider.enabled = False
+            other.commit()
+        return result
+
+    def must_not_generate(*args, **kwargs):
+        raise AssertionError("撤销后的选择不得调用模型或回退到其他供应商")
+
+    monkeypatch.setattr(chat_router, "_prepare_turn", revoke_after_prepare)
+    monkeypatch.setattr(answering, "answer", must_not_generate)
+    monkeypatch.setattr(qa_pipeline, "iter_run", must_not_generate)
+    response = app_client.post(f"/api/conversations/{ask_target}/{endpoint}", headers=admin_headers,
+                               json={"question": "你好", "model_config_id": selected_id})
+    if endpoint == "ask":
+        assert response.status_code == 400, response.text
+    else:
+        assert response.status_code == 200, response.text
+        assert '"type": "error"' in response.text and '"type": "done"' not in response.text
+    messages = app_client.get(f"/api/conversations/{ask_target}", headers=admin_headers).json()["messages"]
+    assert messages[-1]["status"] == "failed"
+
+
+@pytest.fixture()
+def private_chat_model(db_session, failure):
+    secret = "provider-credential-for-test"
+    base_url = (f"https://test-user:{secret}@private.example:invalid/v1"
+                if failure == "invalid_url" else "http://127.0.0.1:9/v1")
+    provider = models.Provider(name=f"私有供应商-{uuid.uuid4().hex[:8]}",
+                               base_url=base_url, enabled=True, protocol="openai")
+    db_session.add(provider)
+    db_session.flush()
+    params = json.dumps({"max_tokens": secret}) if failure == "invalid_params" else "{}"
+    cfg = models.ModelConfig(provider_id=provider.id, purpose="llm", model="alternate",
+                             label="备选模型", params=params, enabled=True)
+    db_session.add(cfg)
+    db_session.commit()
+    yield cfg.id, secret
+    db_session.execute(delete(models.ModelConfig).where(models.ModelConfig.id == cfg.id))
+    db_session.execute(delete(models.Provider).where(models.Provider.id == provider.id))
+    db_session.commit()
+
+
+@pytest.mark.parametrize("endpoint", ["ask", "ask/stream"])
+@pytest.mark.parametrize("failure", ["invalid_url", "invalid_params"])
+def test_employee_ask_does_not_expose_provider_credentials(
+        app_client, admin_headers, model_set, private_chat_model, endpoint, failure):
+    model_id, secret = private_chat_model
+    kb = app_client.post("/api/kbs", headers=admin_headers, json={
+        "name": f"凭据保护库-{uuid.uuid4().hex[:8]}", "description": "", "mode": "basic"}).json()
+    username = "emp_secure_" + uuid.uuid4().hex[:8]
+    user = app_client.post("/api/users", headers=admin_headers, json={
+        "username": username, "display_name": "员工", "password": PASSWORD, "role": "employee",
+        "grants": [{"kb_id": kb["id"], "level": "read"}],
+    })
+    assert user.status_code == 201, user.text
+    token = app_client.post("/api/auth/login", json={"username": username, "password": PASSWORD}).json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    cid = app_client.post("/api/conversations", headers=headers, json={"kb_ids": [kb["id"]]}).json()["id"]
+    def request():
+        return app_client.post(f"/api/conversations/{cid}/{endpoint}", headers=headers,
+                               json={"question": "hello", "model_config_id": model_id})
+    if failure == "invalid_params" and endpoint == "ask":
+        # TestClient 重新抛出未处理异常；真正的 HTTP 响应为通用 500。
+        with pytest.raises(ValueError):
+            request()
+        response_text = ""
+    else:
+        response = request()
+        assert response.status_code == 200, response.text
+        response_text = response.text
+        if failure == "invalid_url":
+            assert "供应商接口地址不合法" in response_text
+        else:
+            assert '"type": "error"' in response_text
+    history = app_client.get(f"/api/conversations/{cid}", headers=headers)
+    assert history.status_code == 200
+    for data in (response_text, history.text):
+        assert secret not in data and "private.example" not in data
+
+
+@pytest.fixture()
+def invalid_embedding(db_session):
+    secret = "embedding-credential-for-test"
+    provider = models.Provider(name=f"向量供应商-{uuid.uuid4().hex[:8]}",
+                               base_url=f"https://test:{secret}@private.example:invalid/v1",
+                               enabled=True, protocol="openai")
+    db_session.add(provider)
+    db_session.flush()
+    cfg = models.ModelConfig(provider_id=provider.id, purpose="embedding", model="embed",
+                             label="向量模型", params="{}", embed_dim=8, enabled=True)
+    db_session.add(cfg)
+    db_session.commit()
+    yield cfg.id, secret
+    db_session.execute(delete(models.ModelConfig).where(models.ModelConfig.id == cfg.id))
+    db_session.execute(delete(models.Provider).where(models.Provider.id == provider.id))
+    db_session.commit()
+
+
+@pytest.mark.parametrize("endpoint", ["ask", "ask/stream", "preview"])
+def test_embedding_error_does_not_expose_provider_credentials(
+        app_client, admin_headers, model_set, invalid_embedding, endpoint, monkeypatch):
+    embed_id, secret = invalid_embedding
+    resolve = llm.resolve_model
+
+    def resolve_for_test(db, purpose):
+        if purpose == "embedding":
+            selected = db.get(models.ModelConfig, embed_id)
+            return selected, selected.provider
+        return resolve(db, purpose)
+
+    def offline_chat(*args, **kwargs):
+        raise llm.ModelNotConfigured("未配置可用模型")
+
+    monkeypatch.setattr(llm, "resolve_model", resolve_for_test)
+    monkeypatch.setattr(llm, "chat", offline_chat)
+    kb = app_client.post("/api/kbs", headers=admin_headers, json={
+        "name": f"向量凭据保护库-{uuid.uuid4().hex[:8]}", "description": "", "mode": "basic"}).json()
+    username = "emp_embed_" + uuid.uuid4().hex[:8]
+    user = app_client.post("/api/users", headers=admin_headers, json={
+        "username": username, "display_name": "员工", "password": PASSWORD, "role": "employee",
+        "grants": [{"kb_id": kb["id"], "level": "read"}],
+    })
+    assert user.status_code == 201, user.text
+    token = app_client.post("/api/auth/login", json={"username": username, "password": PASSWORD}).json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    cid = app_client.post("/api/conversations", headers=headers, json={"kb_ids": [kb["id"]]}).json()["id"]
+    if endpoint == "preview":
+        response = app_client.post("/api/search/preview", headers=headers,
+                                   json={"query": "住宿标准是多少？", "kb_ids": [kb["id"]]})
+    else:
+        response = app_client.post(f"/api/conversations/{cid}/{endpoint}", headers=headers,
+                                   json={"question": "住宿标准是多少？", "model_config_id": model_set["default"].id})
+    assert response.status_code == 200, response.text
+    history = app_client.get(f"/api/conversations/{cid}", headers=headers)
+    assert history.status_code == 200
+    for data in (response.text, history.text):
+        assert secret not in data and "private.example" not in data
+    assert "供应商接口地址不合法" in response.text

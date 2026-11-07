@@ -624,7 +624,7 @@ def retrieve(db: Session, kbs: list[models.KnowledgeBase], query: str, *,
         # 关键修复：stats 必须透传，否则查询向量化不计入成本
         qvec = llm.embed(db, [query], stats=cost)[0]
     except llm.ModelUnavailable as exc:
-        embed_error = str(exc)
+        embed_error = llm.public_error(exc)
 
     routes: list[KbRoute] = []
     per_kb_evidence: list[list[Evidence]] = []
