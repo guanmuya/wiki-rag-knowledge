@@ -631,6 +631,22 @@ def delete_document(doc_id: int, db: Session = Depends(get_db),
     kb = db.get(models.KnowledgeBase, doc.kb_id)
     if grant_level(db, user, doc.kb_id) != models.GrantLevel.manage.value:
         raise HTTPException(status_code=403, detail="需要该知识库的管理权限")
+    if kb:
+        # 与模式切换排队、worker 抢任务共用 SQLite 写锁，避免检查后首次生成才开始。
+        locked = db.execute(update(models.KnowledgeBase).where(models.KnowledgeBase.id == kb.id)
+                            .values(status=models.KnowledgeBase.status))
+        if not locked.rowcount:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="文档不存在")
+        db.refresh(kb)
+        initial = db.execute(select(models.Task.id).where(
+            models.Task.kb_id == kb.id,
+            models.Task.dedupe_key == f"{models.WIKI_INITIAL_TASK_PREFIX}{kb.id}",
+            models.Task.status.in_([models.TaskStatus.queued.value, models.TaskStatus.running.value]),
+        ).limit(1)).first()
+        if initial:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="该知识库切换模式后的首次 Wiki 生成尚未完成，请稍后再删除文档")
     paths = db.execute(
         select(models.DocumentVersion.storage_path).where(models.DocumentVersion.doc_id == doc.id)
     ).scalars().all()

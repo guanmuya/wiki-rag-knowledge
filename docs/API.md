@@ -98,7 +98,7 @@
 | POST | `/api/documents/{id}/versions` | multipart `file` 上传新版本 → `{version_id,task_id}` |
 | GET | `/api/documents/{id}/download?version_id=` | 原文件下载（后端校验权限） |
 | GET | `/api/documents/{id}/chunks?page=` | 分块预览（含 locator/heading/向量维度） |
-| DELETE | `/api/documents/{id}` | 删除文档及其分块；Wiki 库触发重建任务 |
+| DELETE | `/api/documents/{id}` | 删除文档及其分块；Wiki 库触发重建任务。切换模式触发的首次 Wiki 生成排队或运行期间返回 409，待任务结束后可重试。 |
 | GET | `/api/tasks?status=&kb_id=` | 任务列表（轮询用） |
 | GET | `/api/tasks/{id}` | 单任务详情 |
 | POST | `/api/tasks/{id}/retry` | 失败任务重试 → `{task_id}` |
