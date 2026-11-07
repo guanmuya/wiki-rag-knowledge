@@ -10,7 +10,7 @@ from contextlib import ExitStack, contextmanager
 import pytest
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from app import config, db as db_module, models
 from app.db import Base, WorkerSession
@@ -232,15 +232,14 @@ def test_progress_lock_does_not_commit_or_discard_locked_page(wiki_db, monkeypat
         "chunk_ids": [entries[0][0]],
     }])
     state = {"raised": False}
-    real_commit = Session.commit
 
-    def locked_progress_commit(db):
-        for task in db.dirty:
-            if (isinstance(task, models.Task) and task.stage == "Wiki 页面处理 1/2"
-                    and not state["raised"]):
-                state["raised"] = True
-                raise OperationalError("UPDATE tasks", None, Exception("database is locked"))
-        return real_commit(db)
+    @event.listens_for(wiki_db.kw["bind"], "before_cursor_execute")
+    def locked_progress_update(conn, cursor, statement, parameters, context, executemany):
+        # 进度现在用条件 UPDATE 防止旧执行覆盖重试，直接在 SQL 层模拟锁冲突。
+        if (statement.lstrip().upper().startswith("UPDATE TASKS")
+                and "Wiki 页面处理 1/2" in parameters and not state["raised"]):
+            state["raised"] = True
+            raise OperationalError("UPDATE tasks", None, Exception("database is locked"))
 
     def page_chat(db, messages, **kwargs):
         assert state["raised"]
@@ -249,7 +248,6 @@ def test_progress_lock_does_not_commit_or_discard_locked_page(wiki_db, monkeypat
             assert other.get(models.WikiPage, page_id).status == "published"
         return _model_text()
 
-    monkeypatch.setattr(Session, "commit", locked_progress_commit)
     monkeypatch.setattr(llm, "chat", page_chat)
     monkeypatch.setattr(llm, "embed", lambda *args, **kwargs: [])
     assert worker.run_once("wiki-progress-locked")
@@ -375,7 +373,7 @@ def test_exhausted_progress_pool_does_not_fail_wiki(pool_db, monkeypatch, caplog
 
     def page_chat(db, messages, **kwargs):
         # 所有进度取连接都超时，但外层页面修改依然没有被提前提交。
-        assert _snapshot(observer, task_id) == ("running", "处理中", 5)
+        assert _snapshot(observer, task_id) == ("running", "生成 Wiki 页面", 5)
         with observer() as other:
             assert other.get(models.WikiPage, page_id).status == "published"
         return _model_text()

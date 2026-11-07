@@ -413,9 +413,11 @@ def test_wiki_build_reports_progress_for_initial_and_manual_tasks(store, monkeyp
     task_id = _task(store, kb_id, kind="rebuild_wiki", dedupe_key=key)
     progress = []
     monkeypatch.setattr(worker, "_report_wiki_progress",
-                        lambda task, phase, done, total: progress.append((task, phase, done, total)))
+                        lambda task, phase, done, total, *, run_token:
+                        progress.append((task, phase, done, total)))
 
-    def build(db, kb, *, stats, on_progress):
+    def build(db, kb, *, stats, on_progress, check_cancel, on_publish):
+        assert callable(check_cancel) and callable(on_publish)
         on_progress("topics", 1, 1)
         on_progress("pages", 1, 1)
         return wiki.WikiBuildResult()

@@ -86,7 +86,7 @@ export default function DocumentsTab({
 
   const loadTasks = useCallback(async () => {
     try {
-      const data = await taskApi.list({ kb_id: kb.id })
+      const data = await taskApi.list({ kb_id: kb.id, include_running: true })
       const items = data.items ?? []
       setTasks(items)
       setTaskError(null)
@@ -137,7 +137,8 @@ export default function DocumentsTab({
    * 「一份文档三条记录」的视觉噪音。完整历史去任务中心看。
    */
   const visibleTasks = tasks.filter((task, index) => {
-    if (task.kind !== 'ingest_document' || !task.doc_id) return true
+    // 旧版可能留下同一文档的多条任务：运行中的任务也必须可见，才能停止它的 Wiki 阶段。
+    if (task.kind !== 'ingest_document' || !task.doc_id || isRunningStatus(task.status)) return true
     return (
       tasks.findIndex((o) => o.kind === 'ingest_document' && o.doc_id === task.doc_id) === index
     )
@@ -297,6 +298,23 @@ export default function DocumentsTab({
       setRetryingDoc(null)
     }
   }
+  const stopWiki = async (task: Task) => {
+    try {
+      await taskApi.stopWiki(task.id, task.run_token)
+      onToast('已发送停止请求', 'info')
+    } finally {
+      await loadTasks()
+      onChanged()
+    }
+  }
+
+  const retryTask = async (task: Task) => {
+    const res = await taskApi.retry(task.id)
+    onToast(`任务 #${res.task_id} 已重新排队（第 ${res.retry_count || 1} 次）`, 'success')
+    await loadTasks()
+    onChanged()
+  }
+
   const chunkPages = Math.max(1, Math.ceil(chunkTotal / 10))
 
   return (
@@ -550,7 +568,9 @@ export default function DocumentsTab({
           ) : (
             <span className="tiny muted">无运行中任务</span>
           )}
-          <span className="tiny muted">· 只展示进度与历史，重试请在上方文档列表操作</span>
+          <span className="tiny muted">
+            {canManage ? '· 可查看进度、停止 Wiki 生成或重试任务' : '· 可查看任务进度与历史'}
+          </span>
           {hiddenTaskCount > 0 ? (
             <span className="tiny muted">· 已折叠 {hiddenTaskCount} 条历史记录（任务中心可查）</span>
           ) : null}
@@ -564,6 +584,10 @@ export default function DocumentsTab({
             tasks={visibleTasks}
             loading={!tasksLoaded}
             error={taskError}
+            onRetry={canManage ? retryTask : undefined}
+            onRetryError={(err) => onToast(errorText(err), 'error')}
+            onStopWiki={canManage ? stopWiki : undefined}
+            onStopWikiError={(err) => onToast(errorText(err), 'error')}
             emptyText="该知识库暂无任务"
           />
         </div>

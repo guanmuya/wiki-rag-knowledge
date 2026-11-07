@@ -539,9 +539,17 @@ export const docApi = {
 
 // ---------------------------------------------------------------- 任务
 export const taskApi = {
-  list: (params: { status?: string; kb_id?: number } = {}) =>
-    request<Paged<Task>>(`/tasks${qs({ status: params.status, kb_id: params.kb_id })}`),
+  list: (params: { status?: string; kb_id?: number; include_running?: boolean } = {}) =>
+    request<Paged<Task>>(`/tasks${qs({
+      status: params.status,
+      kb_id: params.kb_id,
+      include_running: params.include_running === undefined ? undefined : String(params.include_running),
+    })}`),
   get: (id: number) => request<Task>(`/tasks/${id}`),
+  stopWiki: (id: number, runToken: string) =>
+    request<{ ok: true }>(`/tasks/${id}/stop-wiki?${new URLSearchParams({ run_token: runToken })}`, {
+      method: 'POST',
+    }),
   retry: (id: number) =>
     request<{ task_id: number; reused: boolean; retry_count: number }>(`/tasks/${id}/retry`, {
       method: 'POST',

@@ -20,6 +20,7 @@ const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'success', label: '成功' },
   { value: 'partial', label: '部分失败' },
   { value: 'failed', label: '失败' },
+  { value: 'stopped', label: '已停止' },
 ]
 
 export default function TasksPage() {
@@ -39,6 +40,8 @@ export default function TasksPage() {
         const data = await taskApi.list({
           status: status || undefined,
           kb_id: kbId ? Number(kbId) : undefined,
+          include_running: !status || status.split(',').some((item) => item.trim() === 'running')
+            ? true : undefined,
         })
         setTasks(data.items ?? [])
         setError(null)
@@ -83,10 +86,23 @@ export default function TasksPage() {
     await load(true)
   }
 
+  const stopWiki = async (task: Task) => {
+    try {
+      await taskApi.stopWiki(task.id, task.run_token)
+      push('已发送停止请求', 'info')
+    } finally {
+      await load(true)
+    }
+  }
+
+  const canManageTask = (task: Task) =>
+    task.kb_id !== null && kbs.some((kb) => kb.id === task.kb_id && kb.my_level === 'manage')
+
   const counts = {
     running: tasks.filter((t) => isRunningStatus(t.status)).length,
     failed: tasks.filter((t) => t.status === 'failed' || t.status === 'partial').length,
     success: tasks.filter((t) => t.status === 'success').length,
+    stopped: tasks.filter((t) => t.status === 'stopped').length,
   }
 
   return (
@@ -135,6 +151,7 @@ export default function TasksPage() {
         </Badge>
         <Badge tone={counts.failed > 0 ? 'danger' : 'muted'}>失败 {counts.failed}</Badge>
         <Badge tone="success">成功 {counts.success}</Badge>
+        <Badge tone="muted">已停止 {counts.stopped}</Badge>
         <span className="tiny muted">
           共 {tasks.length} 条{lastUpdated ? ` · 更新于 ${lastUpdated}` : ''}
           {hasRunning ? ' · 自动刷新中' : ' · 已停止自动刷新'}
@@ -166,6 +183,9 @@ export default function TasksPage() {
               showKb
               onRetry={retry}
               onRetryError={(err) => push(errorText(err), 'error')}
+              onStopWiki={stopWiki}
+              onStopWikiError={(err) => push(errorText(err), 'error')}
+              canManageTask={canManageTask}
             />
           )}
         </div>

@@ -99,9 +99,10 @@
 | GET | `/api/documents/{id}/download?version_id=` | 原文件下载（后端校验权限） |
 | GET | `/api/documents/{id}/chunks?page=` | 分块预览（含 locator/heading/向量维度） |
 | DELETE | `/api/documents/{id}` | 删除文档及其分块；Wiki 库触发重建任务。切换模式触发的首次 Wiki 生成排队或运行期间返回 409，待任务结束后可重试。 |
-| GET | `/api/tasks?status=&kb_id=` | 任务列表（轮询用） |
+| GET | `/api/tasks?status=&kb_id=&include_running=` | 任务列表（轮询用）；`include_running=true` 额外包含符合筛选条件的运行中任务 |
 | GET | `/api/tasks/{id}` | 单任务详情 |
-| POST | `/api/tasks/{id}/retry` | 失败任务重试 → `{task_id}` |
+| POST | `/api/tasks/{id}/stop-wiki?run_token=` | 需知识库 manage 权限；传任务响应中的 `run_token` 以停止对应执行 → `{ok:true}` |
+| POST | `/api/tasks/{id}/retry` | 重试失败任务或已停止的 Wiki 重建 → `{task_id}` |
 
 任务结构：
 ```json
@@ -111,7 +112,7 @@
  "created_at": "...", "started_at": "...", "finished_at": null,
  "result": {"chunks": 42}}
 ```
-`status` ∈ `queued|running|success|partial|failed`。
+`status` ∈ `queued|running|success|partial|failed|stopped`。任务另有 `can_stop_wiki` 和 `wiki_stop_requested`：前者表示当前可请求停止 Wiki 阶段，后者表示停止请求已受理但尚未完成。运行中的任务会在当前阻塞调用完成后停止；未发布的页面会丢弃，已完成的分块及完整 Wiki 页面保留，检索会回退到分块索引直至 Wiki 完整重建。停止仅作用于该任务，其他任务仍可能生成 Wiki。文档入库和分块重建的已停止任务不可原地重试，以免重做已完成的索引；可在知识库设置中发起 Wiki 重建。
 
 ## 6. Wiki
 
