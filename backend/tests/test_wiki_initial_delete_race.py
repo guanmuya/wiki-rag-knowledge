@@ -414,20 +414,25 @@ def test_retry_after_initial_generation_hides_deleted_source_pages_from_readers(
             models.WikiPage.status == models.WikiPageStatus.published.value,
         )).scalars().all()
         source_only_ids = []
+        shared_input_ids = []
         for page in pages:
             evidence_docs = set(db.execute(select(models.WikiEvidence.doc_id).where(
                 models.WikiEvidence.page_version_id == page.current_version_id,
             )).scalars())
+            generation_docs = set(db.execute(select(models.WikiGenerationSource.doc_id).where(
+                models.WikiGenerationSource.page_version_id == page.current_version_id,
+            )).scalars())
             if evidence_docs == {doc_id}:
                 assert page.human_locked is False
                 source_only_ids.append(page.id)
+            if evidence_docs == {remaining_id} and {doc_id, remaining_id} <= generation_docs:
+                shared_input_ids.append(page.id)
         assert source_only_ids, "initial generation must produce a source-only page"
-        assert any(db.execute(select(models.WikiEvidence.id).where(
-            models.WikiEvidence.doc_id == remaining_id,
-        )).scalars())
+        assert shared_input_ids, "the remaining-source page must share the deleted Map input"
 
     with wal_store() as db:
         slugs = {db.get(models.WikiPage, page_id).slug for page_id in source_only_ids}
+        shared_input_slugs = {db.get(models.WikiPage, page_id).slug for page_id in shared_input_ids}
         kb = db.get(models.KnowledgeBase, kb_id)
         hits, _ = retrieval.search_wiki(db, kb, "住宿报销", top_n=20, qvec=None)
         assert set(source_only_ids).intersection({hit.page_id for hit in hits})
@@ -446,7 +451,7 @@ def test_retry_after_initial_generation_hides_deleted_source_pages_from_readers(
 
     admin_user = client.app.dependency_overrides[kbs.get_current_user]
 
-    def assert_source_visibility():
+    def assert_source_visibility(*, regenerated):
         # Administrators retain the original pages for review; readers cannot
         # load their current contents or history, even if storage stays published.
         client.app.dependency_overrides[kbs.get_current_user] = admin_user
@@ -466,8 +471,12 @@ def test_retry_after_initial_generation_hides_deleted_source_pages_from_readers(
             client.app.dependency_overrides[kbs.get_current_user] = lambda: reader_user(reader_id)
             tree = client.get(f"/api/kbs/{kb_id}/wiki/tree")
             assert tree.status_code == 200, tree.text
-            assert slugs.isdisjoint({page["slug"] for page in tree.json()["items"]})
-            assert tree.json()["items"], "pages from the remaining source should stay visible"
+            visible_slugs = {page["slug"] for page in tree.json()["items"]}
+            assert slugs.isdisjoint(visible_slugs)
+            if regenerated:
+                assert shared_input_slugs <= visible_slugs, "regeneration from live sources should restore pages"
+            else:
+                assert shared_input_slugs.isdisjoint(visible_slugs), "shared Map input must hide pages until regeneration"
             for slug in slugs:
                 url = f"/api/kbs/{kb_id}/wiki/pages/{slug}"
                 assert client.get(url).status_code == 404
@@ -481,9 +490,9 @@ def test_retry_after_initial_generation_hides_deleted_source_pages_from_readers(
     _assert_deleted(wal_store, kb_id, doc_id, path, response)
     rebuild_id = response.json()["rebuild_task_id"]
     assert rebuild_id is not None
-    assert_source_visibility()
+    assert_source_visibility(regenerated=False)
     assert worker.run_once("delete-rebuild")
     with wal_store() as db:
         task = db.get(models.Task, rebuild_id)
         assert task.status == models.TaskStatus.success.value, task.error
-    assert_source_visibility()
+    assert_source_visibility(regenerated=True)

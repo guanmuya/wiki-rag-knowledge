@@ -164,7 +164,9 @@ export default function KbDetailPage() {
           />
         ) : tab === 'wiki' ? (
           <WikiTab
+            key={kb.id}
             kb={kb}
+            isAdmin={isAdmin}
             canManage={manage}
             onToast={push}
             initialSlug={slugParam}

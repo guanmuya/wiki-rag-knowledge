@@ -236,6 +236,21 @@ class WikiSection(Base):
     embed_signature: Mapped[str] = mapped_column(String(200), default="")
 
 
+class WikiGenerationSource(Base):
+    """页面版本生成时同批读取的文档，保留文档 ID 以便追溯。"""
+    __tablename__ = "wiki_generation_sources"
+    __table_args__ = (
+        UniqueConstraint("page_version_id", "doc_id", name="uq_wiki_generation_source_version_doc"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kb_id: Mapped[int] = mapped_column(ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True)
+    page_version_id: Mapped[int] = mapped_column(ForeignKey("wiki_page_versions.id", ondelete="CASCADE"), index=True)
+    # 保留原始 ID 用于追溯；引用在物理删除时置空，避免文档 ID 重用导致误关联。
+    doc_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    doc_ref_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True)
+
+
 class WikiEvidence(Base):
     """Wiki 内容 → 原文分块的证据关联。"""
     __tablename__ = "wiki_evidence"
