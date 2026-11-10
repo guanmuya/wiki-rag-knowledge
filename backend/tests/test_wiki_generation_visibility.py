@@ -760,3 +760,22 @@ def test_cross_shard_citation_stays_hidden_when_document_id_reused_in_another_kb
     assert reviewed.json()["version"]["id"] == version_id
     assert reviewed.json()["status_label"] == "来源已删除，待复核"
     assert replacement_name not in reviewed.text, "the reused ID must not reveal the other KB filename"
+
+
+def test_expected_version_id_rejects_a_stale_edit(visibility_env, tmp_path):
+    """界面随草稿提交的 expected_version_id 必须由编辑接口真正校验。"""
+    sessions, client, _ = visibility_env
+    case = _prepare(visibility_env, tmp_path, count=2, secret_no=1, old_source_no=2)
+    manager = _add_user(sessions, case, "manage")
+    version_id = _page(client, case, manager)["version"]["id"]
+    body = {"content_md": "## 人工复核\n\n这是一份长度足够的全新人工正文。"}
+
+    stale = client.put(_url(case), headers=manager,
+                       json={**body, "expected_version_id": version_id + 1000})
+    assert stale.status_code == 409, stale.text
+    assert _page(client, case, manager)["version"]["id"] == version_id
+
+    accepted = client.put(_url(case), headers=manager,
+                          json={**body, "expected_version_id": version_id})
+    assert accepted.status_code == 200, accepted.text
+    assert _page(client, case, manager)["version"]["id"] != version_id

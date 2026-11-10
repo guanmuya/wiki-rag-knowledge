@@ -120,7 +120,7 @@
 |---|---|---|
 | GET | `/api/kbs/{id}/wiki/tree` | 目录：`{items:[{id,slug,title,summary,status,human_locked,order_index,section_count}],total,mode,mode_label,wiki_ready,status_detail,empty_reason}` |
 | GET | `/api/kbs/{id}/wiki/pages/{slug}` | 页面详情：`{id,slug,title,summary,status,...,version:{id,version_no,content_md,origin,...},evidence:[...],related:[...]}`；无当前版本时 `version` 为 `null` |
-| PUT | `/api/kbs/{id}/wiki/pages/{slug}` | manage。`{content_md,summary?,note?}` 保存人工版本 → 重建该页索引 |
+| PUT | `/api/kbs/{id}/wiki/pages/{slug}` | manage。`{content_md,summary?,note?,expected_version_id?}` 保存人工版本 → 重建该页索引。`expected_version_id` 为草稿所基于的当前版本 ID，不匹配时返回 409；旧调用方不带该字段时，后端按正文识别来源已失效的旧草稿并同样拒绝（409） |
 | GET | `/api/kbs/{id}/wiki/pages/{slug}/versions` | 版本历史 |
 | POST | `/api/kbs/{id}/wiki/pages/{slug}/publish` | 发布草稿 |
 | POST | `/api/kbs/{id}/wiki/pages/{slug}/unlock` | 解除人工锁定（允许下次自动覆盖） |

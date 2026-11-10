@@ -584,11 +584,16 @@ export const wikiApi = {
     slug: string,
     content_md: string,
     summary?: string,
+    // 草稿基于的当前版本：后端据此拒绝覆盖已重新生成的版本。
+    expectedVersionId?: number | null,
     note?: string,
   ) =>
     request<{ ok: boolean; version_id: number; version_no: number; human_locked?: boolean }>(
       `/kbs/${kbId}/wiki/pages/${encodeURIComponent(slug)}`,
-      { method: 'PUT', body: { content_md, summary, note } },
+      { method: 'PUT', body: {
+        content_md, summary, note,
+        ...(expectedVersionId != null ? { expected_version_id: expectedVersionId } : {}),
+      } },
     ),
   versions: (kbId: number, slug: string) =>
     request<{ items: WikiPageVersion[] } | WikiPageVersion[]>(

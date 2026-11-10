@@ -57,6 +57,10 @@ export default function WikiTab({
   const mountedRef = useRef(true)
   const treeButtonRefs = useRef(new Map<string, HTMLButtonElement>())
   const focusSelectionRef = useRef(false)
+  // 撤销时记住草稿所基于的版本：只有同一版本恢复才保留草稿。
+  const revokedVersionIdRef = useRef<number | null>(null)
+  const editingRef = useRef(false)
+  const versionsOpenRef = useRef(false)
 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -78,8 +82,12 @@ export default function WikiTab({
   const [unlockOpen, setUnlockOpen] = useState(false)
   const [unlockBusy, setUnlockBusy] = useState(false)
 
+  useEffect(() => { editingRef.current = editing }, [editing])
+  useEffect(() => { versionsOpenRef.current = versionsOpen }, [versionsOpen])
+
   const markUnavailable = useCallback((targetSlug: string) => {
     if (!mountedRef.current || selectedSlugRef.current !== targetSlug) return
+    revokedVersionIdRef.current = detailRef.current?.version?.id ?? null
     unavailableRef.current = true
     revocationRef.current += 1
     pageRequestRef.current += 1
@@ -241,12 +249,14 @@ export default function WikiTab({
     return () => { pageRequestRef.current += 1 }
   }, [slug, loadPage])
 
-  // 已打开的页面也要复核可见性；成功复核不会覆盖正文或编辑中的草稿。
+  // 已打开的页面也要复核可见性；管理员同样要复核角色，避免降权后仍看到缓存内容。
+  // 复核发现当前版本变化时刷新正文/标题/关联，但不覆盖正在编辑的草稿。
   useEffect(() => {
-    if (isAdmin) return
     let alive = true
     let treeBusy = false
     let pageBusy = false
+    let versionsBusy = false
+    let versionsSeq = 0
     let verifiedTree: { revocationId: number; pages: WikiPage[] } | null = null
     let verifiedDetail: { revocationId: number; requestId: number; detail: WikiPageDetail } | null = null
     const tick = () => {
@@ -261,12 +271,42 @@ export default function WikiTab({
         if (!isCurrent() || !targetSlug || !unavailableRef.current || !verifiedTree || !verifiedDetail ||
             verifiedTree.revocationId !== revocationRef.current || verifiedDetail.revocationId !== revocationRef.current ||
             verifiedDetail.requestId !== pageRequestRef.current) return
-        // 恢复时使用新详情，但草稿一直保留，只有用户确认放弃才能切换。
-        detailRef.current = verifiedDetail.detail
-        setDetail(verifiedDetail.detail)
+        // 恢复时使用新详情。草稿所基于的版本若已变化，说明它是一份旧草稿，
+        // 必须丢弃，不能让已撤销的内容随新版本一起重新出现在编辑器里。
+        const detail = verifiedDetail.detail
+        const restoredId = detail.version?.id ?? null
+        const staleDraft = revokedVersionIdRef.current !== null &&
+          restoredId !== revokedVersionIdRef.current
+        detailRef.current = detail
+        setDetail(detail)
         setPages(verifiedTree.pages)
+        if (staleDraft) {
+          setEditing(false)
+          setDraft(detail.version?.content_md ?? '')
+          setDraftSummary(detail.page?.summary ?? '')
+        }
+        setVersionsOpen(false)
+        setViewVersion(null)
+        setVersions([])
         unavailableRef.current = false
         setUnavailable(false)
+        setDetailError(null)
+        setDetailLoading(false)
+        revokedVersionIdRef.current = null
+      }
+      const refreshDetail = (next: WikiPageDetail) => {
+        // 后台复核发现服务端换了当前版本：清掉旧的正文、标题和版本历史，
+        // 但编辑中的草稿不能被动覆盖（用户尚未确认放弃）。
+        if ((detailRef.current?.version?.id ?? null) === (next.version?.id ?? null)) return
+        detailRef.current = next
+        setDetail(next)
+        if (!editingRef.current) {
+          setDraft(next.version?.content_md ?? '')
+          setDraftSummary(next.page?.summary ?? '')
+        }
+        setVersionsOpen(false)
+        setViewVersion(null)
+        setVersions([])
         setDetailError(null)
         setDetailLoading(false)
       }
@@ -285,6 +325,7 @@ export default function WikiTab({
             if (list.length) selectSlug(list[0].slug)
             return
           }
+          // 目录成功返回却不再包含当前页：服务端已不再暴露这一页，任何角色都要撤销。
           if (!list.some((page) => page.slug === targetSlug)) {
             markUnavailable(targetSlug)
             return
@@ -295,11 +336,14 @@ export default function WikiTab({
           }
         }).catch((err: unknown) => {
           if (!isCurrent() || treeRequestId !== treeRequestRef.current || !isVisibilityError(err)) return
-          setPages([])
-          if (targetSlug) markUnavailable(targetSlug)
-          else {
-            setTreeLoading(false)
-            setTreeError(null)
+          // 整个目录请求失败不等于页面被撤销：管理员降权、网络抖动都先保留缓存内容。
+          if (!isAdmin) {
+            setPages([])
+            if (targetSlug) markUnavailable(targetSlug)
+            else {
+              setTreeLoading(false)
+              setTreeError(null)
+            }
           }
         }).finally(() => { treeBusy = false })
       }
@@ -310,12 +354,28 @@ export default function WikiTab({
           if (!isCurrent() || pageRequestId !== pageRequestRef.current ||
               revocationId !== revocationRef.current) return
           verifiedDetail = { revocationId, requestId: pageRequestId, detail: data }
-          restoreIfVisible()
+          if (unavailableRef.current) restoreIfVisible()
+          else refreshDetail(data)
         }).catch((err: unknown) => {
-          if (isCurrent() && pageRequestId === pageRequestRef.current && isVisibilityError(err)) {
+          if (!isAdmin && isCurrent() && pageRequestId === pageRequestRef.current && isVisibilityError(err)) {
             markUnavailable(targetSlug)
           }
         }).finally(() => { pageBusy = false })
+      }
+
+      if (targetSlug && versionsOpenRef.current && !versionsBusy) {
+        versionsBusy = true
+        const myVersionsSeq = ++versionsSeq
+        void wikiApi.versions(kb.id, targetSlug).then((data) => {
+          if (!isCurrent() || myVersionsSeq !== versionsSeq ||
+              revocationId !== revocationRef.current || unavailableRef.current) return
+          const list = Array.isArray(data) ? data : data.items ?? []
+          setVersions([...list].sort((a, b) => b.version_no - a.version_no))
+          setVersionsError(null)
+          // 历史列表变了就不能继续展示已经不在列表里的旧版本正文。
+          setViewVersion((current) => current && !list.some((v) => v.id === current.id) ? null : current)
+        }).catch(() => { /* 历史复核失败不隐藏页面 */ })
+          .finally(() => { versionsBusy = false })
       }
     }
     const timer = window.setInterval(tick, 5000)
@@ -424,7 +484,7 @@ export default function WikiTab({
     savingRef.current = true
     setSaving(true)
     try {
-      await wikiApi.save(kb.id, slug, draft, draftSummary || undefined)
+      await wikiApi.save(kb.id, slug, draft, draftSummary || undefined, detail.version?.id ?? undefined)
       if (!mountedRef.current || currentKbIdRef.current !== kb.id || selectedSlugRef.current !== slug ||
           unavailableRef.current || revocationRef.current !== revocationId) return
       setEditing(false)
@@ -473,9 +533,12 @@ export default function WikiTab({
     () => groupPages(unavailable ? pages.filter((page) => page.slug !== slug) : pages),
     [pages, unavailable, slug],
   )
-  const visibleRelated = (detail?.related ?? []).filter(
-    (related) => isAdmin || pages.some((item) => item.slug === related.slug),
-  )
+  // 关联标题以最新目录为准：详情响应里的标题可能是上一次复核前的旧值。
+  const visibleRelated = (detail?.related ?? []).flatMap((related) => {
+    const current = pages.find((item) => item.slug === related.slug)
+    if (!isAdmin && !current) return []
+    return [{ ...related, title: current?.title ?? related.title }]
+  })
 
   if (treeLoading) {
     return (
@@ -664,6 +727,7 @@ export default function WikiTab({
                       onChange={(e) => setDraftSummary(e.target.value)}
                       rows={2}
                       placeholder="页面摘要（可选）"
+                      disabled={saving}
                     />
                   </div>
                   <div className="field">
@@ -673,6 +737,7 @@ export default function WikiTab({
                       value={draft}
                       onChange={(e) => setDraft(e.target.value)}
                       spellCheck={false}
+                      disabled={saving}
                     />
                   </div>
                   <div className="tiny muted">

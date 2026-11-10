@@ -333,9 +333,11 @@ try {
   await unavailable()
   await noSecret('ALPHA_SECRET_TITLE', 'ALPHA_SECRET_BODY', 'BETA_SECRET_TITLE')
 
-  // System administrators are not polled and still see the escaped review notice.
+  // System administrators are revalidated against the server too: a stale admin
+  // role must not keep cached hidden content visible. They still see the escaped
+  // review notice, and a failing tree/detail request alone does not hide it.
   await mount({ isAdmin: true, canManage: true })
-  assert.equal(await page.evaluate(() => window.__pollCount()), 0)
+  assert.equal(await page.evaluate(() => window.__pollCount()), 1)
   await page.getByText('页面待复核', { exact: true }).waitFor()
   assert.equal(await page.locator('.insufficient-banner img').count(), 0)
   assert.equal(await page.locator('.insufficient-banner').innerText().then((text) => text.includes('<img src=x onerror=alert(1)>.txt')), true)

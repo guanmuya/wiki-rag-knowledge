@@ -94,9 +94,19 @@ def wiki_evidence(db: Session, page_version_id: int) -> list[dict]:
     ).scalars().all()
     if not rows:
         return []
-    doc_ids = {r.doc_id for r in rows if r.doc_id}
+    # ``doc_id`` 只是裸整数：来源文档被物理删除后，SQLite 可能把这个 ID 分给
+    # 另一份文档（甚至另一个知识库的文档）。只有仍指向活分块、且分块记录的
+    # 文档 ID / 知识库 ID 与证据一致时，才敢拿它去查文件名，否则会误显示
+    # 别人的文件名。已删除来源的名称由 deleted_generation_sources 单独展示。
+    chunk_ids = {r.chunk_id for r in rows if r.chunk_id is not None}
+    live_chunks = {c.id: (c.doc_id, c.kb_id) for c in db.execute(
+        select(models.Chunk).where(models.Chunk.id.in_(chunk_ids))).scalars()} if chunk_ids else {}
+    stable_doc_ids = {
+        r.doc_id for r in rows
+        if r.doc_id is not None and live_chunks.get(r.chunk_id) == (r.doc_id, r.kb_id)
+    }
     docs = {d.id: d for d in db.execute(
-        select(models.Document).where(models.Document.id.in_(doc_ids))).scalars()} if doc_ids else {}
+        select(models.Document).where(models.Document.id.in_(stable_doc_ids))).scalars()} if stable_doc_ids else {}
     ver_ids = {r.doc_version_id for r in rows if r.doc_version_id}
     vers = {v.id: v for v in db.execute(
         select(models.DocumentVersion).where(models.DocumentVersion.id.in_(ver_ids))).scalars()} if ver_ids else {}
@@ -122,6 +132,22 @@ def update_wiki_page(kb_id: int, slug: str, body: schemas.WikiPageUpdateIn,
         raise HTTPException(status_code=400, detail="正文内容过短")
 
     previous_version_id = page.current_version_id
+    # 版本并发：旧草稿不能盖掉已经用有效来源重新生成的版本。
+    if body.expected_version_id is not None and body.expected_version_id != previous_version_id:
+        raise HTTPException(status_code=409, detail="版本冲突：页面已更新，请刷新后重新编辑")
+    if body.expected_version_id is None:
+        # 旧调用方不带版本令牌：若提交的正文与某个「来源已失效」的历史版本
+        # 逐字相同，说明它是一份缓存的旧草稿，拒绝重新公开已删除内容。
+        stale = db.execute(
+            select(models.WikiPageVersion.id)
+            .where(models.WikiPageVersion.page_id == page.id,
+                   models.WikiPageVersion.id != previous_version_id,
+                   wiki_visibility.has_deleted_source(models.WikiPageVersion.id))
+        ).scalars().all()
+        for old_id in stale:
+            original = db.get(models.WikiPageVersion, old_id)
+            if original and (original.content_md or "").strip() == content:
+                raise HTTPException(status_code=409, detail="版本冲突：草稿基于已失效的页面版本，请刷新后重新编辑")
     last_no = db.execute(
         select(models.WikiPageVersion.version_no).where(models.WikiPageVersion.page_id == page.id)
         .order_by(models.WikiPageVersion.version_no.desc()).limit(1)
