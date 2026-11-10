@@ -30,9 +30,15 @@
 | POST | `/api/auth/login` | `{username,password}` → `{token, user}` |
 | GET | `/api/auth/me` | → `{user, permissions:{is_admin, kb_grants:[{kb_id,level}]}}` |
 | POST | `/api/auth/change-password` | `{old_password,new_password}` → `{ok:true}` |
-| POST | `/api/auth/logout` | → `{ok:true}`（无状态令牌，前端丢弃即可） |
+| POST | `/api/auth/logout` | → `{ok:true}`（服务端递增令牌版本，前端丢弃的旧 token 立即失效） |
 
 `user` 结构：`{id, username, display_name, role, status, must_change_password, created_at, last_login_at}`
+
+**令牌撤销（P1-6）**：令牌载荷带 `ver`，即签发时该用户的令牌版本。
+`POST /api/auth/change-password`、管理员 `POST /api/users/{id}/reset-password`、
+`POST /api/auth/logout` 都会递增该用户的版本，使其**此前签发的全部令牌立即失效**——
+之后用旧 token 调任意需鉴权接口均返回 401，须重新登录取新令牌。
+因此上述三类操作成功后，前端应丢弃本地令牌；角色与知识库授权仍每次实时查库判定。
 
 ## 2. 元信息
 
@@ -385,5 +391,6 @@ v1 全部要求管理员令牌；CLI 核心以应用进程身份执行本机命�
 
 - 令牌存 `localStorage.wrk_token`；401 时清空并跳登录页。
 - `must_change_password=true` 登录后强制进入改密弹窗。
+- 改密 / 登出成功后旧 token 已失效，须丢弃本地令牌并重新登录，不能继续带旧 token 调接口。
 - 任务进度用 2 秒轮询 `GET /api/tasks?status=queued,running`。
 - 问答页左栏会话、顶部知识库多选、右栏证据卡片可折叠查看原文依据。

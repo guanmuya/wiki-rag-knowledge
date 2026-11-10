@@ -1,7 +1,9 @@
 """密码哈希、会话令牌、供应商密钥加密。
 
 - 密码：PBKDF2-HMAC-SHA256 加随机盐，迭代次数可调，存储格式为 algo$iter$salt$hash。
-- 令牌：HMAC-SHA256 签名的无状态 token，载荷含 uid/role/exp，密钥来自独立 secret 文件。
+- 令牌：HMAC-SHA256 签名的 token，载荷含 uid/role/exp/ver/n，密钥来自独立 secret 文件。
+  ver 是签发时用户的令牌版本，鉴权时与 users.token_version 比对，不等即作废（P1-6）。
+  n 是每次签发的随机 nonce，仅保证令牌唯一、不参与撤销判定。
 - 供应商密钥：Fernet（AES-128-CBC + HMAC）加密，密钥文件与业务数据库分离。
 """
 from __future__ import annotations
@@ -109,9 +111,18 @@ def _b64d(txt: str) -> bytes:
     return base64.urlsafe_b64decode(txt + "=" * (-len(txt) % 4))
 
 
-def issue_token(user_id: int, role: str, *, ttl_minutes: int | None = None) -> str:
+def issue_token(user_id: int, role: str, *, token_version: int = 0,
+                ttl_minutes: int | None = None) -> str:
+    """签发令牌：把签发时用户的令牌版本记进 ver，供 deps.get_current_user 校验撤销。
+
+    默认 0 是为了兼容脚本 / 测试里直接调用 issue_token(uid, role) 的旧写法；
+    真正的登录路径必须传入用户当前的 token_version。
+    """
     ttl = (ttl_minutes if ttl_minutes is not None else config.ACCESS_TOKEN_TTL_MINUTES) * 60
-    payload = {"uid": user_id, "role": role, "exp": int(time.time()) + ttl, "n": secrets.token_hex(6)}
+    payload = {
+        "uid": user_id, "role": role, "exp": int(time.time()) + ttl,
+        "ver": int(token_version), "n": secrets.token_hex(6),
+    }
     body = _b64e(json.dumps(payload, separators=(",", ":")).encode())
     sig = _b64e(hmac.new(token_key(), body.encode(), hashlib.sha256).digest())
     return f"{body}.{sig}"
