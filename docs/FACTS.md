@@ -76,13 +76,14 @@
 
 ## 2. 测试基线（全仓唯一记录）
 
-> **这里回答体检清单遗留的开放问题**：CI 尚未建立时，测试基线以哪次运行输出为准、
-> 写在哪里才不会再散落多处？
+> **这里回答体检清单遗留的开放问题**：测试基线以哪次运行输出为准、写在哪里才不会
+> 再散落多处？
 >
 > **答**：以**一次真实全量运行**为准；原始输出随仓库保存在
 > `docs/evidence/pytest-baseline.txt`，数字**只写在本节这一处**；
 > 其余六份文档一律改成指向本节的链接，不再自带数字。
-> CI（批次二 / P1-1）建立后由 CI 自动产出并更新本节，不再手工写死。
+> **CI（批次二 / P1-1，`.github/workflows/ci.yml`）已建立**，由它在每次 push / PR 上
+> 自动产出权威运行输出，维护口径见 §2.4。
 
 ### 2.1 运行口径
 
@@ -128,14 +129,21 @@
 
 ### 2.4 维护约定（避免再次散落）
 
+> 批次二 P1-1 的 CI 已落地，本节的「CI 建立后如何维护」从约定变成可执行流程。
+> CI 首次运行前，§2.1 / §2.2 仍沿用批次一那次实跑作为初始基线；首次 CI 通过后按第 3 条同步。
+
 1. **只有本节可以出现 passed/skipped 数字**。六份文档一律写「见 `docs/FACTS.md` §2」，
-   不写数字、不写「约 580 项」这类近似值。
-2. 每次改动后跑一次全量，把输出覆盖 `docs/evidence/pytest-baseline.txt`，
-   并把 §2.1 的「本轮实跑」与 §2.2 的转录同步更新。
-3. **不得新增 skip**；若环境变化导致新增 skip，必须在本节写明是哪条用例、因何跳过。
-4. CI（体检清单 P1-1 / 批次二）建立后，由 CI 的一次实际运行自动产出该数字并更新本节；
-   在此之前，以本节最近一次真实运行输出为准。**这正是开放问题的落点**：CI 未开工时，
-   不把数字临时塞回六份文档，而是先固定在这一个可追溯的文件里。
+   不写数字、不写「约 580 项」这类近似值；README 顶部只放 CI 状态徽标。
+2. **CI 是权威运行**：`.github/workflows/ci.yml` 在每次 push 到 `master` / PR 上，用
+   `backend/requirements-dev.txt` + `backend/constraints.txt` 装出与本地一致的环境
+   （Python 3.13），运行 `python -m pytest backend/tests -q`，并把完整 stdout 存为名为
+   `pytest-baseline` 的 workflow artifact（保留 30 天）。
+3. **更新基线**：从**最近一次 CI 通过**的 artifact 取数，覆盖
+   `docs/evidence/pytest-baseline.txt`，并同步 §2.1 的「本轮实跑」与 §2.2 的转录。
+   CI 未通过不得更新数字；本机为排障临时跑出的数字不写进本节。
+   （CI 不回写仓库：自动写回需要带写权限的机器人提交，最小 CI 不引入该权限。）
+4. **不得新增 skip**；若环境变化导致新增 skip，必须在本节写明是哪条用例、因何跳过。
+5. 本节数字若与 CI artifact 不一致，以 CI artifact 为准，并在本节注明更正原因。
 
 ---
 
@@ -187,8 +195,13 @@
   按 `docs/EXPERIMENT.md:3`「凡未能实测的一律标注待实验」的仓库约定保留。
 - **不覆盖第一波的实验结果**：`docs/results/` 16 个文件、`docs/EXPERIMENT.md` §8、
   `docs/THESIS.md` §4 原样保留。
-- **不建 CI、不锁依赖、不补前端测试**（批次二 P1-1 ~ P1-3）；本波只把「CI 建立前
-  基线写在哪里」这件事定下来，见 §2.4。
+- **本波（批次一）不建 CI、不锁依赖、不补前端测试**；当时只把「CI 建立前基线写在哪里」
+  定下来。批次二之后 P1-1（CI）、P1-2（锁依赖）与 P1-3（前端自动化测试）均已落地：见
+  `.github/workflows/ci.yml`、`backend/requirements*.txt`、`backend/constraints.txt`、
+  `frontend/tests/` 与 `frontend/package.json` 的 `test` 脚本；§2.4 的维护约定已同步更新。
+  CI 现在跑四项检查（后端 pytest、前端 `typecheck` / `build:web` / `test`），任意一项失败
+  即阻断合并。前端 E2E 用确定性 mock 拦截全部 `/api/**`，离线可重复，
+  详见 `frontend/tests/README.md`。
 - **不改产品代码**（`backend/app/**`、`frontend/**`）；本波只动文档与新增证据/归档文件。
 - 不清理写死的本机路径、`.dsh-kanban.json`、截图等 P2 项；这些仍在
   `docs/HEALTH_CHECK.md` §4.3 的清单里，可在答辩准备阶段并行处理。

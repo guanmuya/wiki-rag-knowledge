@@ -1,0 +1,9 @@
+# 打包依赖分组 = 运行时锁 + 固定版本 PyInstaller
+# 仅打 wrk-backend.exe 时用，由 frontend/scripts/build-backend.mjs 自动安装/校验。
+# 安装命令（脚本内已实现）：
+#   python -m pip install -r backend/requirements-build.txt -c backend/constraints.txt
+-r requirements.txt
+
+# 6.11.1（2024-11-10）自 6.10.0 起正式支持 Python 3.13（见官方 CHANGES）。
+# 固定它是为了让两台机器打出的 wrk-backend.exe 可比对；改动需同步文档与脚本注释。
+pyinstaller==6.11.1
