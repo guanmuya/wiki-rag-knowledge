@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from .. import models, schemas, serializers, wiki_visibility
@@ -70,6 +70,19 @@ def wiki_page(kb_id: int, slug: str, db: Session = Depends(get_db),
         "created_at": serializers.iso(version.created_at),
     } if version else None
     data["evidence"] = wiki_evidence(db, version.id) if version else []
+    if user.role == models.Role.admin.value:
+        deleted_sources = db.execute(
+            select(models.WikiGenerationSource.doc_id, models.Document.filename)
+            .outerjoin(models.Document, models.Document.id == models.WikiGenerationSource.doc_ref_id)
+            .where(models.WikiGenerationSource.page_version_id == version.id,
+                   or_(models.Document.id.is_(None), models.Document.deleted.is_(True)))
+            .distinct()
+            .order_by(models.WikiGenerationSource.doc_id)
+        ).all() if version else []
+        data["deleted_generation_sources"] = [
+            {"id": doc_id, "name": filename if filename is not None else f"已不可用的文档 #{doc_id}"}
+            for doc_id, filename in deleted_sources
+        ]
     data["related"] = wiki.related_pages(db, kb_id, page, include_hidden=user.role == models.Role.admin.value)
     return data
 
@@ -108,6 +121,7 @@ def update_wiki_page(kb_id: int, slug: str, body: schemas.WikiPageUpdateIn,
     if len(content) < 10:
         raise HTTPException(status_code=400, detail="正文内容过短")
 
+    previous_version_id = page.current_version_id
     last_no = db.execute(
         select(models.WikiPageVersion.version_no).where(models.WikiPageVersion.page_id == page.id)
         .order_by(models.WikiPageVersion.version_no.desc()).limit(1)
@@ -119,6 +133,17 @@ def update_wiki_page(kb_id: int, slug: str, body: schemas.WikiPageUpdateIn,
     )
     db.add(version)
     db.flush()
+    # 继承被编辑版本的全部生成输入；先取旧指针，避免误用最新历史版本。
+    if previous_version_id is not None:
+        sources = db.execute(
+            select(models.WikiGenerationSource.doc_id, models.WikiGenerationSource.doc_ref_id).where(
+                models.WikiGenerationSource.page_version_id == previous_version_id
+            ).distinct()
+        )
+        for doc_id, doc_ref_id in sources:
+            db.add(models.WikiGenerationSource(
+                kb_id=kb_id, page_version_id=version.id, doc_id=doc_id, doc_ref_id=doc_ref_id,
+            ))
     page.current_version_id = version.id
     page.human_locked = True
     page.status = models.WikiPageStatus.published.value
@@ -127,25 +152,18 @@ def update_wiki_page(kb_id: int, slug: str, body: schemas.WikiPageUpdateIn,
         page.summary = body.summary
     db.add(page)
 
-    # 保留原有证据关联（人工编辑不破坏来源链），并按新正文补充引用
+    # 保留被编辑版本的证据关联（人工编辑不破坏来源链）。
     existing = db.execute(
-        select(models.WikiEvidence).where(models.WikiEvidence.page_version_id == page.current_version_id)
+        select(models.WikiEvidence).where(models.WikiEvidence.page_version_id == version.id)
     ).scalars().all()
-    if not existing:
-        prev = db.execute(
-            select(models.WikiPageVersion).where(
-                models.WikiPageVersion.page_id == page.id,
-                models.WikiPageVersion.id != version.id,
-            ).order_by(models.WikiPageVersion.version_no.desc()).limit(1)
-        ).scalar_one_or_none()
-        if prev:
-            for r in db.execute(
-                select(models.WikiEvidence).where(models.WikiEvidence.page_version_id == prev.id)
-            ).scalars():
-                db.add(models.WikiEvidence(
-                    kb_id=kb_id, page_version_id=version.id, chunk_id=r.chunk_id,
-                    doc_id=r.doc_id, doc_version_id=r.doc_version_id,
-                    quote=r.quote, locator=r.locator))
+    if previous_version_id is not None and not existing:
+        for r in db.execute(
+            select(models.WikiEvidence).where(models.WikiEvidence.page_version_id == previous_version_id)
+        ).scalars():
+            db.add(models.WikiEvidence(
+                kb_id=kb_id, page_version_id=version.id, chunk_id=r.chunk_id,
+                doc_id=r.doc_id, doc_version_id=r.doc_version_id,
+                quote=r.quote, locator=r.locator))
 
     # 重建该页检索单元
     db.execute(delete(models.WikiSection).where(models.WikiSection.page_version_id == version.id))

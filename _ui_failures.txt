@@ -1,0 +1,36 @@
+﻿node : file:///C:/Users/Administrator/.tds/workspaces/01a1c5ee-1a9f-76b1-bf85-a340be5d73ed/frontend/scripts/verify-wiki
+-source-revocation.mjs:227
+At line:1 char:285
++ ... -Path $c)"; node scripts/verify-wiki-source-revocation.mjs 2>&1 | Out ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (file:///C:/User...ocation.mjs:227:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  if (findings.length) throw new Error(`Revocation regressions:\n${findings.join('\n')}`)
+                             ^
+
+Error: Revocation regressions:
+current version, historical view and related title refresh: DOM leaked: ALPHA_SECRET_TITLE
+
+true !== false
+
+history filtered when current version is unchanged: DOM leaked: HISTORY_SECRET_BODY
+
+true !== false
+
+revoked draft remains hidden after a different version returns: DOM leaked: OLD_DRAFT_PRIVATE_CONTENT
+
+true !== false
+
+stale admin role is revalidated against server: DOM leaked: ALPHA_SECRET_TITLE
+
+true !== false
+
+in-flight save freezes both inputs and includes original version: Expected values to be strictly equal:
+
+false !== true
+
+    at file:///C:/Users/Administrator/.tds/workspaces/01a1c5ee-1a9f-76b1-bf85-a340be5d73ed/frontend/scripts/verify-wiki
+-source-revocation.mjs:227:30
+
+Node.js v24.18.0
