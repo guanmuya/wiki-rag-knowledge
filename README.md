@@ -199,8 +199,9 @@ Wiki-Rag-Knowledge/
 │   └── requirements.txt
 ├── frontend/
 │   ├── electron/main.cjs         # sidecar 生命周期、失败原因翻译、日志
-│   ├── scripts/                  # dev.mjs build.mjs build-backend.mjs
+│   ├── scripts/                  # dev.mjs build.mjs build-backend.mjs + verify-* 人工验收辅助（见 scripts/README.md）
 │   ├── src/                      # pages / components / api.ts / auth.tsx
+│   ├── tests/                    # 自动化测试（pnpm test，纳入 CI；见 tests/README.md）
 │   └── electron-builder.yml      # NSIS 配置
 ├── demo_data/                    # 3 篇演示文档 + fixtures（表格压力样本）
 ├── docs/                         # DESIGN.md API.md EXPERIMENT.md HANDOFF.md
@@ -245,7 +246,7 @@ Wiki-Rag-Knowledge/
 | `WRK_MAX_UPLOAD_MB` | `50` | 单文件上限，超限拒绝并给出中文原因 |
 | `WRK_ADMIN_USERNAME` | `admin` | 自动建号时的用户名 |
 | `WRK_ADMIN_PASSWORD` | 空 | **非空才自动建号**；空则等用户在 `/setup` 建 |
-| `WRK_TOKEN_TTL_MINUTES` | `720` | JWT 有效期（令牌无状态，权限每次实时查库） |
+| `WRK_TOKEN_TTL_MINUTES` | `720` | 令牌有效期（分钟）。令牌带用户版本号 `ver`，改密 / 重置密码 / 登出递增版本使旧令牌立即失效；权限每次实时查库 |
 | `WRK_PBKDF2_ITER` | `240000` | 口令哈希迭代次数（测试里降到 2000 提速） |
 | `WRK_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173` | 开发态跨域白名单 |
 
@@ -357,7 +358,7 @@ Wiki-Rag-Knowledge/
 | 分组 | 代表接口 |
 | --- | --- |
 | 初始化 | `GET /setup/status`、`POST /setup/admin`（仅无管理员时可调，之后永久 409）、`GET /setup/org` |
-| 认证 | `POST /auth/login`、`GET /auth/me`、`POST /auth/change-password` |
+| 认证 | `POST /auth/login`、`GET /auth/me`、`POST /auth/change-password`、`POST /auth/logout` |
 | 知识库 | `GET/POST /kbs`、`PATCH /kbs/{id}`、`POST /kbs/{id}/rebuild`、`GET /kbs/{id}/cost` |
 | 文档与任务 | `POST /kbs/{id}/documents`、`GET /documents/{id}/chunks`、`POST /documents/{id}/reindex`（文档级重试）、`GET /tasks`、`POST /tasks/{id}/retry` |
 | Wiki | `GET /kbs/{id}/wiki/tree`、`PUT /kbs/{id}/wiki/pages/{slug}`（人工校对）、`POST .../unlock` |
@@ -366,6 +367,8 @@ Wiki-Rag-Knowledge/
 | 个人 Agent（admin） | `GET /agent/cores`、`POST /agent/sessions`、`POST /agent/sessions/{id}/messages`、`GET /agent/runs/{id}/events`、`POST /agent/plugins/rescan` |
 
 `/api/meta` 与 `/api/health` 无需登录，分别用于前端判断 `needs_setup` / `offline_models` 与存活探测。
+
+令牌可撤销：改密、管理员重置密码、登出都会让该用户此前签发的令牌立即失效（旧 token 调需鉴权接口返回 401），需重新登录；完整契约见 [docs/API.md](docs/API.md) §1。
 
 ---
 
@@ -394,8 +397,23 @@ python -m pytest backend/tests/test_wiki_scale.py -q
 cd frontend && pnpm typecheck && pnpm build:web
 ```
 
+前端自动化测试（体检清单 P1-3）：
+
+```bash
+cd frontend && pnpm test
+```
+
+`pnpm test` 用 Node 内置 `node:test` 加项目已有的 `playwright` 跑 4 条真实浏览器 E2E：
+未登录重定向、有效令牌恢复登录态、登录失败提示，以及「登录 → 新建知识库 → 智能问答收到回答」主链路。
+测试进程内启动 Vite，所有 `/api/**` 由 Playwright 拦截成确定性内存 mock，
+**不启动后端、不需要在线模型或凭据、不需要灌语料**，因此离线可重复、结果稳定。
+首次运行前装一次浏览器：`cd frontend && pnpm exec playwright install chromium`。
+详见 [frontend/tests/README.md](frontend/tests/README.md)；
+`frontend/scripts/verify-*` 是一次性人工验收辅助脚本，不是测试，也不进 CI。
+
 > **CI（`.github/workflows/ci.yml`）**：push 到 `master` 或开 PR 时，在 `windows-latest`
-> 上依次运行 `python -m pytest backend/tests -q`、`pnpm typecheck`、`pnpm build:web`；
+> 上依次运行 `python -m pytest backend/tests -q`、`pnpm typecheck`、`pnpm build:web`、
+> `pnpm test` 四项检查（跑 E2E 前单独安装 Playwright Chromium）；
 > 后端 Python 固定 3.13、依赖取自 `backend/requirements-dev.txt` +
 > `backend/constraints.txt`，前端用 `pnpm install --frozen-lockfile`。任意一步失败即
 > CI 失败。要让「CI 全绿」成为合并前置条件，需在 GitHub 仓库

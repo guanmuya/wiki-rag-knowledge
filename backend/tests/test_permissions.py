@@ -117,7 +117,9 @@ def test_new_user_must_change_password(app_client, admin_headers):
     ok = app_client.post("/api/auth/change-password", headers=headers,
                          json={"old_password": "Init#Passw0rd1", "new_password": "Changed#2026x"})
     assert ok.status_code == 200
-    assert app_client.get("/api/auth/me", headers=headers).json()["user"]["must_change_password"] is False
+    # 改密会让此前签发的令牌失效（P1-6），用新口令重新登录后再查 user。
+    fresh = _login(app_client, "emp_chpwd", "Changed#2026x")
+    assert app_client.get("/api/auth/me", headers=fresh).json()["user"]["must_change_password"] is False
 
 
 def test_duplicate_username_rejected(app_client, admin_headers):

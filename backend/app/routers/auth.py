@@ -23,7 +23,7 @@ def login(body: schemas.LoginIn, db: Session = Depends(get_db)):
     db.add(user)
     audit(db, user, "login", target=user.username)
     db.commit()
-    token = security.issue_token(user.id, user.role)
+    token = security.issue_token(user.id, user.role, token_version=user.token_version)
     return {"token": token, "user": serializers.user_out(db, user)}
 
 
@@ -59,6 +59,8 @@ def change_password(body: schemas.ChangePasswordIn, db: Session = Depends(get_db
         raise HTTPException(status_code=400, detail="新密码不能与原密码相同")
     user.password_hash = security.hash_password(body.new_password)
     user.must_change_password = False
+    # 改密即撤销：递增令牌版本，此前签发的全部令牌立刻失效（P1-6）。
+    user.token_version += 1
     db.add(user)
     audit(db, user, "change_password", target=user.username)
     db.commit()
@@ -67,6 +69,9 @@ def change_password(body: schemas.ChangePasswordIn, db: Session = Depends(get_db
 
 @router.post("/auth/logout")
 def logout(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
+    # 服务端真正撤销：前端丢弃令牌之外，递增版本让该 token 不再被任何接口接受（P1-6）。
+    user.token_version += 1
+    db.add(user)
     audit(db, user, "logout", target=user.username)
     db.commit()
     return {"ok": True}
@@ -151,6 +156,8 @@ def reset_password(user_id: int, body: schemas.ResetPasswordIn, db: Session = De
         raise HTTPException(status_code=400, detail=err)
     user.password_hash = security.hash_password(body.new_password)
     user.must_change_password = True
+    # 管理员重置口令同样撤销该用户此前签发的全部令牌（P1-6）。
+    user.token_version += 1
     db.add(user)
     audit(db, admin, "reset_password", target=user.username)
     db.commit()

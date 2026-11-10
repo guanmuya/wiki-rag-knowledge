@@ -196,9 +196,12 @@
 - **不覆盖第一波的实验结果**：`docs/results/` 16 个文件、`docs/EXPERIMENT.md` §8、
   `docs/THESIS.md` §4 原样保留。
 - **本波（批次一）不建 CI、不锁依赖、不补前端测试**；当时只把「CI 建立前基线写在哪里」
-  定下来。批次二之后 P1-1（CI）与 P1-2（锁依赖）已落地：见
-  `.github/workflows/ci.yml`、`backend/requirements*.txt`、`backend/constraints.txt`，
-  §2.4 的维护约定已同步更新；P1-3（前端自动化测试）仍待下一波，纳入 CI 后接手。
+  定下来。批次二之后 P1-1（CI）、P1-2（锁依赖）与 P1-3（前端自动化测试）均已落地：见
+  `.github/workflows/ci.yml`、`backend/requirements*.txt`、`backend/constraints.txt`、
+  `frontend/tests/` 与 `frontend/package.json` 的 `test` 脚本；§2.4 的维护约定已同步更新。
+  CI 现在跑四项检查（后端 pytest、前端 `typecheck` / `build:web` / `test`），任意一项失败
+  即阻断合并。前端 E2E 用确定性 mock 拦截全部 `/api/**`，离线可重复，
+  详见 `frontend/tests/README.md`。
 - **不改产品代码**（`backend/app/**`、`frontend/**`）；本波只动文档与新增证据/归档文件。
 - 不清理写死的本机路径、`.dsh-kanban.json`、截图等 P2 项；这些仍在
   `docs/HEALTH_CHECK.md` §4.3 的清单里，可在答辩准备阶段并行处理。

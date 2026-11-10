@@ -85,6 +85,12 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(16), default=Role.employee.value)
     status: Mapped[str] = mapped_column(String(16), default=UserStatus.active.value)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 令牌版本（P1-6）：改密 / 重置密码 / 登出时递增，签发令牌把当时的版本写进
+    # 载荷；鉴权时与这里比对，不等即作废。放在用户表而不是独立表——撤销是
+    # 「该用户此前所有令牌一次性失效」，一个计数器足够，不必维护黑名单。
+    # 老库靠 db.ensure_sqlite_columns() 自动 ALTER TABLE ADD COLUMN，故必须有
+    # DDL 默认值（server_default="0"），让已有账号从版本 0 起算。
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow)
     last_login_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)

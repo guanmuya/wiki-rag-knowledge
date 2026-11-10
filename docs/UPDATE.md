@@ -180,7 +180,7 @@ rclone copy frontend/release/updates/ oss:wrk-updates/ --progress
 
 | 变量 | 作用 |
 |---|---|
-| `WRK_UPDATE_URL` | 强制使用 generic 源（覆盖配置文件），本地联调用 |
+| `WRK_UPDATE_URL` | 强制使用 generic 源（覆盖配置文件），本地联调用；打包版必须 HTTPS，开发版仅放行本机回环明文源（见 §6.3） |
 | `WRK_UPDATE_DEV=1` | 开发模式下也启用更新检查 |
 | `WRK_UPDATE_DISABLE=1` | 完全禁用更新检查 |
 
@@ -212,18 +212,56 @@ rclone copy frontend/release/updates/ oss:wrk-updates/ --progress
    ```bash
    cd release/updates && python -m http.server 8899
    ```
-4. 用**已打包**的 1.0.1 程序指向本地源启动：
+4. 用**未打包的开发模式**指向本地源启动（打包版会拒绝明文 HTTP 源，含回环地址，见 §6.3）：
    ```bash
-   cd release/win-unpacked
-   WRK_UPDATE_URL=http://127.0.0.1:8899 ./企业知识库.exe
+   cd frontend
+   WRK_UPDATE_URL=http://127.0.0.1:8899 pnpm start
+   # 打包版会拒绝明文 HTTP 源：改用自签 HTTPS 静态服务，并把 URL 填 https://127.0.0.1:8899（见 §6.3）
    ```
    日志（`%APPDATA%\wiki-rag-desktop\logs\main.log`）应出现「发现新版本 1.0.2」和「下载完成」。
 
-## 6. 签名与安全
+## 6. 签名与安全（P1-9 风险书面记录）
 
-- 未做代码签名时安装包能更新，但 SmartScreen 会提示；正式交付建议买代码签名证书，并在 `electron-builder.yml` 配 `win.certificateFile` / `certificatePassword`。
-- electron-updater 会校验 `latest.yml` 里的 sha512，下载被篡改会直接失败；但它不校验发布者签名，所以更新源本身必须是可信 HTTPS。
+> 本节是 `docs/HEALTH_CHECK.md` §4.2 P1-9 要求的风险留档：**本项目当前没有代码签名证书，且更新链路允许「开发模式下的本机明文回环源」**。签名校验依赖证书，属于外部凭据，需用户单独授权后才能引入；在此之前按下面口径交付。
+
+### 6.1 当前防线（已落地）
+
+- 所有 generic 更新源（`update-config.json` / `sources` / `WRK_UPDATE_URL` / `app-update.yml` 兜底）在 `frontend/electron/update-url.cjs` 统一校验：**打包版必须 HTTPS**，明文源被拒绝后直接禁用更新器，不会触发自动下载安装。
+- `frontend/dev-app-update.yml` 不再预置明文 HTTP 地址，交付配置里没有可直连的明文更新源。
+- electron-updater 仍校验 `latest.yml` 里的 sha512，下载内容被改动会直接失败。
+- 渲染进程开启 `sandbox: true` 与 CSP；初始管理员口令不再落 `main.log`（见 §6.4）。
+
+### 6.2 风险一：无发布者签名
+
+`frontend/electron-builder.yml` 的 `forceCodeSigning: false`、`win.signAndEditExecutable: true` 表示安装包没有 Authenticode 签名。electron-updater 只校验 sha512（完整性），**不校验发布者身份**：只要有人能替换更新源上的 `latest.yml` 与其指向的安装包，就能把任意程序推给客户端；而 `autoDownload=true` + `autoInstallOnAppQuit=true` 会让这个过程自动完成（下载完弹一次「立即重启安装 / 稍后」，选稍后也会在退出时安装）。此外未签名安装包会触发 Windows SmartScreen 提示。
+
+**残余风险等级**：中/高。缓解依赖「更新源是可信 HTTPS 且源服务器不被攻破」这一前提，不能替代签名。
+
+**后续步骤（需用户点头，涉及新增外部凭据）**：
+
+1. 申请代码签名证书（OV/EV）或使用组织的签名服务；
+2. 在 `electron-builder.yml` 配 `win.certificateFile` / `certificatePassword`（或 `CSC_LINK` / `CSC_KEY_PASSWORD` 环境变量），把 `forceCodeSigning` 改为 `true`；
+3. 在 `updater.cjs` 打开 electron-updater 的签名校验（`verifyUpdateCodeSignature`），并用一次真实发版验证「篡改安装包 → 更新被拒绝」；
+4. 复测 §3 发版流程与 §2.1 的更新链路。
+
+在此之前**不要**把 `autoDownload` 关掉：关掉后 `update-downloaded` 永不触发，关于页「安装」按钮（要求 `status==='ready'`）会彻底失效，反而破坏更新链路。
+
+### 6.3 风险二：开发模式允许明文 HTTP 回环源
+
+开发（未打包）模式下，`WRK_UPDATE_URL=http://127.0.0.1:8899` 这类**本机回环**明文源仍被放行，用于 `python -m http.server` 本地联调（见 §5）。回环流量不经过外部网络，中间人风险局限于开发机本身；**打包版一律拒绝任何明文源，包括回环地址**。
+
+**残余风险**：若开发机上已有恶意进程，可劫持回环端口喂给开发版客户端一个伪造的 `latest.yml`；仅影响开发机，不影响交付给用户的数据。
+
+**后续步骤（无需凭据）**：
+
+1. 本地联调改用自签 HTTPS 静态服务，`WRK_UPDATE_URL` 填 `https://127.0.0.1:8899`；
+2. 或保持回环明文，但开发机上不要同时运行不可信进程；
+3. 若将来确实需要在交付环境放行非 HTTPS 源，须先在此处补一条书面风险说明并经用户确认，不要直接改 `update-url.cjs` 的校验规则。
+
+### 6.4 其它
+
 - 不要把 GitHub PAT 打进客户端：私有仓库 + token 的方案等于把 token 发给所有用户。
+- 初始管理员明文口令已不再写 `main.log`：`main.cjs` 的 `log()` 统一脱敏，明文只在首次部署弹窗出现一次，弹窗关闭或首次改密成功后清除内存中的凭据；兜底页 `getLogs` 因此也读不到口令。
 
 ## 7. 回滚
 

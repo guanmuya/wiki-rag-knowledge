@@ -153,3 +153,26 @@ def test_repo_database_upgrades_cleanly(tmp_path):
     with engine.begin() as conn:
         conn.execute(text("SELECT id, kind, meta FROM chunks LIMIT 1"))
     engine.dispose()
+
+
+def test_missing_user_token_version_is_added_with_default(tmp_path):
+    """老库缺 users.token_version 时自动补列，已有账号从版本 0 起算（P1-6）。
+
+    令牌撤销依赖这一列：桌面版升级后若没补上，鉴权读版本就会 500。
+    """
+    db_path, engine = _make_old_db(tmp_path, [("users", "token_version")])
+    assert "token_version" not in _columns(db_path, "users"), "构造旧库失败"
+
+    added = ensure_sqlite_columns(engine, models.Base.metadata)
+
+    assert "users.token_version" in added
+    assert "token_version" in _columns(db_path, "users")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO users (username, display_name, password_hash, role, status, "
+            "must_change_password, created_at) "
+            "VALUES ('legacy_user', '', 'x', 'employee', 'active', 0, '2026-01-01 00:00:00')"))
+        row = conn.execute(text(
+            "SELECT token_version FROM users WHERE username='legacy_user'")).one()
+    assert row[0] == 0, "老账号补列后应从版本 0 起算"
+    engine.dispose()
