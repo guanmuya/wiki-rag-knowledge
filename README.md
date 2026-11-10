@@ -245,7 +245,7 @@ Wiki-Rag-Knowledge/
 | `WRK_MAX_UPLOAD_MB` | `50` | 单文件上限，超限拒绝并给出中文原因 |
 | `WRK_ADMIN_USERNAME` | `admin` | 自动建号时的用户名 |
 | `WRK_ADMIN_PASSWORD` | 空 | **非空才自动建号**；空则等用户在 `/setup` 建 |
-| `WRK_TOKEN_TTL_MINUTES` | `720` | JWT 有效期（令牌无状态，权限每次实时查库） |
+| `WRK_TOKEN_TTL_MINUTES` | `720` | 令牌有效期（分钟）。令牌带用户版本号 `ver`，改密 / 重置密码 / 登出递增版本使旧令牌立即失效；权限每次实时查库 |
 | `WRK_PBKDF2_ITER` | `240000` | 口令哈希迭代次数（测试里降到 2000 提速） |
 | `WRK_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173` | 开发态跨域白名单 |
 
@@ -357,7 +357,7 @@ Wiki-Rag-Knowledge/
 | 分组 | 代表接口 |
 | --- | --- |
 | 初始化 | `GET /setup/status`、`POST /setup/admin`（仅无管理员时可调，之后永久 409）、`GET /setup/org` |
-| 认证 | `POST /auth/login`、`GET /auth/me`、`POST /auth/change-password` |
+| 认证 | `POST /auth/login`、`GET /auth/me`、`POST /auth/change-password`、`POST /auth/logout` |
 | 知识库 | `GET/POST /kbs`、`PATCH /kbs/{id}`、`POST /kbs/{id}/rebuild`、`GET /kbs/{id}/cost` |
 | 文档与任务 | `POST /kbs/{id}/documents`、`GET /documents/{id}/chunks`、`POST /documents/{id}/reindex`（文档级重试）、`GET /tasks`、`POST /tasks/{id}/retry` |
 | Wiki | `GET /kbs/{id}/wiki/tree`、`PUT /kbs/{id}/wiki/pages/{slug}`（人工校对）、`POST .../unlock` |
@@ -366,6 +366,8 @@ Wiki-Rag-Knowledge/
 | 个人 Agent（admin） | `GET /agent/cores`、`POST /agent/sessions`、`POST /agent/sessions/{id}/messages`、`GET /agent/runs/{id}/events`、`POST /agent/plugins/rescan` |
 
 `/api/meta` 与 `/api/health` 无需登录，分别用于前端判断 `needs_setup` / `offline_models` 与存活探测。
+
+令牌可撤销：改密、管理员重置密码、登出都会让该用户此前签发的令牌立即失效（旧 token 调需鉴权接口返回 401），需重新登录；完整契约见 [docs/API.md](docs/API.md) §1。
 
 ---
 
