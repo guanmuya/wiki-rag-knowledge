@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import threading
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
@@ -88,16 +87,15 @@ def _filter_kb_ids(db: Session, user: models.User, kb_ids: list[int]) -> list[in
 
 
 def _workspace(value: str | None) -> str:
-    raw = (value or "").strip()
-    if not raw:
-        return str(config.AGENT_WORKSPACE_DIR)
-    path = Path(raw).expanduser()
-    if not path.is_dir():
-        raise HTTPException(status_code=400, detail=f"工作目录不存在或不是目录：{raw}")
-    resolved = str(path.resolve())
-    if len(resolved) > 500:
-        raise HTTPException(status_code=400, detail="工作目录路径过长")
-    return resolved
+    """会话工作目录必须落在 `AGENT_WORKSPACE_DIR` 内，越界返回 400（P1-7）。
+
+    校验逻辑放在 `services/agent/plugins.resolve_workspace`，这里只负责把
+    `PluginError` 翻译成 HTTP 400，保持路由层不重复实现边界规则。
+    """
+    try:
+        return plugins.resolve_workspace(value)
+    except plugins.PluginError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _session_out(db: Session, session: models.AgentSession, *,
