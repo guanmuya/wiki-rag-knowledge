@@ -199,8 +199,9 @@ Wiki-Rag-Knowledge/
 │   └── requirements.txt
 ├── frontend/
 │   ├── electron/main.cjs         # sidecar 生命周期、失败原因翻译、日志
-│   ├── scripts/                  # dev.mjs build.mjs build-backend.mjs
+│   ├── scripts/                  # dev.mjs build.mjs build-backend.mjs + verify-* 人工验收辅助（见 scripts/README.md）
 │   ├── src/                      # pages / components / api.ts / auth.tsx
+│   ├── tests/                    # 自动化测试（pnpm test，纳入 CI；见 tests/README.md）
 │   └── electron-builder.yml      # NSIS 配置
 ├── demo_data/                    # 3 篇演示文档 + fixtures（表格压力样本）
 ├── docs/                         # DESIGN.md API.md EXPERIMENT.md HANDOFF.md
@@ -394,8 +395,23 @@ python -m pytest backend/tests/test_wiki_scale.py -q
 cd frontend && pnpm typecheck && pnpm build:web
 ```
 
+前端自动化测试（体检清单 P1-3）：
+
+```bash
+cd frontend && pnpm test
+```
+
+`pnpm test` 用 Node 内置 `node:test` 加项目已有的 `playwright` 跑 4 条真实浏览器 E2E：
+未登录重定向、有效令牌恢复登录态、登录失败提示，以及「登录 → 新建知识库 → 智能问答收到回答」主链路。
+测试进程内启动 Vite，所有 `/api/**` 由 Playwright 拦截成确定性内存 mock，
+**不启动后端、不需要在线模型或凭据、不需要灌语料**，因此离线可重复、结果稳定。
+首次运行前装一次浏览器：`cd frontend && pnpm exec playwright install chromium`。
+详见 [frontend/tests/README.md](frontend/tests/README.md)；
+`frontend/scripts/verify-*` 是一次性人工验收辅助脚本，不是测试，也不进 CI。
+
 > **CI（`.github/workflows/ci.yml`）**：push 到 `master` 或开 PR 时，在 `windows-latest`
-> 上依次运行 `python -m pytest backend/tests -q`、`pnpm typecheck`、`pnpm build:web`；
+> 上依次运行 `python -m pytest backend/tests -q`、`pnpm typecheck`、`pnpm build:web`、
+> `pnpm test` 四项检查（跑 E2E 前单独安装 Playwright Chromium）；
 > 后端 Python 固定 3.13、依赖取自 `backend/requirements-dev.txt` +
 > `backend/constraints.txt`，前端用 `pnpm install --frozen-lockfile`。任意一步失败即
 > CI 失败。要让「CI 全绿」成为合并前置条件，需在 GitHub 仓库
