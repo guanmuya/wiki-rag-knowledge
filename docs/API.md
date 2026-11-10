@@ -1,5 +1,9 @@
 # API 契约 v1（前后端共同遵守）
 
+> 本文的路由与字段名以 `backend/app/routers/*.py` 的装饰器为事实源；
+> 版本、表数、并发、锁超时、测试基线等全局事实口径见 [docs/FACTS.md](FACTS.md) §1，
+> 代码引用遵循该文件 §3 的「文件 + 符号名 / 章节」约定。
+
 - 前缀：`/api`
 - 认证：`Authorization: Bearer <token>`。免登录的只有 `POST /api/auth/login`、`GET /api/meta`、`GET /api/health` 与 `/api/setup/*`（首次初始化必须在无账号时可用）。
 - 错误：`{"detail": "中文错误信息"}`，HTTP 400/401/403/404/409/422。
@@ -334,6 +338,8 @@
 | GET | `/api/settings/providers` | 供应商列表，`api_key_masked` 脱敏 |
 | POST | `/api/settings/providers` | `{name,base_url,api_key,enabled}` |
 | PATCH | `/api/settings/providers/{id}` | `api_key` 传空=不改，传 `"__clear__"`=清空 |
+| POST | `/api/settings/providers/{id}/discover` | 探测供应商侧模型列表；**永远返回 200 + 结果对象** `{provider_id, protocol, items[], source, error, total}`，`items[]` 含 `already_imported`；探测失败是正常业务状态（`routers/settings.py` 的 `discover_provider_models()`） |
+| POST | `/api/settings/providers/{id}/models/import` | `{items:[{model,purpose,label}]}` 批量导入；按 `(provider, purpose, model)` 幂等，已存在跳过 → `{created[], skipped[], created_count, skipped_count}`（`routers/settings.py` 的 `import_provider_models()`） |
 | DELETE | `/api/settings/providers/{id}` | 同时删除其模型 |
 | GET | `/api/settings/models` | 模型列表，含 `provider_name`、`last_test_*` |
 | POST | `/api/settings/models` | `{provider_id,purpose,model,label,params,is_default,enabled,embed_dim}` |
@@ -364,6 +370,16 @@ v1 全部要求管理员令牌；CLI 核心以应用进程身份执行本机命�
 | POST | `/api/agent/runs/{id}/stop` | 终止子进程树；已结束 409 |
 
 事件 `type`：`status`（阶段文案）、`text`（正文增量）、`log`（CLI stderr/命令摘要）、`evidence`（知识库证据）、`done`、`error`、`stopped`。
+
+## 8.2 运维诊断（admin）
+
+两个接口都由 `backend/app/routers/diagnostics.py` 提供，需管理员令牌；运维输出的时间字段
+不受本文开头「时间」一条里「UTC 且带 `+00:00` 偏移」的约定约束。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/diagnostics/lock` | 写锁现场快照：最近阻塞事件、慢语句、正在执行中的语句、全部线程栈；响应另附 `process` 进程信息（`diagnostics.py` 的 `lock_diagnostics()`） |
+| GET | `/api/diagnostics/process` | 进程身份：`pid` / `ppid` / 真实端口 / 工作目录 / 数据目录 / Python 版本（`diagnostics.py` 的 `process_diagnostics()`） |
 
 ## 9. 前端约定
 

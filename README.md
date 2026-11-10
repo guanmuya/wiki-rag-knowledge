@@ -4,32 +4,38 @@
 
 后端是 FastAPI + SQLAlchemy + SQLite 的单机进程，前端是 React + Vite，Electron 负责把后端作为 **sidecar 子进程**拉起并动态分配端口。没有外部队列、没有独立数据库服务、不需要运维。
 
-- 应用名 `企业知识库文档整理与问答系统`，版本 `1.0.17`（`backend/app/main.py:36`；`frontend/package.json` 的 `version` 同为 `1.0.17`）
+- 应用名 `企业知识库文档整理与问答系统`，版本 `1.0.17`（`backend/app/main.py` 的 `VERSION` 常量；`frontend/package.json` 的 `version` 同为 `1.0.17`）
 - 安装包产品名 `企业知识库`，appId `com.wikiraq.knowledge`（`frontend/electron-builder.yml`）
-- 后端测试基线 **535 passed, 1 skipped**（`backend/tests/`；含个人 Agent 核心/插件、检索链路、Wiki 与 SSE 回归）
+- 后端测试基线见 [docs/FACTS.md](docs/FACTS.md) §2（全仓唯一记录，附一次真实运行输出；本页不复述数字）
+
+> **事实口径**：版本、表数、Worker 并发、SQLite 锁超时、测试基线以代码为唯一事实源，
+> 权威值统一在 [docs/FACTS.md](docs/FACTS.md)；本页与其他文档只放链接，不再各自写死数字。
 
 ---
 
 ## 1. 核心能力
 
-| 能力 | 实现要点 | 代码位置 |
+| 能力 | 实现要点 | 代码依据（文件 + 符号名） |
 | --- | --- | --- |
-| 六类文档解析 | `pdf / docx / md / txt / xlsx / pptx`；图片只记元信息不解析 | `backend/app/services/parser.py:559`、`backend/app/config.py:27` |
-| 文本分块 | 目标 700 字符；**标题变化强制切分**，重叠只在同标题内生效 | `backend/app/services/chunking.py:158` |
-| 表格分块 | 按字符预算切行组 + 每块重复表头 + `locator` 记录行区间 | `backend/app/services/chunking.py:76` |
-| 双形态索引 | `basic` = 分块；`wiki` = 主题归纳 → 页面 → 章节 | `backend/app/models.py:29`、`backend/app/services/wiki.py` |
-| Wiki Map-Reduce | 全库按字符预算分片归纳，片内用全库全局编号，合并去重 | `backend/app/services/wiki.py:119-308` |
-| 两层融合检索 | 库内**加权 RRF**；跨库**覆盖率 × 名次衰减 × 均衡因子** | `backend/app/services/retrieval.py:264`、`backend/app/services/retrieval.py:583` |
+| 六类文档解析 | `pdf / docx / md / txt / xlsx / pptx`；图片只记元信息不解析 | `backend/app/services/parser.py` 的 `parse_document()`；`backend/app/config.py` 的 `ALLOWED_SUFFIXES` |
+| 文本分块 | 目标 700 字符；**标题变化强制切分**，重叠只在同标题内生效 | `backend/app/services/chunking.py` 的 `split_blocks()` |
+| 表格分块 | 按字符预算切行组 + 每块重复表头 + `locator` 记录行区间 | `backend/app/services/chunking.py` 的 `split_table()` |
+| 双形态索引 | `basic` = 分块；`wiki` = 主题归纳 → 页面 → 章节 | `backend/app/models.py` 的 `KnowledgeBase.mode` / `Chunk`；`backend/app/services/wiki.py` 的 `build_wiki()` |
+| Wiki Map-Reduce | 全库按字符预算分片归纳，片内用全库全局编号，合并去重 | `backend/app/services/wiki.py` 的 `_plan_shards()` 与 `build_wiki()` |
+| 两层融合检索 | 库内**加权 RRF**；跨库**覆盖率 × 名次衰减 × 均衡因子** | `backend/app/services/retrieval.py` 的 `rrf_fuse()` / `channel_weights()`（库内）与 `retrieve()`（跨库） |
 | 检索链路 | 意图分析 → 查询路由（original/rewrite/multi_query）→ 多查询检索 → 覆盖度评估 → 缺失查询重写（最多 2 次）→ 回答生成 | `backend/app/services/qa_pipeline.py` |
 | 流式思考过程 | SSE 推送意图、查询、检索命中、评估、重试与答案增量；链路快照随消息落库 | `backend/app/routers/chat.py`、`frontend/src/pages/ChatPage.tsx` |
-| 逐库自动路由 | `wiki` 未就绪回退分块并标 `fallback`，不静默降级 | `backend/app/services/retrieval.py:557` |
-| 证据链 | 回答 `[编号]` → `Message.evidence` → `Chunk.locator` / `WikiEvidence` | `backend/app/services/answering.py:415` |
-| 结构化拒答 | 固定前置句 + 本次命中资料 + 可点击建议问题 | `backend/app/services/answering.py:122-177` |
-| 成本核算 | `CallStats` 分 chat/embed/vision 三通道，流水落 `cost_records` | `backend/app/services/llm.py:59`、`backend/app/services/cost.py` |
-| 三协议模型适配 | `openai` / `openai-responses` / `anthropic` | `backend/app/services/llm.py:4-6`、`backend/app/models.py:321` |
-| 首次启动引导 | 无管理员时前端走 `/setup` 建号，不再随机生成密码 | `backend/app/routers/setup.py`、`backend/app/main.py:27` |
+| 逐库自动路由 | `wiki` 未就绪回退分块并标 `fallback`，不静默降级 | `backend/app/services/retrieval.py` 的 `plan_route()` / `retrieve()` |
+| 证据链 | 回答 `[编号]` → `Message.evidence` → `Chunk.locator` / `WikiEvidence` | `backend/app/services/answering.py` 的 `_citation_check()` 与 `answer()` |
+| 结构化拒答 | 固定前置句 + 本次命中资料 + 可点击建议问题 | `backend/app/services/answering.py` 的 `_refusal_verdict()` / `_suggestion_block()` |
+| 成本核算 | `CallStats` 分 chat/embed/vision 三通道，流水落 `cost_records` | `backend/app/services/llm.py` 的 `CallStats`；`backend/app/services/cost.py` 的 `record()` |
+| 三协议模型适配 | `openai` / `openai-responses` / `anthropic` | `backend/app/services/llm.py` 的 `SUPPORTED_PROTOCOLS`；`backend/app/models.py` 的 `ProviderProtocol` |
+| 首次启动引导 | 无管理员时前端走 `/setup` 建号，不再随机生成密码 | `backend/app/routers/setup.py`、`backend/app/main.py` 的 `bootstrap_admin()` |
 | 个人 Agent | 核心插件注册表（知识库 / 本机 CLI），会话内可换核心、复用已配置模型 | `backend/app/services/agent/`、`frontend/src/pages/AgentPage.tsx` |
-| 离线可跑 | 无模型时 LLM 抽取式、Embedding 256 维哈希向量 | `backend/app/services/llm.py:38-39`、`backend/app/services/llm.py:290` |
+| 离线可跑 | 无模型时 LLM 抽取式、Embedding 256 维哈希向量 | `backend/app/services/llm.py` 的 `FALLBACK_EMBED_DIM` / `hash_embed()`；`backend/app/services/answering.py` 的 `_extractive_answer()` |
+
+> 行号会随重构漂移，故本表用「文件 + 符号名」定位；定位约定与常用符号对照见
+> [docs/FACTS.md](docs/FACTS.md) §3。
 
 ---
 
@@ -54,17 +60,17 @@
 │  routers: auth setup kbs wiki chat settings agent              │
 │  services: parser chunking llm retrieval answering wiki cost   │
 │            ingest worker agent（核心注册表 + 运行器）          │
-│  进程内 Worker 线程 ×2（WORKER_CONCURRENCY=2）轮询 tasks 表     │
+│  进程内 Worker 线程 ×1（WORKER_CONCURRENCY=1）轮询 tasks 表     │
 └───────────────┬──────────────────────────────────────────────┘
                 │
 ┌───────────────▼──────────────────────────────────────────────┐
-│ SQLite 单文件（WAL, busy_timeout=15000）+ 本地文件目录         │
+│ SQLite 单文件（WAL，写锁三档 3s/30s/1s）+ 本地文件目录         │
 │  data/db/app.sqlite3   data/files/（原始文档）                 │
 │  data/secrets/（Fernet 密钥，用于加密供应商 API Key）          │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-sidecar 启动细节（`backend/app/desktop_entry.py`、`frontend/electron/main.cjs:177-306`，即 `startBackend()` / `stopBackend()`）：
+sidecar 启动细节（`backend/app/desktop_entry.py`，以及 `frontend/electron/main.cjs` 的 `startBackend()` / `stopBackend()`）：
 
 - **动态端口**：`WRK_PORT=0` 时 `bind((host, 0))` 让系统分配，多实例共存不冲突；指定端口被占用则自动回落。
 - **就绪上报**：`announce()` 线程最多轮询 600 × 50 ms，确认端口可连后打印 `WRK_READY {"host","port","version","app","pid"}`；主进程 60 秒未收到即失败并给出中文原因。
@@ -116,7 +122,7 @@ PYTHONIOENCODING=utf-8 PYTHONPATH=. ../.venv/Scripts/python.exe -m scripts.seed_
 
 ### 3.4 首次启动引导
 
-首次启动**不会**自动创建管理员（`backend/app/main.py:27-49`）：没有管理员时 `GET /api/setup/status` 返回 `initialized=false`，前端跳到 `/setup` 由用户自己设账号与密码（密码至少 10 位，且需含大写/小写/数字/符号中的至少三类，`backend/app/security.py` 的 `password_strength_error()`）。
+首次启动**不会**自动创建管理员（`backend/app/main.py` 的 `bootstrap_admin()`，`backend/app/routers/setup.py`）：没有管理员时 `GET /api/setup/status` 返回 `initialized=false`，前端跳到 `/setup` 由用户自己设账号与密码（密码至少 10 位，且需含大写/小写/数字/符号中的至少三类，`backend/app/security.py` 的 `password_strength_error()`）。
 
 无人值守场景（开发、CI、脚本）可显式给初始密码：
 
@@ -136,7 +142,7 @@ node scripts/build.mjs --pack     # 只出 release/win-unpacked/，不生成安�
 
 可复用的分步开关：`--skip-backend`（复用 `build/backend/wrk-backend.exe`）、`--skip-web`（复用 `dist/`）。单独打后端：`node scripts/build-backend.mjs`。
 
-打包前必须清掉本机全局的 `ELECTRON_RUN_AS_NODE`——脚本里的 `cleanEnv()` 已自动 `delete`（`frontend/scripts/build.mjs:53-57`），手工执行 `electron-builder` 时要自己 `env -u ELECTRON_RUN_AS_NODE`。上一次构建残留的 `wrk-backend.exe` 会锁住输出目录，报 `EPERM` 时先 `taskkill /F /IM wrk-backend.exe`。
+打包前必须清掉本机全局的 `ELECTRON_RUN_AS_NODE`——脚本里 `frontend/scripts/build.mjs` 的 `cleanEnv()` 已自动 `delete`，手工执行 `electron-builder` 时要自己 `env -u ELECTRON_RUN_AS_NODE`。上一次构建残留的 `wrk-backend.exe` 会锁住输出目录，报 `EPERM` 时先 `taskkill /F /IM wrk-backend.exe`。
 
 安装向导默认是**简体中文**。改语言时注意 `electron-builder.yml` 里两个开关必须配合：`installerLanguages: [zh_CN]` 只有在 `multiLanguageInstaller: true` 时才参与编译（设成 `false` 会被 `LangConfigurator` 强制成 `en_US`）；`language: "2052"` 只影响版本资源的 locale id。只给一种语言时 NSIS 不会弹语言选择框。
 
@@ -177,8 +183,8 @@ Wiki-Rag-Knowledge/
 │   │   │   ├── agent/            # 个人 Agent：核心插件注册表 + 运行器
 │   │   │   └── cost.py           # 成本流水与聚合
 │   │   └── ...
-│   ├── scripts/                  # seed_demo seed_expanded inspect_chunks collect_metrics
-│   ├── tests/                    # 28 个文件，300 项
+│   ├── scripts/                  # seed_demo seed_expanded inspect_chunks collect_metrics run_experiments
+│   ├── tests/                    # 42 个 test_*.py + 1 个 conftest.py；基线见 docs/FACTS.md §2
 │   └── requirements.txt
 ├── frontend/
 │   ├── electron/main.cjs         # sidecar 生命周期、失败原因翻译、日志
@@ -195,7 +201,11 @@ Wiki-Rag-Knowledge/
 
 ## 5. 配置项
 
-全部可调项集中在 `backend/app/config.py`，均可用环境变量覆盖。默认值即下表「默认」列。
+主要可调项集中在 `backend/app/config.py`（38 个 `WRK_*` 环境变量），均可用环境变量覆盖，
+默认值即下表「默认」列。另有少数几项由 `backend/app/desktop_entry.py`（`WRK_HOST` / `WRK_PORT` /
+`WRK_WATCH_STDIN` / `WRK_LOG_LEVEL`）、`backend/app/security.py`（`WRK_PBKDF2_ITER`）、
+`backend/app/services/answering.py`（`WRK_SUGGESTION_LIMIT` / `WRK_SUGGESTION_RESOURCE_LIMIT`）
+读取，`WRK_PACKAGED` 由 Electron 主进程注入。逐项对照见 [docs/FACTS.md](docs/FACTS.md) §1。
 
 ### 5.1 路径与进程
 
@@ -207,7 +217,11 @@ Wiki-Rag-Knowledge/
 | `WRK_DATABASE_URL` | `sqlite:///<DB_PATH>` | 覆盖整条连接串 |
 | `WRK_WORKER_ENABLED` | `1` | 是否启动进程内 Worker（测试里置 `0`） |
 | `WRK_WORKER_POLL_SECONDS` | `1.0` | 任务轮询间隔 |
-| `WRK_WORKER_CONCURRENCY` | `2` | Worker 线程数 |
+| `WRK_WORKER_CONCURRENCY` | `1` | Worker 线程数（SQLite 同时只允许一个写者，多开只会互相抢写锁） |
+| `WRK_BUSY_TIMEOUT_INTERACTIVE` | `3000` | 交互请求的 SQLite 写锁等待（ms），快速失败不卡界面 |
+| `WRK_BUSY_TIMEOUT_WORKER` | `30000` | 后台 Worker 写锁等待（ms） |
+| `WRK_BUSY_TIMEOUT_PROGRESS` | `1000` | 任务进度写锁等待（ms），best-effort |
+| `WRK_LOCK_RETRY_ATTEMPTS` | `5` | 拿不到锁时的重试次数（兼容旧别名 `WRK_LOCK_RETRY`） |
 | `WRK_HOST` / `WRK_PORT` | `127.0.0.1` / `0` | sidecar 监听地址；`0` = 系统分配 |
 | `WRK_WATCH_STDIN` | `1` | stdin EOF 时自退（Electron 被强杀也能收尾） |
 | `WRK_LOG_LEVEL` | `info` | uvicorn 日志级别 |
@@ -257,6 +271,21 @@ Wiki-Rag-Knowledge/
 | `WRK_SUGGESTION_RESOURCE_LIMIT` | `6` | 拒答时「本次检索到这些资料」条数 |
 
 前端构建期变量：`WRK_DEV=1`、`WRK_DEV_URL`（dev.mjs 注入）、`WRK_NODE`、`WRK_PYTHON`（覆盖解释器路径）。
+
+### 5.6 本地个人 Agent（本波补齐，原 §5 漏列）
+
+| 环境变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `WRK_AGENT_ENABLED` | `1` | 是否启用个人 Agent |
+| `WRK_AGENT_PLUGIN_DIR` | `<WRK_DATA_DIR>/agent_plugins` | 第三方 CLI Agent 的 JSON 清单目录 |
+| `WRK_AGENT_WORKSPACE` | `<WRK_DATA_DIR>/agent_workspace` | CLI 核心的默认工作目录（不要指到仓库根） |
+| `WRK_AGENT_RUN_TIMEOUT` | `900` | 单轮 Agent 执行的硬超时（秒） |
+| `WRK_AGENT_HISTORY_MESSAGES` | `12` | 一轮里最多回放多少条历史消息给 CLI 核心 |
+| `WRK_AGENT_HISTORY_CHARS` | `1200` | 回放时单条消息的最大字符数 |
+
+> §5.1 与本节合计补齐了体检清单 D6 指出的 11 个漏列配置项；
+> 锁超时三档取代旧文档写的一刀切 15000 ms 超时，口径见
+> [docs/FACTS.md](docs/FACTS.md) §1.1。
 
 ---
 
@@ -333,13 +362,19 @@ Wiki-Rag-Knowledge/
 
 ```bash
 # 全量后端测试（自带临时数据目录，不污染 data/）
-.venv/Scripts/python.exe -m pytest backend/tests -q
+python -m pytest backend/tests -q
 
 # 只跑某个主题
-.venv/Scripts/python.exe -m pytest backend/tests/test_wiki_scale.py -q
+python -m pytest backend/tests/test_wiki_scale.py -q
 ```
 
-测试覆盖：入库流水线、表格分块、检索质量、权限、拒答判定、成本口径、模型协议、首次引导、失败语义、老库补列、Wiki 规模、**写锁韧性（`test_lock_resilience.py` / `test_responsive_during_embed.py`）**、**进程守护（`test_procguard.py`）**、**中断恢复与重试语义（`test_resume_and_locks.py` / `test_retry_semantics.py`）**、**Agent 插件与核心切换（`test_agent_plugins.py` / `test_agent_runtime.py`）**。表格测试需要 `demo_data/fixtures/` 的样本，缺失时会 `pytest.skip` 并提示先跑 `python scripts/make_fixtures.py`。
+> 当前 checkout 没有 `.venv`，上面的命令用本机全局 Python（3.13.11 / pytest 9.2.0）
+> 实跑通过；若自行创建了 `.venv`，把 `python` 换成 `.venv/Scripts/python.exe` 即可。
+> **测试基线（计数、环境、1 项 skip 的来源、一次真实运行输出）全仓只记在
+> [docs/FACTS.md](docs/FACTS.md) §2**，原始 stdout 在 `docs/evidence/pytest-baseline.txt`；
+> 本页不复述数字。CI（体检清单 P1-1）建立后由 CI 自动产出并更新该节。
+
+测试覆盖：入库流水线、表格分块、检索质量、权限、拒答判定、成本口径、模型协议、首次引导、失败语义、老库补列、Wiki 规模、**写锁韧性（`test_lock_resilience.py` / `test_responsive_during_embed.py`）**、**进程守护（`test_procguard.py`）**、**中断恢复与重试语义（`test_resume_and_locks.py` / `test_retry_semantics.py`）**、**Agent 插件与核心切换（`test_agent_plugins.py` / `test_agent_runtime.py`）**。表格测试需要 `demo_data/fixtures/` 的样本，缺失时会 `pytest.skip` 并提示先跑 `python scripts/make_fixtures.py`；当前实跑里唯一的 1 项 skip 来自 `backend/tests/test_tables.py` 的 `pytest.importorskip("reportlab", ...)`（可选依赖未安装，用于生成 PDF 表格夹具），不是漏测。
 
 前端类型检查与构建：
 
@@ -372,7 +407,7 @@ PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe backend/scripts/collect_metrics.
 全链路可跑：LLM 侧退回抽取式整理与抽取式回答，Embedding 侧退回 256 维确定性哈希向量，向量通道权重降到 0.45。适合验收功能与跑通流程，**但检索排序与回答质量不能作为实验数据**。
 
 **Q：上传报「超过 50MB 上限」。**
-`WRK_MAX_UPLOAD_MB` 控制，改环境变量后重启后端。格式只接受 `.txt .md .markdown .log .pdf .docx .xlsx .pptx`，其余直接拒绝（`backend/app/config.py:27`）。
+`WRK_MAX_UPLOAD_MB` 控制，改环境变量后重启后端。格式只接受 `.txt .md .markdown .log .pdf .docx .xlsx .pptx`，其余直接拒绝（`backend/app/config.py` 的 `ALLOWED_SUFFIXES`）。
 
 **Q：库里明明有文档，回答却说「现有资料不足以回答这个问题」。**
 先看响应里的 `route.kb_routes[]`：`used="none"` 说明该库当前不可检索（Wiki 未就绪且无分块），`fallback=true` 说明发生了检索方式回退。拒答文案本身也会列出这两类库与原因，以及本次真实命中的资料和建议问法。
@@ -389,9 +424,14 @@ git 里是删除状态。
 
 | 文件 | 内容 |
 | --- | --- |
+| [docs/FACTS.md](docs/FACTS.md) | **统一事实口径（单一事实源）**：版本、表数、并发、锁超时、测试基线、代码锚点约定 |
+| [docs/HEALTH_CHECK.md](docs/HEALTH_CHECK.md) | 项目体检结论与排好优先级的改进清单（P0 → P2） |
 | [docs/DESIGN.md](docs/DESIGN.md) | 系统设计说明：分层、数据模型、分块、检索融合、证据链、权限、一致性 |
-| [docs/API.md](docs/API.md) | 接口契约 v1（请求/响应字段、`usage` 口径、成本聚合结构） |
-| [docs/EXPERIMENT.md](docs/EXPERIMENT.md) | 实验方案：数据集、四个对照实验、指标定义、公平性陷阱 |
+| [docs/API.md](docs/API.md) | 接口契约 v1（请求/响应字段、`usage` 口径、成本聚合结构、运维诊断） |
+| [docs/EXPERIMENT.md](docs/EXPERIMENT.md) | 实验方案（§1–§7）与配置 A 离线实测结果（§8）；未实测项标「待实验」 |
+| [docs/results/](docs/results/README.md) | 第一波实验原始数据、汇总表、数据字典与复现命令 |
 | [docs/AGENT_PLUGINS.md](docs/AGENT_PLUGINS.md) | 个人 Agent 核心、CLI 适配与插件清单规范 |
-| [docs/THESIS.md](docs/THESIS.md) | 论文可复用章节素材：设计、关键实现、实验方法、创新点与局限 |
-| [docs/HANDOFF.md](docs/HANDOFF.md) | 交接说明 |
+| [docs/THESIS.md](docs/THESIS.md) | 论文可复用章节素材：设计、关键实现、实验方法与结果、创新点与局限 |
+| [docs/HANDOFF.md](docs/HANDOFF.md) | 交接说明：v1.0.17 当前状态首屏、已知遗留、如何验证 |
+| [docs/archive/HANDOFF_HISTORY.md](docs/archive/HANDOFF_HISTORY.md) | 历史快照归档（v1.0.0 → v1.0.10，历史读数，非当前事实） |
+| [docs/evidence/pytest-baseline.txt](docs/evidence/pytest-baseline.txt) | 测试基线一次真实运行的完整 stdout |

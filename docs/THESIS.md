@@ -2,8 +2,9 @@
 
 本文是可直接改写进学位论文的章节素材：**结论 + 代码依据**，不含过程叙事。所有参数名、函数名、接口路径、默认值均取自当前仓库；凡未实测的数字一律标注「待实验」并给出测量方法，不填推测值。
 
-- 系统名 `企业知识库文档整理与问答系统`，版本 `1.0.0`（`backend/app/main.py:23-24`）
-- 代码位置约定：`文件:行`，路径相对仓库根
+- 系统名 `企业知识库文档整理与问答系统`，版本 `1.0.17`（`backend/app/main.py` 的 `VERSION` 常量；`frontend/package.json` 的 `version` 同为 `1.0.17`）
+- 代码位置约定：**「文件 + 符号名 / 章节」**，路径相对仓库根；`文件:行` 里的行号只是写作时的辅助提示，会随重构漂移，不能当权威定位（见 [docs/FACTS.md](FACTS.md) §3）
+- 事实口径约定：版本、表数、并发、锁超时、测试基线以代码为唯一事实源，权威值统一在 [docs/FACTS.md](FACTS.md) §1；测试基线只记在该文件 §2，本文不复述数字
 - 已有实测数据的来源见 §7 的取证表；未复跑的旧数据会显式标注出处
 
 ---
@@ -30,7 +31,7 @@
 | 零运维 | 没有专职运维，双击图标就要能用 | Electron 拉起 Python sidecar，动态端口，`WRK_READY` 握手（`backend/app/desktop_entry.py:59-70`） |
 | 答案必须可追溯 | 用户要能核对到「第几条第几款」 | 回答带 `[编号]`，编号反查 `Chunk.locator` / `WikiEvidence`（`backend/app/services/answering.py:397-405`） |
 
-**为什么不做微服务**：目标规模是几十到几百人、单库 1000 份文档量级。服务发现、独立数据库、容器编排在这里都是纯成本；`backend/app/db.py` 用 `journal_mode=WAL` + `busy_timeout=15000` 支撑「HTTP 线程 + 2 个 Worker 线程」的并发写（`WORKER_CONCURRENCY=2`，`backend/app/config.py:22`），足以替代外部队列。
+**为什么不做微服务**：目标规模是几十到几百人、单库 1000 份文档量级。服务发现、独立数据库、容器编排在这里都是纯成本；`backend/app/db.py` 用 `journal_mode=WAL` + **分三档的 SQLite 写锁等待**（交互 `3000` / Worker `30000` / 进度写 `1000` ms）支撑「HTTP 线程 + **1 个** Worker 线程」的并发写（`WORKER_CONCURRENCY=1`，`backend/app/config.py` 的 `WORKER_CONCURRENCY`；SQLite 同时只允许一个写者），足以替代外部队列。三档口径见 [docs/FACTS.md](FACTS.md) §1.1。
 
 **为什么索引有两种形态**：原文结构清晰、以查阅为主（条款、参数表）时，二次归纳只会引入失真；原文零散、同一流程散落在多个文件时，归纳成页才有价值。两种需求在同一企业内并存，因此用 `KnowledgeBase.mode` 表达，而不是全局二选一（`backend/app/models.py:29-31`）。
 
@@ -42,7 +43,7 @@
 
 ```
 Electron 33（外壳）  →  Python 3.13 + FastAPI（sidecar）  →  SQLite + 本地文件
-   窗口/菜单/日志          路由·检索·生成·任务队列              19 张表 + 原文副本
+   窗口/菜单/日志          路由·检索·生成·任务队列              21 张表 + 原文副本
 ```
 
 | 层 | 关键实现 | 职责边界 |
@@ -60,7 +61,7 @@ Electron 33（外壳）  →  Python 3.13 + FastAPI（sidecar）  →  SQLite + 
 
 ### 2.2 数据模型
 
-19 张表（`backend/app/models.py`），四组：
+21 张表（`backend/app/models.py` 的 21 个 `__tablename__`），四组：
 
 | 组 | 表 | 关键字段 |
 | --- | --- | --- |
@@ -100,7 +101,7 @@ mode == "basic":
 
 ### 2.4 任务队列、幂等与失败语义
 
-`Task` 表即队列，进程内 2 个 Worker 线程轮询。**抢占靠条件更新**：`update(Task).where(id==, status=="queued").values(status="running")`，`rowcount != 1` 即放弃，两个线程不会重复执行（`backend/app/services/worker.py` 的 `_claim()`）。`dedupe_key` 防同类任务堆积。
+`Task` 表即队列，进程内 **1 个** Worker 线程轮询（`WORKER_CONCURRENCY=1`，`backend/app/config.py` 的 `WORKER_CONCURRENCY`；SQLite 同时只允许一个写者，多开只会互相抢写锁）。**抢占靠条件更新**：`update(Task).where(id==, status=="queued").values(status="running")`，`rowcount != 1` 即放弃，并发 Worker 不会重复执行（`backend/app/services/worker.py` 的 `_claim()`）。`dedupe_key` 防同类任务堆积。
 
 失败分三级，粒度必须区分：
 
@@ -573,7 +574,7 @@ min / P50 / P95 / max / 均值 / 标准差由采集器写入 `docs/results/summa
 | `demo_data` 三库 25 个检索单元 | `docs/EXPERIMENT.md` §2.1（`parse_document` + `split_blocks` 探针） |
 | Wiki 8 块库产出 7 页 / 7 节 / 8 证据，`calls=0`（离线） | `docs/DESIGN.md:97`（探针灌临时 SQLite 跑 `build_wiki()`） |
 | 检索耗时 min 6.0 / P50 6.8 / max 14.3 ms（离线哈希向量，9 条查询） | `docs/DESIGN.md` 附录；**接入真实 embedding 后必须重测** |
-| 后端测试 157 passed, 1 skipped | `backend/tests/`（16 个文件、150 个 `def test_`，参数化后 157 项） |
+| 后端测试基线 | 见 [docs/FACTS.md](FACTS.md) §2（全仓唯一记录，附一次真实运行输出；本文不复述数字） |
 
 ---
 
@@ -581,9 +582,10 @@ min / P50 / P95 / max / 均值 / 标准差由采集器写入 `docs/results/summa
 
 | 要复现的结论 | 命令 / 接口 |
 | --- | --- |
-| 环境可用 | `.venv/Scripts/python.exe -m pytest backend/tests -q` |
+| 环境可用 | `python -m pytest backend/tests -q`（当前 checkout 无 `.venv` 时用全局 Python；基线口径见 [docs/FACTS.md](FACTS.md) §2） |
 | 演示三库 | `cd backend && PYTHONIOENCODING=utf-8 PYTHONPATH=. ../.venv/Scripts/python.exe -m scripts.seed_demo` |
-| 表格分块产出 | `.venv/Scripts/python.exe backend/scripts/inspect_chunks.py` |
+| 表格分块产出 | `python backend/scripts/inspect_chunks.py` |
+| 离线实验结果重跑 | `PYTHONIOENCODING=utf-8 python backend/scripts/run_experiments.py`（产出见 `docs/results/`） |
 | 检索质量与成本逐条数据 | `backend/scripts/collect_metrics.py`（§4.3） |
 | 单库成本分列 | `GET /api/kbs/{id}/cost` → `by_group.ingest` / `by_group.wiki` |
 | 检索细节（覆盖率、查询词、候选数） | `POST /api/search/preview` → `evidence[].coverage`、`route.stats` |
