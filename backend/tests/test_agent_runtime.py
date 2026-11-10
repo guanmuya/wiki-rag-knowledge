@@ -228,11 +228,22 @@ def test_employee_cannot_use_agent(app_client, db_session):
     assert app_client.get("/api/agent/sessions", headers=headers).status_code == 403
 
 
-def test_cli_core_rejects_incompatible_model(app_client, admin_headers, db_session):
+def test_cli_core_rejects_incompatible_model(app_client, admin_headers,
+                                             db_session, cli_plugin):
+    # 本用例验证「CLI 核心因模型协议不兼容而拒绝」，命中 _validate_model 里
+    # 带「不支持」的那条分支。不能用内置 codex 核心触发：create_session 会先经
+    # _core 检查可执行文件是否安装，没装 Codex CLI 的干净机器（CI runner）会先
+    # 返回「Codex CLI 未安装」，根本走不到协议校验。改用一份探测必然成功的假 CLI
+    # 核心（可执行文件就是当前 Python 解释器、只声明 openai 协议），把「CLI 是否
+    # 已安装」这一环境依赖从用例里隔离掉，断言保持原样。
+    _write_fake_agent(cli_plugin, body="print('unused')\n",
+                      plugin_id="openai-only-cli", protocols=["openai"])
+    plugins.clear_detection_cache()
+
     anthropic_model = _make_model(db_session, protocol="anthropic",
                                   base_url="https://api.anthropic.test")
     res = app_client.post("/api/agent/sessions", headers=admin_headers, json={
-        "core_id": "codex", "model_config_id": anthropic_model,
+        "core_id": "openai-only-cli", "model_config_id": anthropic_model,
     })
     assert res.status_code == 400, res.text
     assert "不支持" in res.json()["detail"]
