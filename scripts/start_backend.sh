@@ -10,7 +10,7 @@ if [ ! -x "$PY" ]; then
   PY="$ROOT/.venv/bin/python"
 fi
 if [ ! -x "$PY" ]; then
-  echo "未找到虚拟环境，先创建：python -m venv .venv && .venv/Scripts/pip install -r backend/requirements.txt"
+  echo "未找到虚拟环境，先创建：python -m venv .venv && .venv/Scripts/python.exe -m pip install -r backend/requirements-dev.txt -c backend/constraints.txt"
   exit 1
 fi
 

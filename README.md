@@ -1,5 +1,7 @@
 # 企业知识库文档整理与问答系统
 
+[![CI](https://github.com/guanmuya/wiki-rag-knowledge/actions/workflows/ci.yml/badge.svg)](https://github.com/guanmuya/wiki-rag-knowledge/actions/workflows/ci.yml)
+
 面向单个企业的多知识库文档整理与增强问答桌面程序。文档入库后同时产出两种可检索形态：**原文分块索引**（关键词 + 向量）与 **Wiki 增强索引**（模型归纳成页面与章节），问答时按库自动路由、融合召回、强制标注引用编号，并在资料不足时给出结构化的「缺什么 + 可以怎么问」。
 
 后端是 FastAPI + SQLAlchemy + SQLite 的单机进程，前端是 React + Vite，Electron 负责把后端作为 **sidecar 子进程**拉起并动态分配端口。没有外部队列、没有独立数据库服务、不需要运维。
@@ -81,21 +83,30 @@ sidecar 启动细节（`backend/app/desktop_entry.py`，以及 `frontend/electro
 
 ## 3. 快速开始
 
-以下命令在仓库根目录用 Git Bash 执行，路径按本仓库实际风格书写（`.venv/Scripts/python.exe`）。
+以下命令都在**仓库根目录**执行（Windows + Git Bash；Linux / macOS 把 `.venv/Scripts/python.exe` 换成 `.venv/bin/python`）。后端固定使用 Python 3.13，依赖版本由 `backend/requirements*.txt` 与 `backend/constraints.txt` 锁定，CI 用的是同一份锁文件。
 
 ### 3.1 一次性准备
 
+仓库**不自带 `.venv`**：首次克隆后必须自行创建，不要跳过这一步，否则打包脚本找不到解释器。
+
 ```bash
-cd /f/GItHub_Code/Wiki-Rag-Knowledge
-
-# 1) 后端虚拟环境 + 依赖（仓库已带 .venv，可跳过创建）
+# 1) 后端虚拟环境 + 锁定的依赖（含测试分组）
 python -m venv .venv
-.venv/Scripts/python.exe -m pip install -r backend/requirements.txt
+.venv/Scripts/python.exe -m pip install -r backend/requirements-dev.txt -c backend/constraints.txt
 
-# 2) 前端依赖
-cd frontend && pnpm install && cd ..
-#    没有全局 pnpm 时用：node <pnpm.mjs 路径> install（见 scripts/dev.sh:25 的回退写法）
+# 2) 前端依赖（严格按 pnpm-lock.yaml 安装）
+cd frontend && pnpm install --frozen-lockfile && cd ..
+#    没有全局 pnpm 时用：corepack pnpm install 或 npx --yes pnpm@9 install（见 scripts/dev.sh）
 ```
+
+> **依赖分组与锁文件**
+> - `backend/requirements.txt`：13 个运行时依赖，全部 `==` 精确锁定（本文件即运行时锁）。
+> - `backend/constraints.txt`：传递依赖的精确版本；任何 `pip install` 都要带 `-c backend/constraints.txt`。
+> - `backend/requirements-dev.txt`：运行时 + `pytest`（本地开发与 CI 用这一份）。
+> - `backend/requirements-build.txt`：运行时 + 固定版本的 PyInstaller（仅打 exe 时用，由 `frontend/scripts/build-backend.mjs` 自动安装）。
+> - `frontend/pnpm-lock.yaml`：前端锁文件，配合 `--frozen-lockfile` 使用。
+>
+> 升级依赖时同步更新上述文件，并在 CI 上重跑一次全量测试；测试基线的更新口径见 [docs/FACTS.md](docs/FACTS.md) §2.4。
 
 ### 3.2 开发模式（两个终端）
 
@@ -368,11 +379,12 @@ python -m pytest backend/tests -q
 python -m pytest backend/tests/test_wiki_scale.py -q
 ```
 
-> 当前 checkout 没有 `.venv`，上面的命令用本机全局 Python（3.13.11 / pytest 9.2.0）
-> 实跑通过；若自行创建了 `.venv`，把 `python` 换成 `.venv/Scripts/python.exe` 即可。
+> 用 §3.1 创建的 `.venv` 时，把 `python` 换成 `.venv/Scripts/python.exe`；CI 也用
+> 同一份锁文件（`.github/workflows/ci.yml`）。
 > **测试基线（计数、环境、1 项 skip 的来源、一次真实运行输出）全仓只记在
 > [docs/FACTS.md](docs/FACTS.md) §2**，原始 stdout 在 `docs/evidence/pytest-baseline.txt`；
-> 本页不复述数字。CI（体检清单 P1-1）建立后由 CI 自动产出并更新该节。
+> 本页不复述数字。CI 每次 push / PR 自动运行同一条命令，并把完整输出存为
+> `pytest-baseline` workflow artifact，更新口径见 [docs/FACTS.md](docs/FACTS.md) §2.4。
 
 测试覆盖：入库流水线、表格分块、检索质量、权限、拒答判定、成本口径、模型协议、首次引导、失败语义、老库补列、Wiki 规模、**写锁韧性（`test_lock_resilience.py` / `test_responsive_during_embed.py`）**、**进程守护（`test_procguard.py`）**、**中断恢复与重试语义（`test_resume_and_locks.py` / `test_retry_semantics.py`）**、**Agent 插件与核心切换（`test_agent_plugins.py` / `test_agent_runtime.py`）**。表格测试需要 `demo_data/fixtures/` 的样本，缺失时会 `pytest.skip` 并提示先跑 `python scripts/make_fixtures.py`；当前实跑里唯一的 1 项 skip 来自 `backend/tests/test_tables.py` 的 `pytest.importorskip("reportlab", ...)`（可选依赖未安装，用于生成 PDF 表格夹具），不是漏测。
 
@@ -381,6 +393,13 @@ python -m pytest backend/tests/test_wiki_scale.py -q
 ```bash
 cd frontend && pnpm typecheck && pnpm build:web
 ```
+
+> **CI（`.github/workflows/ci.yml`）**：push 到 `master` 或开 PR 时，在 `windows-latest`
+> 上依次运行 `python -m pytest backend/tests -q`、`pnpm typecheck`、`pnpm build:web`；
+> 后端 Python 固定 3.13、依赖取自 `backend/requirements-dev.txt` +
+> `backend/constraints.txt`，前端用 `pnpm install --frozen-lockfile`。任意一步失败即
+> CI 失败。要让「CI 全绿」成为合并前置条件，需在 GitHub 仓库
+> Settings → Branches 里把 `CI` 加为 `master` 的必需状态检查（这属于仓库设置，无法写进文件）。
 
 实验数据采集（后端需已启动）：
 

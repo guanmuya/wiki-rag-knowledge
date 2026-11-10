@@ -12,7 +12,8 @@
  *    运行时 `ImportError: attempted relative import with no known parent package`。
  *    所以这里生成一个几行的 launcher（`from app.desktop_entry import main`），
  *    并用 `--paths backend` 把 `app` 包暴露给分析器。
- * 2. 大量三方库有数据文件 / 动态子模块，PyInstaller 静态分析会漏，见 COLLECT_ALL。
+ * 2. 大量三方库有数据文件 / 动态子模块，PyInstaller 静态分析会漏，见 COLLECT_ALL；
+ *    依赖与收集清单都由 backend/requirements*.txt 锁定，保证打包可复现。
  * 3. 打完必须实测：拉起 exe → 读 stdout 的 WRK_READY → HTTP 打 /api/health。
  *
  * 用法：
@@ -21,7 +22,7 @@
  *   node scripts/build-backend.mjs --no-verify# 只打包
  */
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -32,6 +33,10 @@ const ROOT = resolve(FRONTEND, '..')
 const VENV_PYTHON = process.env.WRK_PYTHON || join(ROOT, '.venv', 'Scripts', 'python.exe')
 const BACKEND_DIR = join(ROOT, 'backend')
 const ENTRY = join(BACKEND_DIR, 'app', 'desktop_entry.py')
+
+// P1-2：依赖全部由锁文件固定，构建脚本不再自行决定版本或收集范围。
+const BUILD_REQS = join(BACKEND_DIR, 'requirements-build.txt')
+const CONSTRAINTS = join(BACKEND_DIR, 'constraints.txt')
 
 const BUILD_DIR = join(FRONTEND, 'build')
 const PYI_DIR = join(BUILD_DIR, 'pyinstaller')
@@ -130,34 +135,54 @@ async function checkPython() {
   log(`venv  : ${VENV_PYTHON}`)
 }
 
-/** 确认 PyInstaller 已安装；缺了就装到项目 .venv。 */
-async function ensurePyInstaller() {
-  const probe = await run(VENV_PYTHON, ['-c', 'import PyInstaller; print(PyInstaller.__version__)'], { capture: true })
-  if (probe.code === 0) {
-    log(`PyInstaller: ${probe.out.trim()}（已安装）`)
-    return
-  }
-  log('PyInstaller 未安装，开始 pip install pyinstaller ...')
-  const inst = await run(VENV_PYTHON, ['-m', 'pip', 'install', 'pyinstaller'])
-  if (inst.code !== 0) fail('pip install pyinstaller 失败')
-  const again = await run(VENV_PYTHON, ['-c', 'import PyInstaller; print(PyInstaller.__version__)'], { capture: true })
-  if (again.code !== 0) fail('PyInstaller 安装后仍无法 import')
-  log(`PyInstaller: ${again.out.trim()}`)
+/** 从锁文件读出固定的 PyInstaller 版本，脚本里不再写第二份版本号。 */
+function pinnedPyInstallerVersion() {
+  const text = readFileSync(BUILD_REQS, 'utf8')
+  const m = text.match(/^\s*pyinstaller==([^\s#]+)/m)
+  if (!m) fail(`锁文件里没有固定的 pyinstaller 版本：${BUILD_REQS}`)
+  return m[1]
 }
 
-/** 用一次 python 调用拿到已安装包列表，避免逐个起进程。 */
-async function installedPackages(names) {
+/** 确认 PyInstaller 不仅已安装，而且版本与锁文件一致；否则按锁文件重装。 */
+async function ensurePyInstaller() {
+  const want = pinnedPyInstallerVersion()
+  const probe = await run(VENV_PYTHON, ['-c', 'import PyInstaller; print(PyInstaller.__version__)'], { capture: true })
+  const got = probe.code === 0 ? probe.out.trim() : ''
+  if (got === want) {
+    log(`PyInstaller: ${want}（与锁文件一致）`)
+    return
+  }
+  log(`PyInstaller 缺失或版本不符（期望 ${want}，实际 ${got || '无法 import'}），按锁文件安装 ...`)
+  const inst = await run(VENV_PYTHON, ['-m', 'pip', 'install', '-r', BUILD_REQS, '-c', CONSTRAINTS])
+  if (inst.code !== 0) fail('按锁文件安装构建依赖失败')
+  const again = await run(VENV_PYTHON, ['-c', 'import PyInstaller; print(PyInstaller.__version__)'], { capture: true })
+  const installed = again.code === 0 ? again.out.trim() : ''
+  if (installed !== want) fail(`PyInstaller 版本应为 ${want}，实际 ${installed || '无法 import'}`)
+  log(`PyInstaller: ${want}`)
+}
+
+/**
+ * COLLECT_ALL 是固定的收集清单，不再按「当前 venv 装了什么」动态决定：
+ * 依赖已由锁文件固定，任何缺失都说明环境漂移，必须立刻失败而不是静默跳过，
+ * 否则两台机器打出的 exe 内容会不同。
+ */
+async function assertPackagesInstalled(names) {
   const code = [
-    'import importlib.util as u, json, sys',
+    'import importlib.util as u, json',
     `names = ${JSON.stringify(names)}`,
     'print(json.dumps([n for n in names if u.find_spec(n) is not None]))',
   ].join('\n')
   const { code: rc, out, err } = await run(VENV_PYTHON, ['-c', code], { capture: true })
   if (rc !== 0) fail(`探测已安装包失败：${err}`)
+  let installed
   try {
-    return new Set(JSON.parse(out.trim().split('\n').pop()))
+    installed = new Set(JSON.parse(out.trim().split('\n').pop()))
   } catch {
     fail(`探测已安装包输出无法解析：${out}`)
+  }
+  const missing = names.filter((n) => !installed.has(n))
+  if (missing.length) {
+    fail(`以下包缺失，环境不符合锁文件（请先按 README §3.1 安装依赖）：${missing.join(', ')}`)
   }
 }
 
@@ -182,7 +207,7 @@ if __name__ == "__main__":
 async function build() {
   if (!existsSync(ENTRY)) fail(`找不到桌面入口：${ENTRY}`)
 
-  const pkgs = await installedPackages(COLLECT_ALL)
+  await assertPackagesInstalled(COLLECT_ALL)
 
   const args = [
     '-m', 'PyInstaller',
@@ -199,10 +224,8 @@ async function build() {
   ]
   if (!FAST) args.push('--clean')
 
-  for (const p of COLLECT_ALL) {
-    if (pkgs.has(p)) args.push('--collect-all', p)
-    else warn(`跳过 --collect-all ${p}（未安装）`)
-  }
+  // 固定全量收集：清单是常量，不再根据当前 venv 动态增减。
+  for (const p of COLLECT_ALL) args.push('--collect-all', p)
   for (const m of HIDDEN_IMPORTS) args.push('--hidden-import', m)
 
   args.push(LAUNCHER)
