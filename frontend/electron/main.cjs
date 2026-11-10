@@ -10,6 +10,7 @@ const { spawn, spawnSync } = require('node:child_process')
 const { existsSync, mkdirSync, appendFileSync } = require('node:fs')
 const { join, dirname } = require('node:path')
 const updater = require('./updater.cjs')
+const { redactBackendLine } = require('./log-redact.cjs')
 
 const HERE = __dirname
 const ROOT = join(HERE, '..')
@@ -32,7 +33,9 @@ let backend = null
 let backendInfo = null
 let mainWindow = null
 let quitting = false
-let startupError = ''
+// P1-9：初始管理员凭据只在内存里短暂存活，仅用于首次部署弹窗展示一次；
+// 绝不写日志，弹窗关闭或用户改密后立即清除（docs/HEALTH_CHECK.md §4.2 P1-9）。
+let initialCredential = null
 
 // 主动停止后端期间不要弹「后端已停止」的错误框：重启后端走的就是这条路。
 let stopping = false
@@ -142,7 +145,11 @@ try {
 }
 
 function log(...args) {
-  const line = `[${new Date().toISOString()}] ${args.join(' ')}`
+  // P1-9：单一入口统一脱敏。后端 stdout 曾把「密码：xxx」整行转发进
+  // main.log，而 preload 的 getLogs 又把最近 200 行交给兜底页展示/复制。
+  // 在这里脱敏可覆盖所有 log() 调用点（含启动命令行、更新源状态等），
+  // 避免将来新增调用点漏掉；口令值一律替换成 ***，行的其余排障信息保留。
+  const line = redactBackendLine(`[${new Date().toISOString()}] ${args.join(' ')}`)
   logLines.push(line)
   if (logLines.length > 500) logLines.shift()
   if (isDev) console.log(line)
@@ -265,12 +272,12 @@ async function startBackend() {
           }
         }
         if (/首次部署：已创建管理员账号/.test(line)) {
-          // 把初始密码记录到日志文件，同时弹窗提示用户查看
+          // P1-9：旧版后端会打印「密码：xxx」；当前 master 的
+          // backend/app/main.py 已改为「密码来自 WRK_ADMIN_PASSWORD 环境变量」，
+          // 不再输出明文口令。这里仍兼容旧版：只在内存里留一份供弹窗展示，
+          // 绝不写日志（log() 也已统一脱敏），弹窗关闭或改密后立即清除。
           const pwdLine = lines.find((l) => l.includes('密码：'))
-          if (pwdLine) {
-            startupError = pwdLine.trim()
-            log('初始管理员信息：', startupError)
-          }
+          if (pwdLine) initialCredential = pwdLine.trim()
         }
       }
     }
@@ -584,7 +591,10 @@ function createWindow() {
       preload: join(HERE, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      // P1-9：开启渲染进程沙箱。preload.cjs 只 require('electron') 的
+      // contextBridge / ipcRenderer，没有 fs / path / Buffer / process 等
+      // Node 能力，属于 Electron 沙箱下 preload 的允许子集（见 preload.cjs 全文）。
+      sandbox: true,
       webSecurity: true,
     },
   })
@@ -701,6 +711,13 @@ ipcMain.handle('wrk:logs', () => logLines.slice(-200).join('\n'))
  */
 ipcMain.handle('wrk:failure', () => lastFailure)
 
+// P1-9：用户首次登录并改密成功后，渲染进程调用此接口清除主进程内存里的
+// 初始凭据（幂等）。弹窗关闭时也会清一次，两条路径互为兜底。
+ipcMain.handle('wrk:clear-initial-credential', () => {
+  initialCredential = null
+  return { ok: true }
+})
+
 ipcMain.handle('wrk:openPath', (_e, kind) => {
   const p = kind === 'data'
     ? userDataPaths().base
@@ -743,13 +760,16 @@ app.whenReady().then(async () => {
     log('窗口已创建')
     // 更新检查放在窗口创建之后：状态变化要推给渲染进程，且失败不能影响启动
     updater.init({ log })
-    if (startupError) {
-      dialog.showMessageBox(mainWindow, {
+    if (initialCredential) {
+      // P1-9：明文只在这一个弹窗里出现，不进日志、不进 wrk:failure / getLogs。
+      // 等用户关闭弹窗后立即清除内存中的明文；改密成功后前端还会再清一次。
+      await dialog.showMessageBox(mainWindow, {
         type: 'info', title: '首次部署',
         message: '已创建管理员账号',
-        detail: `${startupError}\n\n首次登录后请立即修改密码。\n\n` +
-                `该信息同时记录在日志中，可通过「文件 → 打开日志」查看。`,
+        detail: `${initialCredential}\n\n首次登录后请立即修改密码。\n\n` +
+                `该信息仅在此弹窗显示一次，不会写入日志，也不会在应用内留存。`,
       })
+      initialCredential = null
     }
   } catch (e) {
     log('启动失败：', String(e))

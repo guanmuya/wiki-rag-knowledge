@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 import { getApiBase, isDesktop, probeBackend, metaApi, SETUP_COMPLETED_EVENT } from '../api'
+import { useAuth } from '../auth'
 import type { DesktopInfo } from '../types'
 import { Spinner } from './ui'
 
@@ -28,6 +29,8 @@ interface StartupFailure {
 /** api.ts 的 wrkDesktop 类型不在本次改动范围内，这里按需扩展读取。 */
 interface DesktopBridgeExtras {
   getFailure?: () => Promise<StartupFailure | null>
+  /** P1-9：首次改密成功后清除主进程内存里的初始凭据。 */
+  clearInitialCredential?: () => Promise<{ ok: boolean }>
 }
 
 /**
@@ -85,6 +88,24 @@ export default function BackendGate({ children }: { children: ReactNode }) {
   const [logsLoading, setLogsLoading] = useState(false)
   const [needsSetup, setNeedsSetup] = useState(false)
   const location = useLocation()
+  const { mustChangePassword } = useAuth()
+  // P1-9：记录是否见过「必须改密」状态；只有 true → false（即改密成功）时
+  // 才通知主进程清除内存里的初始凭据，避免未登录时初始的 false 误触发。
+  const hadMustChange = useRef(false)
+
+  /** P1-9：首次登录改密成功后，清掉主进程内存中的初始管理员凭据。 */
+  useEffect(() => {
+    if (mustChangePassword) {
+      hadMustChange.current = true
+      return
+    }
+    if (!hadMustChange.current) return
+    hadMustChange.current = false
+    const bridge = window.wrkDesktop as unknown as DesktopBridgeExtras | undefined
+    void Promise.resolve(bridge?.clearInitialCredential?.()).catch(() => {
+      /* 浏览器模式或旧版 preload 没有该接口，忽略 */
+    })
+  }, [mustChangePassword])
 
   /** 问主进程要「这次启动到底为什么失败」，拿不到就返回 null。 */
   const readFailure = useCallback(async (): Promise<StartupFailure | null> => {

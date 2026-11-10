@@ -7,5 +7,6 @@
   "allowPrerelease": false,
   "_note": "GitHub 仓库必须公开，私有仓库的 Release 资产需要鉴权，终端用户下载不到。改用自建源时：provider 改成 generic，url 填放 latest.yml 的 HTTPS 目录。",
   "_sources_note": "要加国内加速源，把下面 sources 数组填好并删掉上面的 provider/owner/repo（两者只能二选一）。sources 按顺序尝试，前一个失败自动换下一个；典型写法：[{provider:generic,url:国内桶}, {provider:github,owner,repo}]。详见 docs/UPDATE.md §2.3。",
+  "_security_note": "P1-9：generic 源的 url 必须是 HTTPS；打包版拒绝任何明文 HTTP 源（含 WRK_UPDATE_URL 覆盖），开发版仅放行本机回环明文地址用于联调。校验逻辑见 frontend/electron/update-url.cjs，风险记录见 docs/UPDATE.md §6。",
   "sources": []
 }
