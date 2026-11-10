@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-11-10 21:58:40",
+  "git_head": "39dcc4ae7b35f907592fe081fe1f9d8ab91d7d68",
+  "app_version": "1.0.17",
+  "experiment_config": "A 离线（无 llm、无 embedding，向量 local-hash-embedding:256）",
+  "channel_weights": "[1.0, 0.45]（离线哈希向量降权）",
+  "embed_signature": "local-hash-embedding:256",
+  "seed": "seed_expanded --reset（三库 55 个检索单元；Wiki 由离线抽取式生成）",
+  "question_set": "demo_data/questions.json（44 题：fact/cross/multi_hop 各 11，no_answer 11）",
+  "config": {
+    "DEFAULT_CHUNK_SIZE": 700,
+    "DEFAULT_CHUNK_OVERLAP": 120,
+    "TABLE_CHUNK_BUDGET": 1600,
+    "RRF_K": 60,
+    "PER_KB_CANDIDATES": 8,
+    "MAX_EVIDENCE": 10,
+    "CONTEXT_CHAR_BUDGET": 9000,
+    "WORKER_CONCURRENCY": 1,
+    "WORKER_ENABLED": false,
+    "WIKI_MAX_MAP_CALLS": 40,
+    "WIKI_MAX_PAGES": 60
+  },
+  "hardware": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.11",
+    "machine": "AMD64",
+    "cpu_logical_count": 16,
+    "cpu_model": "Not Available",
+    "cpu_manufacturer": "GenuineIntel",
+    "ram_gb": 31.78,
+    "disk_model": "WD PC SN540 SDDPNPF-512G",
+    "cpu_model_note": "本机为虚拟机：Win32_Processor.Name 与注册表 ProcessorNameString 均报告 Not Available，无法取得具体型号；仅记录 Manufacturer 与逻辑核数"
+  },
+  "python": "3.13.11",
+  "randomness": "离线哈希向量确定性；无随机种子，重复运行结果一致（仅耗时波动）"
+}

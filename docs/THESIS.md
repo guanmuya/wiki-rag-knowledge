@@ -326,23 +326,51 @@ Message.content        回答正文，结论后带 [编号]
 
 ---
 
-## 4. 实验方法（待实验）
+## 4. 实验方法与结果
 
-本节只给**可执行的测量方案**，不填任何未跑出的数字。所有采集都走现成接口，不需要改代码即可完成 E1–E3、E5；E4 需要探针脚本复现另两种分块策略。
+> **本轮（P0-1）已把五个对照实验跑出可复现的原始结果**：数据在 `docs/results/`，
+> 采集器 `backend/scripts/run_experiments.py`，复现命令与数据字典见
+> `docs/results/README.md`，人读汇总见 `docs/results/summary.md`。
+> 本机无在线模型配置与凭据，故为 `docs/EXPERIMENT.md` §1.2 的**配置 A 离线**；
+> 按 `docs/EXPERIMENT.md` §7 与本文 §6.7，离线结果只证明链路可运行、数字可复现，
+> **不是论文主结果**。按 `docs/EXPERIMENT.md:3` 的约定，凡未实测的数字一律
+> 标注「待实验」，不填推测值。
+
+本节给出可执行的测量方案与本轮实测值。E1–E3、E5 的逐题数据走现成接口
+`POST /api/search/preview` 采集；E3 后两组与 E4 另两种分块策略按
+`docs/EXPERIMENT.md` §3 用探针脚本复现（不改产品代码）。
+所有采集都落在隔离的临时数据目录，不写仓库 `data/`。
+
+### 4.0 本轮实测环境与固定参数
+
+实测值见 `docs/results/environment.json`：Windows 11（10.0.26200）、
+Python 3.13.11、后端 `v1.0.17`、SQLite 单文件；16 逻辑核、31.78 GB 内存、
+磁盘 WD PC SN540 SDDPNPF-512G；**CPU 具体型号本机不可得**（虚拟机把型号报告为
+`Not Available`），如实留白。向量为 `local-hash-embedding:256`、
+`channel_weights()` 为 `[1.0, 0.45]`、`embed_signature` 为 `local-hash-embedding:256`。
+固定参数：`WRK_CHUNK_SIZE=700`、`WRK_CHUNK_OVERLAP=120`、`WRK_TABLE_CHUNK_BUDGET=1600`、
+`WRK_RRF_K=60`、`WRK_PER_KB_CANDIDATES=8`、`WRK_MAX_EVIDENCE=10`、
+`WRK_CONTEXT_CHAR_BUDGET=9000`、`WIKI_MAX_MAP_CALLS=40`、`WIKI_MAX_PAGES=60`。
+语料 `seed_expanded --reset` 三库 55 个检索单元（19/20/16），题集
+`demo_data/questions.json` 44 题。Wiki 由离线抽取式生成，
+`wiki._plan_shards()` 只读探针实测三库均 `shards=1`、`excerpt=900`，
+`WikiBuildResult.notes` 为空（按 `docs/EXPERIMENT.md` §2.3 推断未截断、未跳过）。
 
 ### 4.1 实验矩阵
 
-| 编号 | 研究问题 | 自变量 | 控制变量 | 状态 |
+| 编号 | 研究问题 | 自变量 | 控制变量 | 本轮状态 |
 | --- | --- | --- | --- | --- |
-| E1 | Wiki 增强是否优于纯分块 | `KnowledgeBase.mode ∈ {basic, wiki}`，同一批文档 | 同一份分块、同一题集、同一向量来源 | 待实验 |
-| E2 | 单库检索 vs 多库混合是否引入噪声 | `kb_ids` 单元素 vs 三元素 | 同一题集，题目按「答案所在库」标注 | 待实验 |
-| E3 | 两层融合各分量的贡献 | 加权 RRF / 等权 RRF / 纯关键词 / 纯向量 | 同一语料与题集 | 待实验（后两组需改 `channel_weights()` 与 `lexical_ids`） |
-| E4 | 表格分块策略 | 逐行 / 整表 / 行组+表头 | 同一份表格文件 | 待实验（仅第三种是现成实现） |
-| E5 | 分块粒度与 overlap 的敏感性 | `WRK_CHUNK_SIZE ∈ {400,700,1000}` × `WRK_CHUNK_OVERLAP ∈ {0,120,240}` | 同一语料与题集 | 待实验 |
+| E1 | Wiki 增强是否优于纯分块 | `KnowledgeBase.mode ∈ {basic, wiki}`，同一批文档 | 同一份分块、同一题集、同一向量来源 | **配置 A 离线实测**（`e1_wiki_vs_basic.csv`） |
+| E2 | 单库检索 vs 多库混合是否引入噪声 | `kb_ids` 单元素 vs 三元素 | 同一题集，题目按「答案所在库」标注 | **配置 A 离线实测**（`e2_single_vs_multi.csv`） |
+| E3 | 两层融合各分量的贡献 | 加权 RRF / 等权 RRF / 纯关键词 / 纯向量 | 同一语料与题集 | **配置 A 离线实测**，四组均由进程内打补丁实现（后两组无配置开关） |
+| E4 | 表格分块策略 | 逐行 / 整表 / 行组+表头 | 同一份表格文件 | **配置 A 离线实测**（探针复现，`e4_table_chunking.csv`） |
+| E5 | 分块粒度与 overlap 的敏感性 | `WRK_CHUNK_OVERLAP ∈ {0,60,120,240}`（并做接缝探针） | 同一语料与题集 | **配置 A 离线实测**（`e5_overlap.csv` / `e5_seam_probe.csv`） |
+
+配置 B（真实 embedding + 在线生成）下 E1–E5 的全部指标仍为**待实验**。
 
 **E1 的公平性前提已变化**：旧版 Wiki 只覆盖前 60 块，扩料后直接对比会低估 Wiki。现实现下全库每块都进入某一片（§3.3），因此 E1 可以放开到 150–300 块；但仍需在结果里核对 `WikiBuildResult.notes` 的分片数与页面数上限提示，确认没有因 `WIKI_MAX_PAGES=60` 丢掉主题——若丢过，必须在论文中披露「Wiki 页面覆盖率」这一额外变量。
 
-**E5 的实施方式**：改环境变量后需重建索引（`POST /api/kbs/{id}/rebuild`），不同 `WRK_CHUNK_SIZE` 的结果必须落在不同知识库或不同 `WRK_DATA_DIR`，否则分块表被覆盖。`WRK_CHUNK_OVERLAP=0` 是合法输入（`backend/app/services/chunking.py:164-166` 已修正），可真正关闭重叠。
+**E5 的实施方式**：改环境变量后需重建索引（`POST /api/kbs/{id}/rebuild`），不同 `WRK_CHUNK_SIZE` 的结果必须落在不同知识库或不同 `WRK_DATA_DIR`，否则分块表被覆盖。`WRK_CHUNK_OVERLAP=0` 是合法输入（`backend/app/services/chunking.py:164-166` 已修正），可真正关闭重叠。本轮没有走重建接口，而是按每个 overlap 值各建一个临时库、用 `chunking.split_blocks(..., overlap=N)` 直接灌入，效果等价且不触碰主库；四组各自重算预期命中单元。
 
 ### 4.2 指标定义
 
@@ -359,6 +387,11 @@ Message.content        回答正文，结论后带 [编号]
 | 检索耗时 | `search/preview` 的端到端时间（不含生成） | 采集脚本计时 |
 
 **必须分层报告的两组数**：`coverage` 与 `rank` 不单调（§3.4），「证据覆盖率」与「检索名次」要分开统计；`live_calls` 与 `offline_calls` 要分开统计，否则离线演示的零成本会污染费用结论。
+
+本轮 Hit@k / MRR 的「预期命中单元」由 `answer_keywords` 自动标注
+（规则见 `backend/scripts/run_experiments.py derive_expected()`，逐题单元见
+`docs/results/expected_units.json`），分母为 33 道可答题，`no_answer` 题不参与；
+**人工标注的预期单元仍为待实验**，自动标注只是可复现的代理，不能冒充人工金标准。
 
 ### 4.3 采集与统计
 
@@ -377,7 +410,34 @@ PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe backend/scripts/collect_metrics.
 
 `--repeat 3` 用于观察波动（CSV 的 `repeat` 列区分），`--label` 给每轮打标签便于多轮合并。`questions.json` 支持 `{"kb_ids":[...], "questions":[...]}` 或纯数组（后者用 `--kb-ids` 传库）。
 
-**样本量与显著性**：建议 60 题、四类各 15（单点事实 / 流程步骤 / 跨节归纳 / 无答案）。配对设计（同一题在两个条件下各跑一次）用 **Wilcoxon 符号秩检验**；比例类指标（Hit@1、拒答正确率）用 **McNemar 检验**；成本类（token、耗时）分布明显右偏，报告中位数与 IQR 而非均值。**待实验**：上述检验的实际 p 值。
+本轮主采集器为 `backend/scripts/run_experiments.py`（进程内 `TestClient` 打真实路由，
+不改产品代码），一键重跑全部结果：
+
+```bash
+PYTHONIOENCODING=utf-8 python backend/scripts/run_experiments.py
+```
+
+`collect_metrics.py` 本轮也做了一次独立 HTTP 路径复核（真实起 uvicorn），
+命令与全部参数如下，结果在 `docs/results/e2_http_crosscheck.csv`：
+
+```bash
+PYTHONIOENCODING=utf-8 python backend/scripts/collect_metrics.py \
+  --base-url http://127.0.0.1:8765 \
+  --username admin --password '<本地临时口令>' \
+  --input docs/results/questions.search.json \
+  --kb-ids 1,2,3 \
+  --mode search --repeat 3 \
+  --label e2-multi-http-basic \
+  --out docs/results/e2_http_crosscheck.csv
+```
+
+`docs/results/questions.search.json` 是 44 题的纯文本列表，由题集转换而来；
+转换命令、隔离数据目录的环境变量与起服务步骤见 `docs/results/README.md` §3.2。
+复核结果：真实 HTTP 路径的 33 道可答题均值（`evidence_count=9.5152`、
+`top1_coverage=0.3399`、`mean_coverage=0.1448`、`calls=1.0`、
+`embed_calls=1.0`、`offline_calls=1.0`）与主采集器 E2 多库组逐位一致。
+
+**样本量与显著性**：建议 60 题、四类各 15（单点事实 / 流程步骤 / 跨节归纳 / 无答案）。配对设计（同一题在两个条件下各跑一次）用 **Wilcoxon 符号秩检验**；比例类指标（Hit@1、拒答正确率）用 **McNemar 检验**；成本类（token、耗时）分布明显右偏，报告中位数与 IQR 而非均值。上述检验的实际 **p 值：待实验**（需配置 B 实测与两人独立人工标注后才计算，本轮不填推测值）。
 
 ### 4.4 必须声明的混淆因素
 
@@ -387,17 +447,96 @@ PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe backend/scripts/collect_metrics.
 4. **语料规模**。`demo_data` 三库仅 25 个检索单元，任何一题答对都可能是偶然命中，统计上没有区分度。目标规模 150–300 单元（`docs/EXPERIMENT.md` §2.2 给出了扩充路径）。
 5. **索引与查询同源**。索引阶段与查询阶段必须用同一个 embedding 模型（签名一致），否则向量通道实际失效而关键词通道仍在工作，结果会呈现「看起来还行」的假象。
 
-### 4.5 待实验清单（逐项给测量方法）
+### 4.5 未测项清单（逐项给测量方法）
 
-| 待测项 | 方法 |
-| --- | --- |
-| 真实 embedding 下的检索耗时 | 固定语料，`--mode search --repeat 10`，记录 `latency_ms` 的 P50/P95；与离线路径分开报 |
-| Wiki vs 分块的正确率差 | E1，配对 60 题，McNemar |
-| Wiki 的整理成本倍数 | `by_group.wiki.live_calls / by_group.ingest.live_calls`（同一批文档） |
-| 分片归纳对页面覆盖的影响 | 造 200/500/1000 块的库，读 `WikiBuildResult.notes` 与 `pages_created`，确认「未丢弃任何分块」成立 |
-| 表格策略的可回答性差 | E4，题目含「末尾若干行」的事实题，验证整表策略的截断失效 |
-| 多库噪声 | E2，统计 `final_total` 中 `coverage == 0` 且来自无关库的条数占比 |
-| 拒答判定的假阳性率 | 人工标注 60 题，统计「有答案但被判 insufficient」的比例（预期非零，§3.6 的已知取舍） |
+本轮已实测的项见 §4.6；下表只剩**配置 B / 人工标注**相关的未测项，
+按 `docs/EXPERIMENT.md:3` 的约定一律标注「待实验」，不填推测值。
+
+| 待测项 | 方法 | 本轮状态 |
+| --- | --- | --- |
+| 真实 embedding 下的检索耗时 | 固定语料，`--mode search --repeat 10`，记录 `latency_ms` 的 P50/P95；与离线路径分开报 | 待实验（配置 B） |
+| Wiki vs 分块的正确率差 | E1，配对 60 题，McNemar | 待实验（需人工标注 + 配置 B） |
+| Wiki 的整理成本倍数 | `by_group.wiki.live_calls / by_group.ingest.live_calls`（同一批文档） | 待实验（配置 B；离线 `live_calls=0`） |
+| 分片归纳对页面覆盖的影响 | 造 200/500/1000 块的库，读 `WikiBuildResult.notes` 与 `pages_created`，确认「未丢弃任何分块」成立 | 本轮 55 块已实测 `shards=1` / `excerpt=900` / notes 为空；200/500/1000 块仍待实验 |
+| 表格策略的可回答性差 | E4，题目含「末尾若干行」的事实题，验证整表策略的截断失效 | **本轮已实测**：整表末尾题 `answer_in_context_tail=0/3`，逐行/行组 `3/3` |
+| 多库噪声 | E2，统计 `final_total` 中 `coverage == 0` 且来自无关库的条数占比 | **本轮已实测**：逐题落在 `e2_single_vs_multi.csv` 的 `noise_unrelated_zero_cov` 列 |
+| 拒答判定的假阳性率 | 人工标注 60 题，统计「有答案但被判 insufficient」的比例（预期非零，§3.6 的已知取舍） | 待实验（需人工标注 60 题） |
+
+### 4.6 本轮实测结果（配置 A 离线）
+
+> 全部原始行在 `docs/results/*.csv`，机读聚合在 `docs/results/summary.json`，
+> 人读汇总表在 `docs/results/summary.md`。Hit@k / MRR 分母为 33 道可答题，
+> 判据见 `docs/results/README.md` §5；下表每个数字都能追溯到结果文件的某一行。
+> 耗时随本机负载波动，以 `latency.csv` / `summary.md` 当次读数为准。
+
+**E1 原文分块 vs Wiki 增强**（`e1_wiki_vs_basic.csv`；同一批分块只切 `mode`，
+`route_used=wiki|wiki|wiki`、`fallback=False` 已核对，`wiki_shards=1`、`wiki_excerpt=900`）
+
+| 组 | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR | 证据数 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| wiki | 0.8182 | 0.9091 | 1.0 | 1.0 | 0.8833 | 8.8788 |
+| basic | 0.8485 | 0.9394 | 0.9697 | 1.0 | 0.9043 | 9.5152 |
+
+离线抽取式 Wiki 未带来 Hit@1 增益，但 Hit@10 两组都到 1.0、证据可回挂、
+路由无回退。**不能据此写「Wiki 无用」**——配置 B 下必须重测。
+
+**E2 单库 vs 多库**（`e2_single_vs_multi.csv`）
+
+| 组 | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR | 证据数 | 候选数 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| single | 0.8485 | 0.9697 | 1.0 | 1.0 | 0.9101 | 5.1212 | 5.1212 |
+| multi | 0.8485 | 0.9394 | 0.9697 | 1.0 | 0.9043 | 9.5152 | 14.0606 |
+
+单库组 Hit@3 更高、多库组证据数更多，符合「跨库融合把正确证据挤到后面」的预期。
+
+**E3 四组通道消融**（`e3_rrf_ablation.csv`；纯向量组同时把 `vector_rank` 的
+`lexical_ids` 置 `None`，避免测成「关键词门控后的向量」）
+
+| 组 | 权重 | Hit@1 | Hit@3 | Hit@10 | MRR |
+| --- | --- | ---: | ---: | ---: | ---: |
+| weighted_rrf | `[1.0,0.45]` | 0.8485 | 0.9394 | 1.0 | 0.9043 |
+| equal_rrf | `[1.0,1.0]` | 0.8485 | 0.9394 | 1.0 | 0.9043 |
+| keyword_only | `[1.0,0.0]` | 0.8788 | 0.9697 | 1.0 | 0.9318 |
+| vector_only | `[0.0,1.0]` | 0.6970 | 0.8485 | 0.8788 | 0.7550 |
+
+纯关键词最好、纯向量最差，正是 §6 实验三写明的「中文小语料 + 离线哈希向量下
+纯关键词优于全部融合方案」的负结果，如实报告，不掩盖。
+
+**E4 表格分块三策略**（`e4_table_chunking.csv`，探针实测）
+
+| 文件 | 策略 | 块数 | 总字符 | 向量批次 | 末尾行在上下文 | 末尾题答案进上下文 |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| 700行.docx | row / whole / group | 700 / 1 / 39 | 58688 / 59403 / 60546 | 44 / 1 / 3 | 1 / 0 / 1 | 3/3 · 0/3 · 3/3 |
+| 120行.docx | row / whole / group | 120 / 1 / 7 | 10066 / 10201 / 10384 | 8 / 1 / 1 | 1 / 0 / 1 | 3/3 · 0/3 · 3/3 |
+| 200行.xlsx（薪酬明细） | row / whole / group | 200 / 1 / 12 | 16760 / 16979 / 17356 | 13 / 1 / 1 | 1 / 0 / 1 | 3/3 · 0/3 · 3/3 |
+
+整表策略检索命中不差（单块含全部行），但 `build_context()` 按
+`CONTEXT_CHAR_BUDGET=9000` 截断 1 万～5.9 万字符的整表块，末尾行进不了提示词。
+`group` 策略数字与 `inspect_chunks.py` 一致。
+
+**E5 overlap 消融**（`e5_overlap.csv` + `e5_seam_probe.csv`）
+
+| overlap | 44 题题集块数 | Hit@1 | Hit@3 | Hit@10 | MRR | 接缝探针块数 | 总字符 | 接缝对命中率 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 55 | 0.8182 | 1.0 | 1.0 | 0.8990 | 8 | 5336 | 0.7742（24/31） |
+| 60 | 55 | 0.8182 | 1.0 | 1.0 | 0.8990 | 11 | 5943 | 1.0（31/31） |
+| 120 | 55 | 0.8182 | 1.0 | 1.0 | 0.8990 | 11 | 6543 | 1.0（31/31） |
+| 240 | 55 | 0.8182 | 1.0 | 1.0 | 0.8990 | 15 | 8703 | 1.0（31/31） |
+
+44 题题集上四组分块数同为 55（`demo_data` 段落均短于 700 字符，不触发溢出分支），
+故整体 Hit@k 无差异；接缝探针（32 段合成受控语料）单独测出机制：
+`overlap=0` 只有 24/31 对相邻锚点落在同一块，`60/120/240` 均为 31/31，
+但块数 8→15、总字符 5336→8703。结论符合 `docs/EXPERIMENT.md` §3 实验五的判定：
+overlap 只对接缝类问题有效，对整体指标影响在噪声内，且更大重叠有索引体积代价。
+
+**检索耗时**（`latency.csv`，9 题 × 10 次 = 90 样本，配置 A 离线）：
+min / P50 / P95 / max / 均值 / 标准差由采集器写入 `docs/results/summary.json`，
+人读值见 `docs/results/summary.md`；耗时随本机负载波动、重跑会变，
+以结果文件当次读数为准，接入真实 embedding 后必须重测。
+
+**成本**：`calls=1.0`（一次查询向量化）、`live_calls=0.0`、`offline_calls=1.0`、
+`stats_mode=no-chat`（只检索不生成）、`total_tokens=0`。这是配置 A 的真实读数，
+不能与配置 B 的费用结论混用。
 
 ---
 

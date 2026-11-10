@@ -16,7 +16,7 @@
 | 数据库 | SQLite 单文件，`journal_mode=WAL`、`busy_timeout=15000` |
 | 前端 | Electron 33 + React，仅在人工判定环节使用 |
 
-CPU、内存、磁盘型号**待实测**（`systeminfo` 输出后补入）。离线哈希向量路径的耗时主要由 CPU 单核性能决定，接入真实 embedding 后主要受网络 RTT 影响，两者需分开记录。
+CPU、内存、磁盘型号已由本轮实测补入 `docs/results/environment.json`（见 §8.1）；CPU 具体型号在本机为虚拟机、系统把型号报告为 `Not Available`，按约定如实留白、不填推测值。离线哈希向量路径的耗时主要由 CPU 单核性能决定，接入真实 embedding 后主要受网络 RTT 影响，两者需分开记录。
 
 ### 1.2 模型配置
 
@@ -616,3 +616,179 @@ label_correctness, label_evidence_support, reviewer
 **拒答判定的保守偏置**。开头 80 字命中拒答语句即判拒答，会误伤「半答半拒」的回答（先拒一句再补一半）。这可能让无答案题的召回偏高、可答题的「部分正确」偏低。实验设计上必须把「拒答判定」与「回答质量」分开标注，不能用一个 `insufficient` 字段同时代表两件事。
 
 **成本口径的剩余盲区**。`CostRecord` 已覆盖任务、Wiki 编辑、失败任务（`kind="failed_attempt"`），但连接测试（`POST /api/settings/models/{mid}/test`）不写记录——它不属于任何库的整理代价。若实验里用连接测试探活，这部分开销不会出现在 `/cost` 里，需单独记录。另外 `cost.record()` 对全零 stats 直接跳过，因此「零成本任务」不会出现在 `records` 里，统计任务条数时不能拿 `record_count` 当任务数。
+
+---
+
+## 8. 实验结果（配置 A 离线，实测）
+
+> 本节是 P0-1「补齐实验数据并落库」的产出。原始数据、汇总表、数据字典与复现命令
+> 全部在 `docs/results/`，采集器为 `backend/scripts/run_experiments.py`。
+> **本机无在线模型配置与凭据**（环境变量无模型密钥、无 `data/` 下的 `ModelConfig`，
+> `GET /api/meta` 实测 `offline_models=true`），因此本轮只能跑 §1.2 的**配置 A 离线**：
+> 向量为 `local-hash-embedding:256`、`channel_weights()` 为 `[1.0, 0.45]`、
+> 生成侧为抽取式。按 §7 与 `docs/THESIS.md` §6.7，离线结果只证明「链路可运行、
+> 字段口径正确、结果可复现」，**不是论文主结果**；配置 B 的指标一律「待实验」。
+> 按 `:3` 的约定，凡未实测的数字不填推测值。
+
+### 8.1 环境与配置（实测，补 §1.1 的留白）
+
+| 项 | 实测值 |
+| --- | --- |
+| 操作系统 | Windows 11（10.0.26200），AMD64 |
+| Python | 3.13.11（本机全局解释器，本 checkout 无 `.venv`） |
+| 后端 / 版本 | FastAPI + Uvicorn 单进程，`v1.0.17` |
+| 数据库 | SQLite 单文件，临时目录，跑完即弃 |
+| CPU | 16 逻辑核；**具体型号本机不可得**（虚拟机把 `Win32_Processor.Name` 与注册表 `ProcessorNameString` 都报为 `Not Available`，厂商仅 `GenuineIntel`），如实记录，不填推测值 |
+| 内存 | 31.78 GB |
+| 磁盘 | WD PC SN540 SDDPNPF-512G |
+
+完整读数（含 `git_head`、全部 `WRK_*` 参数取值）在 `docs/results/environment.json`。
+§1.1 里「CPU、内存、磁盘型号待实测」的留白由此补齐；仍取不到的 CPU 型号保持留白。
+
+固定参数取自 `backend/app/config.py`：`DEFAULT_CHUNK_SIZE=700`、
+`DEFAULT_CHUNK_OVERLAP=120`、`TABLE_CHUNK_BUDGET=1600`、`RRF_K=60`、
+`PER_KB_CANDIDATES=8`、`MAX_EVIDENCE=10`、`CONTEXT_CHAR_BUDGET=9000`、
+`WIKI_MAX_MAP_CALLS=40`、`WIKI_MAX_PAGES=60`。语料为 `seed_expanded --reset`
+的三库 55 个检索单元（19/20/16）；题集为 `demo_data/questions.json` 44 题
+（`fact`/`cross`/`multi_hop` 各 11，`no_answer` 11）。Wiki 由离线抽取式生成，
+`wiki._plan_shards()` 只读探针实测三库均为 `shards=1`、`excerpt=900`；
+`WikiBuildResult.notes` 为空，按 §2.3 可推断「单片归纳、未截断、未跳过」。
+
+### 8.2 采集方式与命令
+
+主采集器 `backend/scripts/run_experiments.py` 在进程内用
+`fastapi.testclient.TestClient` 打真实路由 `POST /api/search/preview`
+（与独立起 uvicorn 共用路由层、`get_db`、`CallStats` 的 usage 组装），
+不改产品代码；E3 的四组权重、E5 的四组 overlap 通过进程内打补丁切换，
+E4 按 §3 实验四用探针复现。
+
+```bash
+# 一键重跑全部结果（仓库根目录，不需要起服务、不需要凭据）
+PYTHONIOENCODING=utf-8 python backend/scripts/run_experiments.py
+
+# 表格分块数字独立复核
+PYTHONIOENCODING=utf-8 python backend/scripts/inspect_chunks.py
+```
+
+既有的 `backend/scripts/collect_metrics.py` 本轮也做了一次**独立 HTTP 路径复核**
+（命令与全部参数见 `docs/results/README.md` §3.2，结果在
+`docs/results/e2_http_crosscheck.csv`，132 行 = 44 题 × 3 次）：
+
+```bash
+PYTHONIOENCODING=utf-8 python backend/scripts/collect_metrics.py \
+  --base-url http://127.0.0.1:8765 \
+  --username admin --password '<本地临时口令>' \
+  --input docs/results/questions.search.json \
+  --kb-ids 1,2,3 \
+  --mode search --repeat 3 \
+  --label e2-multi-http-basic \
+  --out docs/results/e2_http_crosscheck.csv
+```
+
+（本轮用全局 Python 3.13.11 实测：当前 checkout 无 `.venv`；若用仓库自带的
+`.venv`，把 `python` 换成 `.venv/Scripts/python.exe` 即可。）
+
+复核结果：真实 HTTP 路径得到的 33 道可答题均值
+（`evidence_count=9.5152`、`top1_coverage=0.3399`、`mean_coverage=0.1448`、
+`calls=1.0`、`embed_calls=1.0`、`offline_calls=1.0`）与主采集器 E2 多库组逐位一致，
+两条采集路径口径相同。`questions.search.json` 由 `demo_data/questions.json`
+转换而来，转换命令也写在 `docs/results/README.md` §3.2。
+
+### 8.3 指标口径
+
+Hit@k / MRR / 覆盖率以 `docs/results/expected_units.json` 的「预期命中单元」
+为基准（用 `answer_keywords` 自动标注，规则见采集器 `derive_expected()`）；
+分母为 33 道可答题，11 道 `no_answer` 题不参与 Hit@k。
+`/api/search/preview` 不接受 `top_k`，Hit@1/3/5 由脚本自行截取 `evidence[]`。
+`latency_ms` 为接口端到端墙钟时间，不含网络往返。四个逐题 CSV 的前 27 列
+与 `collect_metrics.py` 的 `FIELDS` 同名同序，扩展列含义见
+`docs/results/README.md` §4。
+
+### 8.4 五个实验的实测结果
+
+下表只放聚合值；每个数字都能在对应 CSV 的某一行复算，聚合规则见
+`docs/results/summary.json`，人读版见 `docs/results/summary.md`。
+
+**实验一：原文分块 vs Wiki 增强**（`e1_wiki_vs_basic.csv`，同一批分块只切 `mode`；
+`route_used=wiki|wiki|wiki`、`fallback=False` 已核对）
+
+| 组 | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR | 证据数 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| wiki | 0.8182 | 0.9091 | 1.0 | 1.0 | 0.8833 | 8.8788 |
+| basic | 0.8485 | 0.9394 | 0.9697 | 1.0 | 0.9043 | 9.5152 |
+
+**实验二：单库 vs 多库**（`e2_single_vs_multi.csv`）
+
+| 组 | Hit@1 | Hit@3 | Hit@5 | Hit@10 | MRR | 证据数 | 候选数 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| single | 0.8485 | 0.9697 | 1.0 | 1.0 | 0.9101 | 5.1212 | 5.1212 |
+| multi | 0.8485 | 0.9394 | 0.9697 | 1.0 | 0.9043 | 9.5152 | 14.0606 |
+
+**实验三：四组通道消融**（`e3_rrf_ablation.csv`；纯向量组同时把
+`vector_rank` 的 `lexical_ids` 置 `None`）
+
+| 组 | 权重 | Hit@1 | Hit@3 | Hit@10 | MRR |
+| --- | --- | ---: | ---: | ---: | ---: |
+| weighted_rrf | `[1.0,0.45]` | 0.8485 | 0.9394 | 1.0 | 0.9043 |
+| equal_rrf | `[1.0,1.0]` | 0.8485 | 0.9394 | 1.0 | 0.9043 |
+| keyword_only | `[1.0,0.0]` | 0.8788 | 0.9697 | 1.0 | 0.9318 |
+| vector_only | `[0.0,1.0]` | 0.6970 | 0.8485 | 0.8788 | 0.7550 |
+
+**实验四：表格分块三策略**（`e4_table_chunking.csv`，探针实测；
+`tail` 列指表格末尾行的题目）
+
+| 文件 | 策略 | 块数 | 总字符 | min/avg/max | 向量批次 | 末尾行在上下文 | 末尾题答案进上下文 |
+| --- | --- | ---: | ---: | --- | ---: | ---: | --- |
+| 700行.docx | row | 700 | 58688 | 76/83.84/93 | 44 | 1 | 3/3 |
+| 700行.docx | whole | 1 | 59403 | 59403/59403.0/59403 | 1 | 0 | 0/3 |
+| 700行.docx | group | 39 | 60546 | 1385/1552.46/1560 | 3 | 1 | 3/3 |
+| 120行.docx | row / whole / group | 120 / 1 / 7 | 10066 / 10201 / 10384 | 76/83.88/93 · 10201 · 1055/1483.43/1558 | 8 / 1 / 1 | 1 / 0 / 1 | 3/3 · 0/3 · 3/3 |
+| 200行.xlsx（薪酬明细） | row / whole / group | 200 / 1 / 12 | 16760 / 16979 / 17356 | 76/83.8/93 · 16979 · 193/1446.33/1564 | 13 / 1 / 1 | 1 / 0 / 1 | 3/3 · 0/3 · 3/3 |
+
+`group` 策略数字与 `inspect_chunks.py` 一致。整表策略在「检索命中」上不差
+（单块就含全部行），但 `build_context()` 按 9000 字符预算把 1 万～5.9 万字符
+的整表块截断，末尾行进不了提示词——这是 §3 实验四要的截断失效证据。
+
+**实验五：overlap 消融**（`e5_overlap.csv` + `e5_seam_probe*.csv`）
+
+| overlap | 44 题题集块数 | Hit@1 | Hit@3 | Hit@10 | MRR | 接缝探针块数 | 总字符 | 同块相邻锚点对 | 接缝对命中率 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: |
+| 0 | 55 | 0.8182 | 1.0 | 1.0 | 0.8990 | 8 | 5336 | 24/31 | 0.7742 |
+| 60 | 55 | 0.8182 | 1.0 | 1.0 | 0.8990 | 11 | 5943 | 31/31 | 1.0 |
+| 120 | 55 | 0.8182 | 1.0 | 1.0 | 0.8990 | 11 | 6543 | 31/31 | 1.0 |
+| 240 | 55 | 0.8182 | 1.0 | 1.0 | 0.8990 | 15 | 8703 | 31/31 | 1.0 |
+
+44 题题集上四组分块数同为 55，因为 `demo_data` 段落均短于 700 字符，
+不触发 `split_blocks` 的「同一标题内长度溢出」分支（§1.3 已说明重叠只在
+该分支与超长段落句级回退上生效）。为单独测出机制，另用 32 段合成受控语料
+做接缝探针（逐对明细见 `e5_seam_probe_detail.csv`）：`overlap=0` 时
+相邻锚点对只有 `24/31` 落在同一块，`60/120/240` 均为 `31/31`，
+同时块数与总字符随重叠增大。注意 `overlap=0` 也关掉了超长段落分支的
+「回退 1 句」（§3 实验五），两种机制不可混为一谈。
+
+**检索耗时**（`latency.csv`，9 题 × 10 次 = 90 样本，配置 A 离线）：
+min / P50 / P95 / max / 均值 / 标准差由采集器写入 `docs/results/summary.json`
+并由 `docs/results/summary.md` 打印，本处不写死数字——耗时随本机负载波动，
+重跑会变，以结果文件当次读数为准；接入真实 embedding 后必须重测。
+
+### 8.5 只在离线口径下成立的观察
+
+- E1 离线抽取式 Wiki 未带来 Hit@1 增益（0.8182 < 0.8485），Hit@10 两组都到 1.0；
+  证据可回挂、路由无回退。**不能据此写「Wiki 无用」**——§6 实验一的预期本来就
+  要求配置 B 下重测。
+- E2 单库组 Hit@3 更高、多库组证据数更多，符合「跨库融合把正确证据挤到后面」；
+  噪声已逐题落在 `noise_unrelated_zero_cov` 列。
+- E3 纯关键词最好、纯向量最差，正是 §6 实验三写明的「中文小语料 + 离线哈希
+  向量下纯关键词优于全部融合方案」的负结果，如实报告。
+- E5 结论符合 §3 实验五的判定标准：整体 Hit@k 差异在噪声内，接缝类差异明显，
+  且更大 overlap 有索引体积代价（块数 8→15、总字符 5336→8703）。
+
+### 8.6 待实验（§6 的预期仍是预期，未被本节替换）
+
+配置 B（真实 embedding + 在线生成）下 E1–E5 的全部指标；正确性三档、
+证据支持率、引用精确率、拒答正确率（需两人独立标注 + Cohen's κ）；
+Wilcoxon 符号秩 / McNemar 检验的实际 p 值；真实 embedding 下的耗时 P50/P95；
+150–300 检索单元扩料题集的库尾题与接缝题人工标注；
+在线模型下 `live_calls` / `total_tokens` / `latency_ms` 的真实读数。
+这些项在 `docs/THESIS.md` §4 与 `docs/results/README.md` §8 同步标注「待实验」。
+

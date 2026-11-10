@@ -1,0 +1,673 @@
+{
+  "match_rule": "见 run_experiments.py derive_expected()",
+  "seed_chunk_count": 55,
+  "embed_signature": "local-hash-embedding:256",
+  "questions": {
+    "Q01": {
+      "question": "去一线城市出差，住宿一晚最多能报多少？",
+      "type": "fact",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [
+        "600 元/晚"
+      ],
+      "expected_chunk_ids": [
+        5
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q02": {
+      "question": "标准版一年基础订阅价是多少钱？",
+      "type": "fact",
+      "expected_kb": [
+        "产品与销售库"
+      ],
+      "answer_keywords": [
+        "12 万元/年"
+      ],
+      "expected_chunk_ids": [
+        41
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q03": {
+      "question": "数据库每天几点做全量备份？",
+      "type": "fact",
+      "expected_kb": [
+        "客户支持库"
+      ],
+      "answer_keywords": [
+        "02:00"
+      ],
+      "expected_chunk_ids": [
+        27
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q04": {
+      "question": "补充医疗的门诊能报多少比例？",
+      "type": "fact",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [
+        "门诊报销比例 80%"
+      ],
+      "expected_chunk_ids": [
+        14
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q05": {
+      "question": "P0 工单要求多长时间内首次响应？",
+      "type": "fact",
+      "expected_kb": [
+        "客户支持库"
+      ],
+      "answer_keywords": [
+        "P0 | 全部客户不可用或数据丢失 | 15 分钟"
+      ],
+      "expected_chunk_ids": [
+        21
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q06": {
+      "question": "法定节假日加班，加班费按几倍算？",
+      "type": "fact",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [
+        "法定节假日按 3 倍计"
+      ],
+      "expected_chunk_ids": [
+        18
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q07": {
+      "question": "私有化部署最少要什么样的服务器？",
+      "type": "fact",
+      "expected_kb": [
+        "产品与销售库"
+      ],
+      "answer_keywords": [
+        "3 台 16 核 64G"
+      ],
+      "expected_chunk_ids": [
+        50
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q08": {
+      "question": "投标保证金一般收预算的多少？",
+      "type": "fact",
+      "expected_kb": [
+        "产品与销售库"
+      ],
+      "answer_keywords": [
+        "预算金额的 2%"
+      ],
+      "expected_chunk_ids": [
+        52
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q09": {
+      "question": "上传资料单个文件最大能多大？",
+      "type": "fact",
+      "expected_kb": [
+        "产品与销售库"
+      ],
+      "answer_keywords": [
+        "50M"
+      ],
+      "expected_chunk_ids": [
+        51
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q10": {
+      "question": "正式员工提离职要提前多久？",
+      "type": "fact",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [
+        "提前 30 天提交书面申请"
+      ],
+      "expected_chunk_ids": [
+        8
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q11": {
+      "question": "内部讲师跨部门讲课，一场给多少课酬？",
+      "type": "fact",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [
+        "500 元"
+      ],
+      "expected_chunk_ids": [
+        11
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q12": {
+      "question": "请假超过几天要部门负责人批，工单升级最后到谁？",
+      "type": "cross",
+      "expected_kb": [
+        "人事制度库",
+        "客户支持库"
+      ],
+      "answer_keywords": [
+        "连续请假超过 5 个工作日需部门负责人审批",
+        "研发值班 → 技术负责人"
+      ],
+      "expected_chunk_ids": [
+        4,
+        22
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q13": {
+      "question": "外部培训签的服务期是多久，客户数据导出的文件多久自动失效？",
+      "type": "cross",
+      "expected_kb": [
+        "人事制度库",
+        "客户支持库"
+      ],
+      "answer_keywords": [
+        "服务期 12 个月",
+        "导出文件设置 7 天自动过期"
+      ],
+      "expected_chunk_ids": [
+        11,
+        28
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q14": {
+      "question": "报销多少钱以上要提前提预算，报价打到几折要总裁批？",
+      "type": "cross",
+      "expected_kb": [
+        "人事制度库",
+        "产品与销售库"
+      ],
+      "answer_keywords": [
+        "单笔金额超过 5000 元的支出需提前提交预算申请",
+        "低于 7 折需提交总裁审批"
+      ],
+      "expected_chunk_ids": [
+        5,
+        41
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q15": {
+      "question": "投诉升级后多久要给客户书面答复，考勤有异议多久内申诉？",
+      "type": "cross",
+      "expected_kb": [
+        "客户支持库",
+        "人事制度库"
+      ],
+      "answer_keywords": [
+        "48 小时内给出书面答复",
+        "锁定后 5 个工作日内提交申诉"
+      ],
+      "expected_chunk_ids": [
+        18,
+        38
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q16": {
+      "question": "年假申请要提前几天，P1 工单首次响应要多久？",
+      "type": "cross",
+      "expected_kb": [
+        "人事制度库",
+        "客户支持库"
+      ],
+      "answer_keywords": [
+        "年假 | 入职满一年 5 天",
+        "P1 | 核心功能不可用，影响多数客户 | 30 分钟"
+      ],
+      "expected_chunk_ids": [
+        3,
+        21
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q17": {
+      "question": "新员工试用期多久，数据中台标准部署周期多久？",
+      "type": "cross",
+      "expected_kb": [
+        "人事制度库",
+        "产品与销售库"
+      ],
+      "answer_keywords": [
+        "试用期为三个月",
+        "6 至 8 周"
+      ],
+      "expected_chunk_ids": [
+        1,
+        40
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q18": {
+      "question": "客服值班到几点，人事的弹性上班区间是几点到几点？",
+      "type": "cross",
+      "expected_kb": [
+        "客户支持库",
+        "人事制度库"
+      ],
+      "answer_keywords": [
+        "9:00 至 21:00",
+        "弹性上班区间为 8:30 至 10:00"
+      ],
+      "expected_chunk_ids": [
+        2,
+        22
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q19": {
+      "question": "驻场实施的人天怎么计价，出差一天补贴多少？",
+      "type": "cross",
+      "expected_kb": [
+        "产品与销售库",
+        "人事制度库"
+      ],
+      "answer_keywords": [
+        "1.2 倍",
+        "100 元/天"
+      ],
+      "expected_chunk_ids": [
+        5,
+        53
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q20": {
+      "question": "客户数据拿来做问题复现要脱敏掉什么，公司里哪类资料算机密级？",
+      "type": "cross",
+      "expected_kb": [
+        "客户支持库",
+        "人事制度库"
+      ],
+      "answer_keywords": [
+        "身份证号",
+        "机密级"
+      ],
+      "expected_chunk_ids": [
+        6,
+        28
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q21": {
+      "question": "员工一年要学多少学时，P3 工单多少工作日解决？",
+      "type": "cross",
+      "expected_kb": [
+        "人事制度库",
+        "客户支持库"
+      ],
+      "answer_keywords": [
+        "24 学时",
+        "P3 | 咨询、建议、界面问题 | 1 个工作日 | 10 个工作日"
+      ],
+      "expected_chunk_ids": [
+        10,
+        21
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q22": {
+      "question": "同一客户多久内二次投诉同一问题算重要事件，晋升连续两次没过要隔多久？",
+      "type": "cross",
+      "expected_kb": [
+        "客户支持库",
+        "人事制度库"
+      ],
+      "answer_keywords": [
+        "30 天内二次投诉",
+        "间隔 12 个月"
+      ],
+      "expected_chunk_ids": [
+        10,
+        38
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q23": {
+      "question": "想申请晋升要满足哪些条件，答辩要几票才过？",
+      "type": "multi_hop",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [
+        "在当前职级满 12 个月",
+        "同意票达到 3 票"
+      ],
+      "expected_chunk_ids": [
+        7,
+        10
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q24": {
+      "question": "工作日加班一天最多算几个小时，调休要在多久内用掉？",
+      "type": "multi_hop",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [
+        "单日认定上限 4 小时",
+        "调休须在加班发生后 6 个月内使用"
+      ],
+      "expected_chunk_ids": [
+        17
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q25": {
+      "question": "客户报 P1，一线多久内要响应，多久定位不了就得升级？",
+      "type": "multi_hop",
+      "expected_kb": [
+        "客户支持库"
+      ],
+      "answer_keywords": [
+        "P1 | 核心功能不可用，影响多数客户 | 30 分钟",
+        "2 小时内无法定位"
+      ],
+      "expected_chunk_ids": [
+        21,
+        37
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q26": {
+      "question": "指标维度多到什么程度要开预聚合，接口返回默认缓存多久？",
+      "type": "multi_hop",
+      "expected_kb": [
+        "产品与销售库"
+      ],
+      "answer_keywords": [
+        "维度基数超过 10 万的需开启预聚合",
+        "默认缓存 60 秒"
+      ],
+      "expected_chunk_ids": [
+        47
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q27": {
+      "question": "补充医疗谁能上，配偶加保一年多少钱？",
+      "type": "multi_hop",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [
+        "为已转正员工统一投保补充商业医疗",
+        "1200 元"
+      ],
+      "expected_chunk_ids": [
+        14
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q28": {
+      "question": "离职时没休完的年假怎么处理，没用掉的调休又怎么算？",
+      "type": "multi_hop",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [
+        "逾期未休视为放弃，不折现",
+        "折算为加班费"
+      ],
+      "expected_chunk_ids": [
+        4,
+        18
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q29": {
+      "question": "客户要导出数据得满足什么条件，导出文件多久清掉？",
+      "type": "multi_hop",
+      "expected_kb": [
+        "客户支持库"
+      ],
+      "answer_keywords": [
+        "书面同意",
+        "7 天自动过期"
+      ],
+      "expected_chunk_ids": [
+        28
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q30": {
+      "question": "灰度发布要观察多久，那次白屏事故主包体积涨到多少？",
+      "type": "multi_hop",
+      "expected_kb": [
+        "客户支持库"
+      ],
+      "answer_keywords": [
+        "观察 30 分钟核心指标",
+        "主包体积从 1.8M 涨到 6.4M"
+      ],
+      "expected_chunk_ids": [
+        26,
+        35
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q31": {
+      "question": "投标保证金最多多少，付款节点一般怎么分？",
+      "type": "multi_hop",
+      "expected_kb": [
+        "产品与销售库"
+      ],
+      "answer_keywords": [
+        "80 万元",
+        "3:4:2:1"
+      ],
+      "expected_chunk_ids": [
+        52,
+        53
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q32": {
+      "question": "晋升前要完成哪些必修培训，缺席必修会扣多少分？",
+      "type": "multi_hop",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [
+        "信息安全年度培训",
+        "扣 5 分"
+      ],
+      "expected_chunk_ids": [
+        11
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q33": {
+      "question": "忘打卡一个月能补几次，全勤奖是多少钱？",
+      "type": "multi_hop",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [
+        "补卡 3 次",
+        "全勤奖标准为 300 元/月"
+      ],
+      "expected_chunk_ids": [
+        16,
+        18
+      ],
+      "scored": true,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q34": {
+      "question": "公司年会在每年几月办？",
+      "type": "no_answer",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [],
+      "expected_chunk_ids": [],
+      "scored": false,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q35": {
+      "question": "员工食堂几点开门、几点关门？",
+      "type": "no_answer",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [],
+      "expected_chunk_ids": [],
+      "scored": false,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q36": {
+      "question": "公司的股票代码是多少？",
+      "type": "no_answer",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [],
+      "expected_chunk_ids": [],
+      "scored": false,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q37": {
+      "question": "办公区停车位怎么申请，一个月多少钱？",
+      "type": "no_answer",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [],
+      "expected_chunk_ids": [],
+      "scored": false,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q38": {
+      "question": "支持团队用的工单系统是哪家厂商的？",
+      "type": "no_answer",
+      "expected_kb": [
+        "客户支持库"
+      ],
+      "answer_keywords": [],
+      "expected_chunk_ids": [],
+      "scored": false,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q39": {
+      "question": "公司提供员工宿舍吗，每月扣多少钱？",
+      "type": "no_answer",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [],
+      "expected_chunk_ids": [],
+      "scored": false,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q40": {
+      "question": "出境出差的签证费用怎么报销？",
+      "type": "no_answer",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [],
+      "expected_chunk_ids": [],
+      "scored": false,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q41": {
+      "question": "数据中台支持哪些国产数据库品牌？",
+      "type": "no_answer",
+      "expected_kb": [
+        "产品与销售库"
+      ],
+      "answer_keywords": [],
+      "expected_chunk_ids": [],
+      "scored": false,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q42": {
+      "question": "公司现在一共有多少名员工？",
+      "type": "no_answer",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [],
+      "expected_chunk_ids": [],
+      "scored": false,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q43": {
+      "question": "员工年度体检安排在每年几月？",
+      "type": "no_answer",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [],
+      "expected_chunk_ids": [],
+      "scored": false,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    },
+    "Q44": {
+      "question": "公司日常办公是用飞书还是企业微信？",
+      "type": "no_answer",
+      "expected_kb": [
+        "人事制度库"
+      ],
+      "answer_keywords": [],
+      "expected_chunk_ids": [],
+      "scored": false,
+      "match_rule": "answer_keywords 按 | 拆片段，全部片段命中同一分块"
+    }
+  }
+}
