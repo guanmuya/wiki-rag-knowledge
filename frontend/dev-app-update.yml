@@ -1,4 +1,8 @@
 # 仅开发模式使用（electron-updater 的 forceDevUpdateConfig）。
 # 打包版读 resources/app-update.yml；这里给本地联调一个默认源。
+# P1-9：交付配置里不写明文 HTTP 更新源，默认占位改为 HTTPS。
+# 本机联调若要用 `python -m http.server 8899` 这类明文回环服务，请显式设
+# WRK_UPDATE_URL 指向本机回环地址 —— updater.cjs 只对「未打包 + 回环」放行明文源；
+# 打包版一律强制 HTTPS。具体命令、风险与后续步骤见 docs/UPDATE.md §5、§6.3。
 provider: generic
-url: http://127.0.0.1:8899
+url: https://127.0.0.1:8899
