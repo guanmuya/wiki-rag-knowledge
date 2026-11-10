@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('wrkDesktop', {
   getLogs: () => ipcRenderer.invoke('wrk:logs'),
   /** 启动失败的结构化说明：{ id, title, action, detail }，无失败时为 null */
   getFailure: () => ipcRenderer.invoke('wrk:failure'),
+  /** P1-9：首次改密成功后清除主进程内存里的初始凭据（幂等）。 */
+  clearInitialCredential: () => ipcRenderer.invoke('wrk:clear-initial-credential'),
   /** kind: 'data' | 'logs' | 'install' */
   openPath: (kind) => ipcRenderer.invoke('wrk:openPath', kind),
   restartBackend: () => ipcRenderer.invoke('wrk:restartBackend'),

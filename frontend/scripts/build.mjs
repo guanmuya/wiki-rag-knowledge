@@ -328,6 +328,45 @@ if (existsSync(UNPACKED)) {
   }
 }
 
+// ---- P1-9 交付门禁：更新源配置里不允许明文 HTTP 源 ----
+// updater.cjs 运行时已强制 HTTPS（打包版一律拒绝明文源）；这里在构建期再拦一次，
+// 防止把不合规配置打进交付包。只检查实际配置值（url / sources[].url），不扫描注释文本。
+function assertNoPlainHttpUpdateSource() {
+  const targets = [
+    { path: join(FRONTEND, 'electron', 'update-config.json'), json: true },
+    { path: join(FRONTEND, 'dev-app-update.yml'), json: false },
+  ]
+  for (const { path, json } of targets) {
+    if (!existsSync(path)) continue
+    let urls = []
+    try {
+      const text = readFileSync(path, 'utf8')
+      if (json) {
+        const cfg = JSON.parse(text)
+        if (typeof cfg.url === 'string') urls.push(cfg.url)
+        for (const s of Array.isArray(cfg.sources) ? cfg.sources : []) {
+          if (s && typeof s.url === 'string') urls.push(s.url)
+        }
+      } else {
+        const m = text.match(/^\s*url:\s*(\S+)/m)
+        if (m) urls.push(m[1])
+      }
+    } catch (e) {
+      console.error(`[build] ✗ 更新源配置读取失败：${path} → ${e.message}`)
+      process.exit(1)
+    }
+    const plain = urls.filter((u) => u.startsWith('http://'))
+    if (plain.length) {
+      console.error(`[build] ✗ 交付配置含明文 HTTP 更新源：${path} → ${plain.join(', ')}`)
+      console.error('[build]   P1-9 要求交付配置无明文 HTTP 更新源；改成 HTTPS，见 docs/UPDATE.md §6')
+      process.exit(1)
+    }
+  }
+  log('更新源配置校验通过：交付配置无明文 HTTP 源')
+}
+
+if (ok) assertNoPlainHttpUpdateSource()
+
 // 自动更新文件：latest.yml + 安装包 + blockmap 一起放进 release/updates/，
 // 方便直接丢到任意静态源（generic provider）。
 if (!PACK && ok) {

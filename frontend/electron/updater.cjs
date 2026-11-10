@@ -7,12 +7,17 @@
 //    - github：electron-updater 读 app-update.yml（electron-builder 生成），
 //      **仓库必须公开**，私有仓库的 Release 资产需要鉴权，终端用户拿不到；
 //    - generic：任意静态 HTTPS 目录，放 latest.yml + 安装包 + .blockmap。
+// 2.1 P1-9：generic 源一律经 update-url.cjs 校验——打包版必须 HTTPS；
+//     开发版仅放行回环明文地址用于联调（风险见 docs/UPDATE.md §6）。
+//     WRK_UPDATE_URL 与 app-update.yml 兜底源同样过这道校验；不合规就禁用
+//     更新器，不让 autoDownload 在不可信源上自动下载安装。
 // 3. 检查失败不弹窗、不阻塞启动，只在「关于 → 软件更新」里显示原因；
 //    只有「下载完成」才弹一次重启提示。
 // 4. 自动检查默认启动 8 秒后一次 + 每 4 小时一次，可在 update-config.json 调整。
 const { app, dialog, ipcMain, BrowserWindow } = require('electron')
 const { existsSync, readFileSync } = require('node:fs')
 const { join } = require('node:path')
+const { validateFeed } = require('./update-url.cjs')
 
 let autoUpdater = null
 let log = console.log
@@ -166,9 +171,24 @@ function check(manual = false) {
 function applySource(i) {
   const src = sources[i]
   if (!src) throw new Error('没有可用的更新源')
+  // 纵深防御：init() 已整体校验过，这里在每次 setFeedURL 前再拦一次，
+  // 防止后续新增的切源路径绕过校验。
+  const verdict = validateFeed(src.feed, { isPackaged: app.isPackaged })
+  if (!verdict.ok) throw new Error(`更新源不安全：${verdict.reason}`)
   autoUpdater.setFeedURL(src.feed)
   activeSource = i
   setState({ feed: describeFeed(src.feed) })
+}
+
+/** 读取 electron-builder 生成的 app-update.yml 里的 url（仅用于交付期明文源检查）。 */
+function readAppUpdateYmlUrl(p) {
+  try {
+    if (!existsSync(p)) return ''
+    const m = readFileSync(p, 'utf8').match(/^\s*url:\s*(\S+)/m)
+    return m ? m[1] : ''
+  } catch {
+    return ''
+  }
 }
 
 function schedule(cfg) {
@@ -211,6 +231,13 @@ function init(options = {}) {
     return
   }
 
+  // P1-9：无代码签名证书时，「自动下载 + 退出即安装」意味着拿到 latest.yml
+  // 控制权就能推送任意安装包。本项目不引入签名证书（属外部凭据，需单独授权），
+  // 因此防线放在上游：所有 generic 源强制 HTTPS（见下面的整体校验），
+  // 并保留 electron-updater 对 latest.yml 的 sha512 完整性校验。
+  // 残余风险与后续补签名步骤书面记录在 docs/UPDATE.md §6。
+  // 两个开关保持开启：关掉 autoDownload 会让 update-downloaded 永不触发，
+  // 关于页「安装」按钮（要求 status==='ready'）反而彻底失效，破坏更新链路。
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
   // 我们只发 NSIS 安装包，不用 web installer；显式关掉，避免 electron-updater 的告警
@@ -229,7 +256,7 @@ function init(options = {}) {
 
   sources = []
   if (devUrl) {
-    sources = [{ feed: { provider: 'generic', url: devUrl }, label: '联调源' }]
+    sources = [{ feed: { provider: 'generic', url: devUrl }, label: 'WRK_UPDATE_URL' }]
   } else if (Array.isArray(cfg.sources) && cfg.sources.length) {
     // 多源：按顺序尝试，前一个不可用就换下一个。
     // 典型配置：[国内对象存储 generic, GitHub] —— 国内用户先走快源，
@@ -246,7 +273,17 @@ function init(options = {}) {
     sources = [{ feed: { provider: 'github', owner: cfg.owner, repo: cfg.repo }, label: 'GitHub' }]
   }
 
+  // P1-9：整体校验所有源。任何一个不合规就禁用更新器（而不是只跳过它），
+  // 保证 autoDownload / autoInstallOnAppQuit 不会作用在不可信源上。
   if (sources.length) {
+    for (const src of sources) {
+      const verdict = validateFeed(src.feed, { isPackaged: app.isPackaged })
+      if (!verdict.ok) {
+        log('更新源被拒绝：', verdict.reason, describeFeed(src.feed))
+        setState({ status: 'error', message: `更新源被拒绝：${verdict.reason}` })
+        return
+      }
+    }
     try {
       applySource(0)
     } catch (e) {
@@ -254,7 +291,14 @@ function init(options = {}) {
       return
     }
   } else if (app.isPackaged) {
-    // 没写 update-config 时退回 electron-builder 生成的 app-update.yml
+    // 没写 update-config 时退回 electron-builder 生成的 app-update.yml。
+    // 同样不允许明文源：publish 若被改成 generic + http，这里直接禁用更新。
+    const ymlUrl = readAppUpdateYmlUrl(join(process.resourcesPath, 'app-update.yml'))
+    if (ymlUrl && !validateFeed({ provider: 'generic', url: ymlUrl }, { isPackaged: true }).ok) {
+      log('app-update.yml 配置了明文更新源，已禁用更新：', ymlUrl)
+      setState({ status: 'error', message: 'app-update.yml 的更新源必须使用 HTTPS' })
+      return
+    }
     log('更新：未提供 update-config.json，使用 app-update.yml')
   } else {
     setState({ status: 'disabled', message: '未配置更新源（update-config.json）' })

@@ -1,10 +1,13 @@
-"""Agent 插件注册表：清单校验、发现、探测、模型协议过滤。"""
+"""Agent 插件注册表：清单校验、发现、探测、模型协议过滤、执行边界收敛（P1-7）。"""
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -16,6 +19,14 @@ def _write_manifest(directory, name: str, payload: dict) -> None:
     (directory / name).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
+def _python_on_path(monkeypatch) -> None:
+    """让 PATH 里的 python 一定指向当前解释器，避免命中 WindowsApps 桩。"""
+    monkeypatch.setenv(
+        "PATH",
+        str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", ""),
+    )
+
+
 def _fake_manifest(**overrides) -> dict:
     payload = {
         "schema": 1,
@@ -24,10 +35,10 @@ def _fake_manifest(**overrides) -> dict:
         "description": "测试用",
         "kind": "cli",
         "protocols": ["openai"],
-        "bins": [sys.executable],
+        "bins": ["python"],
         "version_args": ["-c", "print('fake-agent 9.9')"],
         "run_args": ["-c", "print('ok')", "{prompt}"],
-        "env": {"TEST_BASE": "{base_url}", "TEST_MODEL": "{model}"},
+        "env": {"OPENAI_BASE_URL": "{base_url}", "OPENAI_MODEL": "{model}"},
         "output": "text",
     }
     payload.update(overrides)
@@ -97,6 +108,7 @@ def test_manifest_with_bom_is_readable(tmp_path, monkeypatch):
 
 def test_detection_reports_version(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "AGENT_PLUGIN_DIR", tmp_path)
+    _python_on_path(monkeypatch)
     _write_manifest(tmp_path, "fake.json", _fake_manifest())
     plugins.clear_detection_cache()
     found, _ = plugins._load_external()
@@ -256,5 +268,223 @@ def test_substitute_args_and_env(tmp_path, monkeypatch):
     assert args[0] == "-c"
     assert args[-1] == "你好"
     env = plugins.build_env(plugin, binding, "C:/work", 7)
-    assert env["TEST_BASE"] == "https://x/v1"
-    assert env["TEST_MODEL"] == "m1"
+    assert env["OPENAI_BASE_URL"] == "https://x/v1"
+    assert env["OPENAI_MODEL"] == "m1"
+
+
+# ------------------------------------------------------------------ P1-7 执行边界
+# 下列用例逐条对应 docs/HEALTH_CHECK.md §4.2 P1-7 / §5.1 的恶意清单场景，
+# 每条都是可复现的「一份恶意 JSON 清单」。
+@pytest.mark.parametrize("bins", [
+    [sys.executable],                       # 绝对路径直接解析成可执行程序
+    ["C:/Windows/System32/cmd.exe"],         # Windows 绝对路径
+    ["/usr/bin/env"],                        # POSIX 绝对路径
+    ["../evil/agent"],                      # 相对路径 + ..
+    [".\\evil\\agent.exe"],                  # Windows 相对路径
+    ["cmd"],                                 # 命令解释器（会把 run_args 当命令串）
+    ["powershell.exe"],
+    ["my agent"],                            # 空格/元字符
+    ["agent&calc.exe"],
+    ["evil.cmd"],                            # 批处理脚本宿主
+    ["payload.bat"],
+])
+def test_parse_manifest_rejects_unsafe_bins(bins):
+    with pytest.raises(plugins.PluginError) as exc:
+        plugins.parse_manifest(_fake_manifest(bins=bins))
+    assert "bins" in str(exc.value)
+
+
+def test_parse_manifest_accepts_plain_command_name():
+    plugin = plugins.parse_manifest(_fake_manifest(bins=["my-agent", "my_agent"]))
+    assert plugin.bins == ("my-agent", "my_agent")
+
+
+@pytest.mark.parametrize("arg", ["&", "|", "^", "&&", "||", "%COMSPEC%", "%PATH%"])
+def test_parse_manifest_rejects_cmd_metacharacter_args(arg):
+    """`& | ^ %VAR%` 曾被 cmd.exe /c 二次解析，作为独立参数一律拒绝。"""
+    with pytest.raises(plugins.PluginError) as exc:
+        plugins.parse_manifest(_fake_manifest(run_args=["run", arg, "{prompt}"]))
+    assert "cmd" in str(exc.value) or "元字符" in str(exc.value)
+
+
+def test_parse_manifest_rejects_api_key_in_run_args():
+    with pytest.raises(plugins.PluginError) as exc:
+        plugins.parse_manifest(_fake_manifest(
+            run_args=["--key", "{api_key}", "{prompt}"]))
+    assert "api_key" in str(exc.value)
+
+
+def test_parse_manifest_allows_api_key_in_env_template():
+    plugin = plugins.parse_manifest(_fake_manifest(
+        env={"OPENAI_API_KEY": "{api_key}"}))
+    assert plugin.env["OPENAI_API_KEY"] == "{api_key}"
+
+
+@pytest.mark.parametrize("key", [
+    "PATH", "PYTHONPATH", "NODE_OPTIONS", "LD_PRELOAD", "WRK_SUPER_SECRET",
+])
+def test_parse_manifest_rejects_env_keys_outside_allowlist(key):
+    with pytest.raises(plugins.PluginError) as exc:
+        plugins.parse_manifest(_fake_manifest(env={key: "x"}))
+    assert "env" in str(exc.value)
+
+
+def test_parse_manifest_accepts_allowlisted_env_keys():
+    plugin = plugins.parse_manifest(_fake_manifest(env={
+        "OPENAI_API_KEY": "{api_key}",
+        "ANTHROPIC_AUTH_TOKEN": "{api_key}",
+        "PYTHONIOENCODING": "utf-8",
+    }))
+    assert plugin.env["OPENAI_API_KEY"] == "{api_key}"
+    assert plugin.env["ANTHROPIC_AUTH_TOKEN"] == "{api_key}"
+
+
+@pytest.mark.parametrize("payload", [
+    _fake_manifest(bins=["C:/Windows/System32/cmd.exe"]),
+    _fake_manifest(bins=["../evil/agent.exe"]),
+    _fake_manifest(run_args=["--key", "{api_key}", "{prompt}"]),
+    _fake_manifest(env={"PATH": "C:\\evil"}),
+    _fake_manifest(env={"PYTHONPATH": "C:\\evil"}),
+    _fake_manifest(env={"NODE_OPTIONS": "--require evil.js"}),
+    _fake_manifest(bins=["cmd"], run_args=["/c", "whoami", "{prompt}"]),
+    _fake_manifest(bins=["evil.cmd"], run_args=["&", "calc.exe", "{prompt}"]),
+    _fake_manifest(run_args=["run", "%COMSPEC%", "{prompt}"]),
+])
+def test_malicious_manifest_file_is_rejected(tmp_path, monkeypatch, payload):
+    """恶意清单落盘后必须被 _load_external 拒绝，而不是被当成可运行核心。"""
+    monkeypatch.setattr(config, "AGENT_PLUGIN_DIR", tmp_path)
+    _write_manifest(tmp_path, "evil.json", payload)
+    found, errors = plugins._load_external()
+    assert found == []
+    assert errors and errors[0]["file"] == "evil.json"
+
+
+def test_detect_rejects_batch_resolved_binary(monkeypatch, tmp_path):
+    """PATH 查到 .cmd/.bat 时拒绝：Windows 会隐式交给 cmd.exe 二次解析参数。"""
+    monkeypatch.setattr(config, "AGENT_PLUGIN_DIR", tmp_path)
+    plugin = plugins.parse_manifest(_fake_manifest(bins=["fake-cli"]))
+    for resolved in ["C:/fake/fake-cli.cmd", "C:/fake/fake-cli.bat"]:
+        monkeypatch.setattr(plugins.shutil, "which", lambda name, _r=resolved: _r)
+        plugins.clear_detection_cache()
+        result = plugins.detect(plugin)
+        assert result["installed"] is False, resolved
+
+
+def test_detect_rejects_shell_resolved_binary(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "AGENT_PLUGIN_DIR", tmp_path)
+    plugin = plugins.parse_manifest(_fake_manifest(bins=["fake-cli"]))
+    monkeypatch.setattr(plugins.shutil, "which",
+                        lambda name: "C:/Windows/System32/cmd.exe")
+    plugins.clear_detection_cache()
+    assert plugins.detect(plugin)["installed"] is False
+
+
+def test_detect_accepts_regular_executable(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "AGENT_PLUGIN_DIR", tmp_path)
+    _python_on_path(monkeypatch)
+    plugin = plugins.parse_manifest(_fake_manifest(bins=["python"]))
+    plugins.clear_detection_cache()
+    result = plugins.detect(plugin)
+    assert result["installed"] is True
+    assert result["version"] == "fake-agent 9.9"
+
+
+def test_version_probe_no_cmd_exe_wrapper(monkeypatch):
+    """回归：探测命令不再拼 `cmd.exe /c`（参数会被二次解析而注入）。"""
+    captured: dict = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        raise OSError("stop")
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    assert plugins._run_version(sys.executable, ("--version",)) == ""
+    assert captured["cmd"][0] == sys.executable
+    assert not any("cmd.exe" in str(part).lower() for part in captured["cmd"])
+
+
+def test_version_probe_does_not_inherit_backend_env(monkeypatch):
+    """版本探测子进程必须带干净 env，不能继承后端全量环境里的密钥。"""
+    monkeypatch.setenv("WRK_AGENT_PROBE_SECRET", "super-secret-value")
+    out = plugins._run_version(
+        sys.executable,
+        ("-c", "import os; print(os.environ.get('WRK_AGENT_PROBE_SECRET', ''))"),
+    )
+    assert "super-secret-value" not in out
+    assert out == ""
+
+
+def test_substitute_args_never_exposes_api_key(tmp_path, monkeypatch):
+    """即使绕过 parse_manifest 手工构造插件，api_key 也不能进命令行。"""
+    monkeypatch.setattr(config, "AGENT_PLUGIN_DIR", tmp_path)
+    _write_manifest(tmp_path, "fake.json", _fake_manifest())
+    found, _ = plugins._load_external()
+    plugin = plugins.clone_with(found[0], run_args=("--key", "{api_key}", "{prompt}"))
+    binding = {"model": "m1", "base_url": "https://x/v1", "api_key": "sk-boundary-test"}
+    args = plugins.substitute_args(plugin, binding, "C:/work", 7, "你好")
+    assert "sk-boundary-test" not in args
+    assert "{api_key}" not in args
+    assert args[-1] == "你好"
+
+
+def test_build_env_cannot_override_system_path(tmp_path, monkeypatch):
+    """env 白名单之后不能再被清单覆盖 PATH / PYTHONPATH / NODE_OPTIONS。"""
+    monkeypatch.setattr(config, "AGENT_PLUGIN_DIR", tmp_path)
+    _write_manifest(tmp_path, "fake.json", _fake_manifest())
+    found, _ = plugins._load_external()
+    plugin = plugins.clone_with(found[0], env={
+        "PATH": "C:\\evil", "PYTHONPATH": "C:\\evil",
+        "NODE_OPTIONS": "--require evil.js", "OPENAI_MODEL": "{model}",
+    })
+    binding = {"model": "m1", "base_url": "https://x/v1", "api_key": "sk-x"}
+    env = plugins.build_env(plugin, binding, "C:/work", 7)
+    assert env["PATH"] == os.environ["PATH"]
+    assert "PYTHONPATH" not in env
+    assert "NODE_OPTIONS" not in env
+    assert env["OPENAI_MODEL"] == "m1"
+
+
+def test_redact_text_scrubs_secrets():
+    assert plugins.redact_text(
+        "key=sk-boundary-test", secrets=("sk-boundary-test",)) == "key=<密钥>"
+
+
+def test_secret_values_ignores_local_sentinel():
+    assert plugins.secret_values({"api_key": "local"}) == ()
+    assert plugins.secret_values({"api_key": "sk-real"}) == ("sk-real",)
+
+
+def test_redacted_command_scrubs_key_and_prompt():
+    command = ["agent", "--key", "sk-boundary-test", "--prompt", "很长很长的提示词"]
+    out = plugins.redacted_command(command, "很长很长的提示词", ("sk-boundary-test",))
+    assert "sk-boundary-test" not in out
+    assert "<密钥>" in out
+    assert "很长很长的提示词" not in out
+    assert "<提示词>" in out
+
+
+def test_resolve_workspace_stays_inside_root(tmp_path, monkeypatch):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    monkeypatch.setattr(config, "AGENT_WORKSPACE_DIR", root)
+    inside = root / "project"
+    inside.mkdir()
+    assert plugins.resolve_workspace(str(inside)) == str(inside.resolve())
+    assert plugins.resolve_workspace(None) == str(root.resolve())
+    assert plugins.resolve_workspace("   ") == str(root.resolve())
+
+
+def test_resolve_workspace_rejects_escape(tmp_path, monkeypatch):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    monkeypatch.setattr(config, "AGENT_WORKSPACE_DIR", root)
+    sibling = tmp_path / "workspace_evil"       # 同前缀目录，专门测前缀绕过
+    sibling.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    for bad in [str(outside), str(tmp_path), str(root / ".." / "outside")]:
+        with pytest.raises(plugins.PluginError):
+            plugins.resolve_workspace(bad)
+    with pytest.raises(plugins.PluginError) as exc:
+        plugins.resolve_workspace(str(sibling))
+    assert "工作区" in str(exc.value)
