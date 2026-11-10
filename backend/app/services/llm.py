@@ -1,31 +1,30 @@
-"""模型调用层：按供应商协议族分派 LLM / Embedding / 视觉模型。
+"""模型调用层门面：按供应商协议族分派 LLM / Embedding / 视觉模型。
 
-支持三种协议（`Provider.protocol`）：
-- `openai`（默认）：`POST {base}/chat/completions` + `POST {base}/embeddings`
-- `openai-responses`：`POST {base}/responses`（`input` / `max_output_tokens` / `output[].content[].text`）
-- `anthropic`：`POST {base}/messages`（`system` 独立字段、`max_tokens` 必填、`content[].text`）
+本文件保留「对外契约 + 编排」：`llm.chat` / `llm.embed` / `llm.describe_image` /
+`llm.test_model` / `llm.CallStats` / `llm.pack_vector` 等名字，以及被测试
+monkeypatch 的 `_client` / `_post` / `_get` / `resolve_model` / `active_embedding`
+都仍定义在（或重导出到）本模块，行为与拆分前完全一致。
 
-为什么分派放在这一层而不是各调用点：chat/embed/describe_image/test_model 的
-调用方（retrieval / wiki / answering / ingest）只关心「给我一段文本」，协议差异
-属于供应商适配细节。协议判断集中一处，新增协议时不必改五个业务模块。
+职责代码按 P1-4 拆到同目录的兄弟模块（单向依赖、无循环）：
+- `llm_protocols.py`：协议适配（三种协议的 payload / 响应抽取 / 协议判定）
+- `llm_stats.py`：CallStats 成本统计
+- `llm_vectors.py`：向量打包（float32 序列化 / 解包 / 归一化）
+- `llm_offline.py`：离线降级（确定性哈希向量与 FALLBACK_* 常量）
+- `llm_common.py`：共享基础（异常 / 错误文案 / URL 拼接）
 
-未配置可用模型时进入“离线演示模式”：
-- LLM 侧降级为基于原文的抽取式整理（不编造），并在响应中标注 offline。
-- Embedding 侧降级为确定性的哈希向量，保证检索链路可跑通、可测试。
-这样首版在没有 API Key 的环境里也能完整演示，接入真实供应商后行为一致。
+依赖方向：`llm.py` → 各兄弟模块；`llm_offline` → `llm_vectors`；
+`llm_protocols` → `llm_common`；兄弟模块之间无反向引用，故无循环依赖。
+
+未配置可用模型时进入「离线演示模式」：LLM 侧由问答链路降级为抽取式整理，
+Embedding 侧降级为确定性哈希向量，保证检索链路可跑通、可测试。
 """
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import logging
-import math
-import re
 import time
-from dataclasses import dataclass, field
-from typing import Any, Iterable, Iterator
-from urllib.parse import urlsplit
+from typing import Any, Iterator
 
 import httpx
 from sqlalchemy import case, select
@@ -33,11 +32,27 @@ from sqlalchemy.orm import Session
 
 from .. import config, models, security
 
-log = logging.getLogger("wrk.llm")
+# 门面重导出：保持 `llm.X` 的对外契约不变（含被测试 monkeypatch 的名字）。
+# 各职责模块只被本模块单向引用，不反向 import `llm.py`。
+from .llm_common import (
+    DEFAULT_TIMEOUT, ModelNotConfigured, ModelUnavailable, _ERROR_BODY_RE,
+    _join, error_summary, public_error,
+)
+from .llm_stats import CallStats
+from .llm_vectors import normalize, pack_vector, unpack_vector
+from .llm_offline import (
+    FALLBACK_EMBED_DIM, FALLBACK_EMBED_NAME, _TOKEN_RE, hash_embed,
+)
+from .llm_protocols import (
+    ANTHROPIC_BUILTIN_MODELS, ANTHROPIC_VERSION, PROTOCOL_ANTHROPIC,
+    PROTOCOL_OPENAI, PROTOCOL_RESPONSES, SUPPORTED_PROTOCOLS,
+    _ANTHROPIC_TEMP_RANGE, _anthropic_payload, _clamp_temperature,
+    _dashscope_embedding, _extract_anthropic_text, _extract_responses_text,
+    _no_embedding_error, _official_https_base, _openai_reasoning_chat,
+    _plain_text, _responses_payload, _split_system, provider_protocol,
+)
 
-DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
-FALLBACK_EMBED_DIM = 256
-FALLBACK_EMBED_NAME = "local-hash-embedding"
+log = logging.getLogger("wrk.llm")
 
 
 def _client() -> httpx.Client:
@@ -52,253 +67,7 @@ def _client() -> httpx.Client:
     return httpx.Client(**kwargs)
 
 
-class ModelUnavailable(RuntimeError):
-    """没有可用模型配置，或供应商调用失败。"""
-
-
-class ModelNotConfigured(ModelUnavailable):
-    """一条可用的模型配置都没有。
-
-    单独成类是为了把「没配模型」和「配了但调用失败」分开：前者回答里的
-    离线提示不应该写成「生成模型调用失败」，否则用户会以为自己配错了。
-    """
-
-
-@dataclass
-class CallStats:
-    """模型调用成本统计。
-
-    为什么必须把「生成调用」和「向量调用」分开记（而不是混在一个 calls 里）：
-    1. 计费口径不同：生成按输入/输出 token 分别计价，向量通常只按输入 token 计价，
-       单价往往低一个数量级。混进同一个 prompt_tokens 就算不出真实成本。
-    2. 归因不同：一次问答只有 1 次生成调用，但索引阶段可能有成百上千次向量调用。
-       合并计数会让「问答成本」被索引成本淹没，论文里没法分列对比。
-    3. 离线降级必须可识别：离线哈希向量不产生费用，但确实是一次向量化操作。
-       所以 calls/embed_calls 照记，同时用 live_calls/offline_calls 分开——
-       论文里只报 live_calls 就是真实开销，不会把本地哈希算成钱。
-
-    字段语义（全部是累计值）：
-    - calls：总调用次数 = chat_calls + embed_calls + vision_calls（含离线降级）
-    - chat_calls / embed_calls / vision_calls：分通道调用次数
-    - live_calls / offline_calls：真实供应商调用 / 离线降级调用，二者之和等于 calls
-    - prompt_tokens / completion_tokens：生成侧输入 / 输出 token
-    - embed_tokens：向量侧 token（单独计费，**不**并入 prompt_tokens）
-    - embed_texts：被向量化的文本条数（离线模式也有值，用来衡量索引工作量）
-    - latency_ms：总耗时；latency_chat_ms / latency_embed_ms 为分通道耗时
-    - mode：生成通道模式；embed_mode：向量通道模式；degraded：任一通道降级
-
-    为什么 mode 只描述生成通道：前端按 mode === 'offline' 显示「未调用生成模型」。
-    如果把「只有 embedding 走离线」也算成 mode=offline，回答明明由真实模型生成，
-    界面却说没调模型——这是对用户撒谎。所以向量通道单独用 embed_mode 表达。
-    """
-
-    # ---- 计数
-    calls: int = 0              # 总调用次数（含离线降级）
-    chat_calls: int = 0         # 生成调用
-    embed_calls: int = 0        # 向量调用
-    vision_calls: int = 0       # 视觉调用
-    live_calls: int = 0         # 真实供应商调用（可计费）
-    offline_calls: int = 0      # 离线降级（不计费）
-    # ---- token
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    embed_tokens: int = 0
-    embed_texts: int = 0        # 被向量化的文本条数（离线模式也记）
-    # ---- 耗时
-    latency_ms: int = 0
-    latency_chat_ms: int = 0
-    latency_embed_ms: int = 0
-    # ---- 模式
-    mode: str = "live"          # 生成通道：live | offline
-    embed_mode: str = "live"    # 向量通道：live | offline
-    # 生成通道降级的原因（供应商报错 / 空响应）。只给界面解释用，完整错误在 notes。
-    # 未配置模型时留空：那种情况下界面继续显示「未调用生成模型」，不能误报成调用失败。
-    offline_reason: str = ""
-    notes: list[str] = field(default_factory=list)
-
-    @property
-    def total_tokens(self) -> int:
-        """全通道 token 合计。成本换算用这个，别再自己加。"""
-        return self.prompt_tokens + self.completion_tokens + self.embed_tokens
-
-    @property
-    def degraded(self) -> bool:
-        """任一通道降级为离线实现。"""
-        return self.mode == "offline" or self.embed_mode == "offline"
-
-    def add_note(self, note: str) -> None:
-        """追加说明，相同内容只记一次——批量索引时同一提示会重复上百次。"""
-        if note and note not in self.notes:
-            self.notes.append(note)
-
-    # ---- 记录入口：所有调用点都走这里，避免各处手写自增导致再次漏计
-    def record_chat(self, *, prompt_tokens: int = 0, completion_tokens: int = 0,
-                    latency_ms: int = 0) -> None:
-        self.calls += 1
-        self.chat_calls += 1
-        self.live_calls += 1
-        self.prompt_tokens += max(int(prompt_tokens), 0)
-        self.completion_tokens += max(int(completion_tokens), 0)
-        self.latency_ms += max(int(latency_ms), 0)
-        self.latency_chat_ms += max(int(latency_ms), 0)
-
-    def record_embed(self, *, texts: int = 0, tokens: int = 0, latency_ms: int = 0,
-                     live: bool = True, note: str | None = None) -> None:
-        """记录一次向量化。
-
-        离线哈希向量同样记一次调用：它不是模型调用，但它是真实的向量化工作量，
-        论文里要报「索引阶段向量化了多少个单元」。是否计费看 live_calls。
-        """
-        self.calls += 1
-        self.embed_calls += 1
-        self.embed_texts += max(int(texts), 0)
-        self.embed_tokens += max(int(tokens), 0)
-        self.latency_ms += max(int(latency_ms), 0)
-        self.latency_embed_ms += max(int(latency_ms), 0)
-        if live:
-            self.live_calls += 1
-        else:
-            self.offline_calls += 1
-            self.embed_mode = "offline"
-            if note:
-                self.add_note(note)
-
-    def record_vision(self, *, prompt_tokens: int = 0, completion_tokens: int = 0,
-                      latency_ms: int = 0, live: bool = True, note: str | None = None) -> None:
-        self.calls += 1
-        self.vision_calls += 1
-        self.prompt_tokens += max(int(prompt_tokens), 0)
-        self.completion_tokens += max(int(completion_tokens), 0)
-        self.latency_ms += max(int(latency_ms), 0)
-        if live:
-            self.live_calls += 1
-        else:
-            self.offline_calls += 1
-            self.mode = "offline"
-            if note:
-                self.add_note(note)
-
-    def merge(self, other: "CallStats | None") -> None:
-        """把另一份统计并入本份。
-
-        用途：把「分块向量化」和「Wiki 生成」拆成两个子统计各自累计，
-        既能在任务 result 里分别留痕（成本归因），又能合并成任务总用量。
-        降级状态是「粘」的：任一子统计离线，合并后整体也标记降级。
-        """
-        if other is None:
-            return
-        self.calls += other.calls
-        self.chat_calls += other.chat_calls
-        self.embed_calls += other.embed_calls
-        self.vision_calls += other.vision_calls
-        self.live_calls += other.live_calls
-        self.offline_calls += other.offline_calls
-        self.prompt_tokens += other.prompt_tokens
-        self.completion_tokens += other.completion_tokens
-        self.embed_tokens += other.embed_tokens
-        self.embed_texts += other.embed_texts
-        self.latency_ms += other.latency_ms
-        self.latency_chat_ms += other.latency_chat_ms
-        self.latency_embed_ms += other.latency_embed_ms
-        if other.mode == "offline":
-            self.mode = "offline"
-        if other.embed_mode == "offline":
-            self.embed_mode = "offline"
-        if other.offline_reason and not self.offline_reason:
-            self.offline_reason = other.offline_reason
-        for note in other.notes:
-            self.add_note(note)
-
-    def as_dict(self) -> dict:
-        return {
-            "calls": self.calls,
-            "chat_calls": self.chat_calls,
-            "embed_calls": self.embed_calls,
-            "vision_calls": self.vision_calls,
-            "live_calls": self.live_calls,
-            "offline_calls": self.offline_calls,
-            "prompt_tokens": self.prompt_tokens,
-            "completion_tokens": self.completion_tokens,
-            "embed_tokens": self.embed_tokens,
-            "embed_texts": self.embed_texts,
-            "total_tokens": self.total_tokens,
-            "latency_ms": self.latency_ms,
-            "latency_chat_ms": self.latency_chat_ms,
-            "latency_embed_ms": self.latency_embed_ms,
-            "mode": self.mode,
-            "embed_mode": self.embed_mode,
-            "offline_reason": self.offline_reason,
-            "degraded": self.degraded,
-            "notes": list(self.notes),
-        }
-
-
 # ------------------------------------------------------------------ 解析配置
-_ERROR_BODY_RE = re.compile(r"^供应商返回 (\d{3}):\s*(\{.*\})$", re.S)
-
-
-def public_error(exc: ModelUnavailable) -> str:
-    """向普通用户返回错误类别，避免暴露供应商地址、凭据或响应正文。"""
-    if isinstance(exc, ModelNotConfigured):
-        return "未配置可用模型"
-    text = str(exc)
-    status = re.match(r"供应商返回 (\d{3})", text)
-    if status:
-        return f"供应商返回 {status.group(1)}"
-    if text.startswith("供应商接口地址"):
-        return "供应商接口地址不合法"
-    if text.startswith("网络请求失败"):
-        return "无法连接供应商"
-    return "模型调用失败"
-
-
-def error_summary(exc: BaseException | str, limit: int = 200) -> str:
-    """把供应商异常压成一句可展示的原因：只取错误体里的 message 并截断，
-    完整原文仍保留在 `CallStats.notes`，排障以 notes 为准。"""
-    text = re.sub(r"\s+", " ", str(exc or "")).strip()
-    match = _ERROR_BODY_RE.match(text)
-    if match:
-        try:
-            data = json.loads(match.group(2))
-        except (TypeError, ValueError):
-            data = None
-        message = ""
-        if isinstance(data, dict):
-            error = data.get("error")
-            if isinstance(error, dict):
-                message = str(error.get("message") or error.get("msg") or "")
-            elif isinstance(error, str):
-                message = error
-            if not message:
-                message = str(data.get("message") or data.get("detail") or "")
-        if message.strip():
-            text = f"供应商返回 {match.group(1)}：{message.strip()}"
-    if not text or len(text) <= limit:
-        return text
-    # 优先在句末/分号处截断：供应商常在错误信息后面附带升级链接，
-    # 把 URL 切一半比少说一句更难读。完整原文仍在 notes 里。
-    window = text[:limit]
-    for sep in ("。", ". ", "；", "; "):
-        pos = window.rfind(sep)
-        if pos >= max(20, limit // 3):
-            return window[: pos + len(sep)].rstrip()
-    return window[: limit - 1] + "…"
-
-
-def _join(base: str, path: str) -> str:
-    """拼接 OpenAI 兼容端点。兼容 base_url 带/不带 /v1，以及误带端口方括号的写法。"""
-    base = (base or "").strip().rstrip("/")
-    if not base:
-        raise ModelUnavailable("供应商接口地址为空")
-    if not re.match(r"^https?://", base, re.I):
-        raise ModelUnavailable(f"供应商接口地址需以 http:// 或 https:// 开头：{base}")
-    # Gemini 的 OpenAI 兼容地址以 /v1beta/openai 结尾，已经包含 API 根路径。
-    # 其他无版本号的旧地址仍沿用补 /v1 的规则，避免改变已有供应商配置。
-    if re.search(r"/(?:v\d+|v\d+beta/openai)$", base, re.I):
-        return f"{base}/{path.lstrip('/')}"
-    return f"{base}/v1/{path.lstrip('/')}"
-
-
 def resolve_model(db: Session, purpose: str) -> tuple[models.ModelConfig, models.Provider] | None:
     """按用途取默认模型。
 
@@ -346,260 +115,6 @@ def active_embedding(db: Session) -> tuple[models.ModelConfig | None, models.Pro
     cfg, provider = resolved
     dim = cfg.embed_dim or int(json.loads(cfg.params or "{}").get("dim") or 0)
     return cfg, provider, embed_signature(cfg, provider, dim), dim
-
-
-# ------------------------------------------------------------------ 向量工具
-def pack_vector(vec: list[float]) -> str:
-    """把向量打包成 base64（float32 小端，与历史数据逐字节兼容）。
-
-    为什么不用 numpy：这条函数在入库循环里逐块调用，而 numpy 是**懒加载**的。
-    打包版首次 `import numpy` 要去加载 `_multiarray_umath.pyd` 和 OpenBLAS，
-    Windows 上必须拿 loader lock —— 实测曾把 SQLite 写锁占了 155 秒，用户看到
-    的就是「任务处理中整个软件卡住」（见 services/threadpool.py 的事故说明）。
-    这里只需要把 float32 写进字节串，stdlib 的 array 就够了：
-    同样 4 字节、同样本机小端，读回来的值与 numpy 版本完全一致。
-    """
-    import array
-
-    arr = array.array("f", (float(v) for v in vec))
-    return base64.b64encode(arr.tobytes()).decode("ascii")
-
-
-def unpack_vector(blob: str | None) -> list[float] | None:
-    """pack_vector 的逆操作；同样不依赖 numpy（原因见上）。"""
-    if not blob:
-        return None
-    import array
-
-    arr = array.array("f")
-    arr.frombytes(base64.b64decode(blob.encode("ascii")))
-    return arr.tolist()
-
-
-def normalize(vec: Iterable[float]) -> list[float]:
-    vals = [float(v) for v in vec]
-    norm = math.sqrt(sum(v * v for v in vals)) or 1.0
-    return [v / norm for v in vals]
-
-
-_TOKEN_RE = re.compile(r"[a-z0-9_]+|[\u4e00-\u9fff]")
-
-
-def hash_embed(text: str, dim: int = FALLBACK_EMBED_DIM) -> list[float]:
-    """确定性哈希向量：字符/词 n-gram 哈希到固定维度。离线模式与单测使用。"""
-    vec = [0.0] * dim
-    low = text.lower()
-    tokens = _TOKEN_RE.findall(low)
-    grams: list[str] = []
-    grams.extend(tokens)
-    for i in range(len(tokens) - 1):
-        grams.append(tokens[i] + tokens[i + 1])
-    for i in range(len(low) - 2):
-        grams.append(low[i:i + 3])
-    for g in grams:
-        h = int(hashlib.md5(g.encode("utf-8")).hexdigest()[:8], 16)
-        idx = h % dim
-        sign = 1.0 if (h >> 8) % 2 == 0 else -1.0
-        vec[idx] += sign * (1.0 + 0.2 * math.log1p(len(g)))
-    return normalize(vec)
-
-
-# ------------------------------------------------------------------ 协议适配
-PROTOCOL_OPENAI = "openai"
-PROTOCOL_RESPONSES = "openai-responses"
-PROTOCOL_ANTHROPIC = "anthropic"
-SUPPORTED_PROTOCOLS = (PROTOCOL_OPENAI, PROTOCOL_RESPONSES, PROTOCOL_ANTHROPIC)
-
-# Anthropic 的 /v1/models 在部分代理/中转实现里不存在，探测失败时回退这份清单。
-# 只列稳定别名（不带日期快照），避免内置表过期后导入一堆 404 模型。
-ANTHROPIC_BUILTIN_MODELS: tuple[str, ...] = (
-    "claude-opus-4-1",
-    "claude-opus-4-0",
-    "claude-sonnet-4-0",
-    "claude-3-7-sonnet-latest",
-    "claude-3-5-sonnet-latest",
-    "claude-3-5-haiku-latest",
-    "claude-3-opus-latest",
-    "claude-3-haiku-20240307",
-)
-
-ANTHROPIC_VERSION = "2023-06-01"
-# anthropic 的 temperature 取值区间是 0..1，OpenAI 是 0..2。
-# 统一按更严的区间钳制，避免用户配了 0.7 之外的值直接被 400 打回。
-_ANTHROPIC_TEMP_RANGE = (0.0, 1.0)
-
-
-def provider_protocol(provider: models.Provider) -> str:
-    """读供应商协议，未知/空值一律回退 openai。
-
-    为什么回退而不是报错：老库的 `protocol` 列是迁移补出来的，历史行可能是
-    空串或 NULL；这类行过去就是按 OpenAI 兼容协议跑的，回退才不破坏存量行为。
-    """
-    value = (getattr(provider, "protocol", "") or "").strip()
-    return value if value in SUPPORTED_PROTOCOLS else PROTOCOL_OPENAI
-
-
-def _official_https_base(base: str, host: str, path: str | None = None) -> bool:
-    """仅识别官方 HTTPS 地址，避免对兼容网关应用供应商特例。"""
-    try:
-        parsed = urlsplit((base or "").strip())
-        return (
-            parsed.scheme.lower() == "https"
-            and parsed.hostname == host
-            and parsed.port in (None, 443)
-            and "@" not in parsed.netloc
-            and not parsed.query and not parsed.fragment
-            and (path is None or parsed.path.rstrip("/") == path)
-        )
-    except ValueError:
-        return False
-
-
-def _openai_reasoning_chat(provider: models.Provider, model: str) -> bool:
-    """官方 o1/o3/o4 系列 Chat Completions 使用不同的 token 参数。"""
-    return bool(
-        _official_https_base(provider.base_url, "api.openai.com")
-        and re.match(r"^o[134](?:-|$)", model or "")
-    )
-
-
-def _dashscope_embedding(provider: models.Provider, model: str) -> bool:
-    """中国区同步向量 API 的 v3/v4 模型每次最多接受 10 条文本。"""
-    return (
-        model in ("text-embedding-v3", "text-embedding-v4")
-        and _official_https_base(
-            provider.base_url, "dashscope.aliyuncs.com", "/compatible-mode/v1")
-    )
-
-
-def _plain_text(content: Any) -> str:
-    """把 OpenAI 风格的 content（str 或 parts 数组）压成纯文本。"""
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        chunks: list[str] = []
-        for part in content:
-            if isinstance(part, str):
-                chunks.append(part)
-            elif isinstance(part, dict):
-                text = part.get("text")
-                if isinstance(text, str):
-                    chunks.append(text)
-        return "\n".join(chunks)
-    return str(content)
-
-
-def _split_system(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
-    """把 system 消息从消息数组里剥出来。
-
-    Responses 用独立的 `instructions`，Anthropic 用独立的 `system`；
-    两者都不接受 messages 里出现 role=system。业务侧仍按 OpenAI 习惯传
-    system 消息，所以这里统一剥一次，调用方不必知道协议差异。
-    """
-    system_parts: list[str] = []
-    rest: list[dict[str, Any]] = []
-    for msg in messages:
-        if (msg.get("role") or "").lower() == "system":
-            text = _plain_text(msg.get("content")).strip()
-            if text:
-                system_parts.append(text)
-            continue
-        rest.append(msg)
-    return "\n\n".join(system_parts), rest
-
-
-def _clamp_temperature(value: Any) -> float:
-    try:
-        num = float(value)
-    except (TypeError, ValueError):
-        return 0.2
-    low, high = _ANTHROPIC_TEMP_RANGE
-    return min(max(num, low), high)
-
-
-def _responses_payload(cfg: models.ModelConfig, messages: list[dict[str, Any]], *,
-                       temperature: Any, max_tokens: int, json_mode: bool) -> dict:
-    """OpenAI Responses API：`input` 取代 `messages`，`max_output_tokens` 取代 `max_tokens`。"""
-    instructions, rest = _split_system(messages)
-    payload: dict[str, Any] = {
-        "model": cfg.model,
-        "input": [
-            {"role": m.get("role") or "user", "content": _plain_text(m.get("content"))}
-            for m in rest
-        ],
-    }
-    if instructions:
-        payload["instructions"] = instructions
-    if temperature is not None:
-        payload["temperature"] = temperature
-    if max_tokens:
-        payload["max_output_tokens"] = int(max_tokens)
-    if json_mode:
-        payload["text"] = {"format": {"type": "json_object"}}
-    return payload
-
-
-def _anthropic_payload(cfg: models.ModelConfig, messages: list[dict[str, Any]], *,
-                       temperature: Any, max_tokens: int, json_mode: bool) -> dict:
-    """Anthropic Messages：`system` 独立字段、`max_tokens` 必填。"""
-    system, rest = _split_system(messages)
-    if json_mode:
-        # Anthropic 没有 response_format，只能靠指令约束输出形态。
-        # 只追加约束、不删原有 system，尽量不改变业务提示词的语义。
-        hint = "只输出合法 JSON 对象，不要包含 Markdown 代码块或解释性文字。"
-        system = f"{system}\n\n{hint}".strip()
-    payload: dict[str, Any] = {
-        "model": cfg.model,
-        # max_tokens 是 Anthropic 的必填项，业务侧传 0（不限制）时兜底一个上限。
-        "max_tokens": max(int(max_tokens or 0), 1) if max_tokens else 1600,
-        "messages": [
-            {"role": m.get("role") or "user", "content": _plain_text(m.get("content"))}
-            for m in rest
-        ],
-    }
-    if system:
-        payload["system"] = system
-    if temperature is not None:
-        payload["temperature"] = _clamp_temperature(temperature)
-    return payload
-
-
-def _extract_responses_text(data: dict) -> str:
-    """从 Responses 响应取文本：`output[].content[].text`，兼容聚合字段 `output_text`。"""
-    aggregated = data.get("output_text")
-    if isinstance(aggregated, str) and aggregated.strip():
-        return aggregated
-    parts: list[str] = []
-    for item in data.get("output") or []:
-        if not isinstance(item, dict):
-            continue
-        for part in item.get("content") or []:
-            if isinstance(part, dict) and part.get("type") in ("output_text", "text"):
-                text = part.get("text")
-                if isinstance(text, str) and text:
-                    parts.append(text)
-    return "\n".join(parts)
-
-
-def _extract_anthropic_text(data: dict) -> str:
-    """从 Anthropic 响应取文本：`content[].text`（type=text 的块）。"""
-    parts: list[str] = []
-    for part in data.get("content") or []:
-        if isinstance(part, dict) and part.get("type") == "text":
-            text = part.get("text")
-            if isinstance(text, str) and text:
-                parts.append(text)
-    return "\n".join(parts)
-
-
-def _no_embedding_error(protocol: str) -> ModelUnavailable:
-    name = {PROTOCOL_RESPONSES: "OpenAI Responses", PROTOCOL_ANTHROPIC: "Anthropic Messages"}
-    return ModelUnavailable(
-        f"该协议（{name.get(protocol, protocol)}）不提供 Embedding 接口，"
-        "请为向量用途单独配置一个 OpenAI 兼容协议的供应商"
-    )
 
 
 # ------------------------------------------------------------------ 调用实现
@@ -1250,4 +765,3 @@ def import_models(db: Session, provider: models.Provider,
     if created:
         db.commit()
     return created, skipped
-
