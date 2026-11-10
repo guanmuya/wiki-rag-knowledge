@@ -1,14 +1,28 @@
-fastapi>=0.110
-uvicorn[standard]>=0.27
-sqlalchemy>=2.0
-pydantic>=2.6
-python-multipart>=0.0.9
-httpx>=0.27
-pypdf>=4.0
-cryptography>=42.0
-numpy>=1.26
-python-docx>=1.1
-openpyxl>=3.1
-python-pptx>=0.6.23
-lxml>=5.0
-pytest>=8.0
+# 运行时依赖 —— 精确锁定版本（本文件即运行时锁文件）
+#
+# 来源：在 Python 3.13.11 / pytest 9.2.0 的验证环境中，取这 13 个直接依赖的
+#       实际安装版本；该环境下全量 `python -m pytest backend/tests -q` 为
+#       583 passed, 1 skipped（见 docs/FACTS.md §2 与 docs/evidence/pytest-baseline.txt）。
+# 规则：
+#   - 全部用 == 锁定，不要改回下限写法。升级依赖时同步更新本文件、constraints.txt，
+#     并在 CI 上重跑一次全量测试，数字按 docs/FACTS.md §2.4 的口径更新。
+#   - 传递依赖的精确版本在 constraints.txt；任何 pip install 都要带
+#     -c backend/constraints.txt，否则传递依赖仍会漂移。
+#   - 本地开发 / CI 用 requirements-dev.txt（= 本文件 + 测试工具）；
+#     打 exe 用 requirements-build.txt（= 本文件 + 固定版本 PyInstaller）。
+# 安装示例（仓库根目录）：
+#   python -m pip install -r backend/requirements-dev.txt -c backend/constraints.txt
+
+fastapi==0.162.0
+uvicorn[standard]==0.54.0
+SQLAlchemy==2.1.8
+pydantic==2.14.1
+python-multipart==0.0.33
+httpx==0.28.1
+pypdf==7.0.0
+cryptography==50.0.2
+numpy==2.5.1
+python-docx==1.2.0
+openpyxl==3.1.5
+python-pptx==1.0.2
+lxml==6.1.3

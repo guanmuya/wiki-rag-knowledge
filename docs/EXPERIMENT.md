@@ -2,6 +2,11 @@
 
 本方案给出可复现、可执行的对比实验。所有参数、接口、字段名与当前代码一致；凡未能实测的一律标注「待实验」，不填推测值。
 
+> **事实口径（第二波统一）**：版本、表数、Worker 并发、SQLite 写锁三档、测试基线的
+> 权威值见 [docs/FACTS.md](FACTS.md) §1；测试基线计数只记在该文件 §2。
+> 代码引用用「文件 + 符号名 / 章节」（见 [docs/FACTS.md](FACTS.md) §3）。
+> **§8 实验结果与 §8.6「待实验」是 P0-1 的产出，原样保留，未被本节替换。**
+
 ---
 
 ## 1. 实验环境与配置
@@ -13,7 +18,7 @@
 | 操作系统 | Windows（开发与验收环境） |
 | Python | 3.13（项目 `.venv`） |
 | 后端 | FastAPI + Uvicorn，单进程 |
-| 数据库 | SQLite 单文件，`journal_mode=WAL`、`busy_timeout=15000` |
+| 数据库 | SQLite 单文件，`journal_mode=WAL`，写锁等待分三档（交互 3000 / Worker 30000 / 进度 1000 ms，见 [docs/FACTS.md](FACTS.md) §1.1） |
 | 前端 | Electron 33 + React，仅在人工判定环节使用 |
 
 CPU、内存、磁盘型号已由本轮实测补入 `docs/results/environment.json`（见 §8.1）；CPU 具体型号在本机为虚拟机、系统把型号报告为 `Not Available`，按约定如实留白、不填推测值。离线哈希向量路径的耗时主要由 CPU 单核性能决定，接入真实 embedding 后主要受网络 RTT 影响，两者需分开记录。
@@ -55,7 +60,7 @@ CPU、内存、磁盘型号已由本轮实测补入 `docs/results/environment.js
 | `PER_KB_CANDIDATES` | 8 | `WRK_PER_KB_CANDIDATES` | 每库候选数 |
 | `MAX_EVIDENCE` | 10 | `WRK_MAX_EVIDENCE` | 最终证据条数上限 |
 | `CONTEXT_CHAR_BUDGET` | 9000 | `WRK_CONTEXT_CHAR_BUDGET` | 拼进提示词的上下文字符上限 |
-| `WORKER_CONCURRENCY` | 2 | `WRK_WORKER_CONCURRENCY` | Worker 线程数 |
+| `WORKER_CONCURRENCY` | 1 | `WRK_WORKER_CONCURRENCY` | Worker 线程数（SQLite 单写者，多开只会互相抢写锁） |
 | `WORKER_POLL_SECONDS` | 1.0 | `WRK_WORKER_POLL_SECONDS` | 任务轮询间隔 |
 | `MAX_UPLOAD_MB` | 50 | `WRK_MAX_UPLOAD_MB` | 单文件上限 |
 | `WIKI_SHARD_CHAR_BUDGET` | 9000（默认等于 `CONTEXT_CHAR_BUDGET`） | `WRK_WIKI_SHARD_CHAR_BUDGET` | 单片 Map 调用的资料字符预算 |
@@ -428,7 +433,7 @@ return ""
 ```bash
 cd F:/GItHub_Code/Wiki-Rag-Knowledge
 
-# 0) 确认代码静止、测试全绿（基线 157 passed, 1 skipped，16 个测试文件）
+# 0) 确认代码静止、测试全绿（基线口径见 docs/FACTS.md §2，全仓唯一记录）
 cd backend && PYTHONIOENCODING=utf-8 ../.venv/Scripts/python.exe -m pytest tests/ -q && cd ..
 
 # 1) 隔离实验数据目录，绝不写 data/
@@ -609,7 +614,7 @@ label_correctness, label_evidence_support, reviewer
 
 **人工判定的主观性**。「部分正确」这一档的边界天然模糊——漏掉一个限定条件算部分正确还是错误，不同标注者会有分歧。缓解方式：两人独立标注 + 计算 Cohen's κ，κ < 0.6 时重新对齐判定标准再标。三档标准必须在标注开始前写死，中途不得修改。
 
-**单机环境的外部效度**。所有耗时数据来自单机、单进程、SQLite。多人并发场景下的锁竞争（`busy_timeout=15000`）、Worker 队列积压、以及 Electron 与 sidecar 的进程开销都未测量。P95 延迟在生产并发下会显著高于实验值。
+**单机环境的外部效度**。所有耗时数据来自单机、单进程、SQLite。多人并发场景下的锁竞争（写锁三档：交互 3000 / Worker 30000 / 进度 1000 ms，见 [docs/FACTS.md](FACTS.md) §1.1）、Worker 队列积压、以及 Electron 与 sidecar 的进程开销都未测量。P95 延迟在生产并发下会显著高于实验值。
 
 **`top_k` 的语义混用**。`retrieve(top_k=N)` 里 N 同时是「每库候选数」（`retrieval.py:596`）和「最终条数上限」（`retrieval.py:665`，且被 `max(top_k, 3)` 兜底）；`/api/search/preview` 根本不接受 `top_k`。做 Hit@k 实验时若直接用 `top_k=k`：单库时 k=1 只返回 1 条、k=2 返回 2 条（都凑不满 3），而**多库（≥3 个）时 k=1 与 k=2 都会返回 3 条**，会得出「k 不影响效果」的错误结论。要严格控制返回条数，只能从结果里自己截断。
 

@@ -1,0 +1,7 @@
+# 开发 / 测试依赖分组 = 运行时锁 + 测试工具
+# 本地开发与 CI（.github/workflows/ci.yml）都用这一份。
+# 注意：-r 相对路径按本文件所在目录解析；安装时必须带 constraints.txt：
+#   python -m pip install -r backend/requirements-dev.txt -c backend/constraints.txt
+-r requirements.txt
+
+pytest==9.2.0

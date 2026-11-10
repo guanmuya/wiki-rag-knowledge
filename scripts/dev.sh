@@ -16,7 +16,7 @@ if [ ! -x "$PY" ]; then
 fi
 
 echo "==> 安装后端依赖"
-"$PY" -m pip install -q -r backend/requirements.txt
+"$PY" -m pip install -q -r backend/requirements-dev.txt -c backend/constraints.txt
 
 echo "==> 安装前端依赖"
 (cd frontend && \

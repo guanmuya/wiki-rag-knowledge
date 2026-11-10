@@ -2,6 +2,11 @@
 
 本文的参数字段名、函数名与数字均取自当前仓库代码或实测输出；未能实测的一律标注「待实测」。
 
+> **事实口径与代码锚点（本波统一）**：版本、表数、Worker 并发、SQLite 锁超时、
+> 测试基线的权威值见 [docs/FACTS.md](FACTS.md) §1；测试基线的计数只记在该文件 §2。
+> 代码引用统一用「文件 + 符号名 / 章节」，行号仅为写作时的辅助提示（见
+> [docs/FACTS.md](FACTS.md) §3）——本文保留的历史行号请按此约定理解。
+
 ---
 
 ## 1. 总体架构
@@ -22,7 +27,11 @@
 
 目标场景是单个企业内部几十到几百人的知识检索，不是多租户 SaaS。微服务带来的三样东西在这里都是纯成本：服务发现与网关（只有一个后端进程）、独立数据库（数据量在单机 SQLite 可承受范围内，`seed_demo` 三库 25 个检索单元，`seed_expanded` 三库 55 个，700 行表格文档也只产出 41 个分块）、以及运维（没有专职运维，双击图标就要能用）。
 
-`db.py` 用 `PRAGMA journal_mode=WAL` + `busy_timeout=15000` 支撑「HTTP 请求线程 + 2 个 Worker 线程」（`WORKER_CONCURRENCY = 2`）的并发写，而不引入外部队列。三个约束进一步把部署方式钉死在单机：
+`backend/app/db.py` 用 `PRAGMA journal_mode=WAL` + **分三档的 SQLite 写锁等待**
+（交互 `3000` ms / Worker `30000` ms / 进度写 `1000` ms，见
+[docs/FACTS.md](FACTS.md) §1.1）支撑「HTTP 请求线程 + **1 个** Worker 线程」
+（`WORKER_CONCURRENCY = 1`，`backend/app/config.py` 的 `WORKER_CONCURRENCY`；
+SQLite 同时只允许一个写者，多开 worker 只会互相抢写锁）的并发写，而不引入外部队列。三个约束进一步把部署方式钉死在单机：
 
 1. **数据不出企业**。`config.HTTP_TRUST_ENV` 默认 `0`，注释写明「企业内网部署不应把 API Key 意外送进系统代理」。文档原文、分块、向量全部落在本机 `AppData`。
 2. **零配置可用**。未配置模型时，`llm.embed()` 回落到 `hash_embed()`（`FALLBACK_EMBED_DIM = 256`），`answering.answer()` 回落到 `_extractive_answer()` 抽取式回答。
@@ -199,7 +208,9 @@ Map 调用本身是 `TOPIC_PROMPT`：`max_topics = MAX_TOPICS = 12`、`temperatu
 两条硬约束（v1.0.10 的根因修复，`backend/tests/test_freeze_during_task.py` 守着）：
 
 **约束一：写事务里只能有数据库写入。**
-SQLite 同时只有一个写者，写事务开多久，所有交互写请求就要等多久（`busy_timeout` 3s 后变 503）。
+SQLite 同时只有一个写者，写事务开多久，所有交互写请求就要等多久——交互档写锁等待
+`3000` ms 后即返回 503「数据库正忙」，前端提示重试（Worker 档 `30000` ms、进度写档
+`1000` ms，三档口径见 [docs/FACTS.md](FACTS.md) §1.1）。
 因此流水线里所有「慢操作」——解析、embedding 网络调用、`pack_vector`、关键词抽取——都必须在
 `db.execute(delete(...))` **之前**完成；`ingest_version()` 的顺序固定为
 「算向量 → 在内存里构造全部 Chunk 行 → 开事务 → DELETE 旧块 + INSERT 新块 → 一次提交」
@@ -245,7 +256,7 @@ lock——任何线程首次加载原生 DLL（numpy / lxml / pypdf / docx / ope
 
 ### 5.2 表格块：为什么两种极端都不行
 
-`demo_data/fixtures/` 提供三份真实规模的表，`scripts/inspect_chunks.py` 实测三种策略：
+`demo_data/fixtures/` 提供三份真实规模的表，`backend/scripts/inspect_chunks.py` 实测三种策略：
 
 | 文件 | 规模 | 逐行切分 | 整表一块 | 行组 + 表头重复（现实现） |
 | --- | --- | --- | --- | --- |
@@ -573,8 +584,8 @@ Message.content          回答正文，结论后带 [编号]
 | 120 行 → 9 块（7 表格）、1055/1483/1558；200 行 xlsx → 13 块（12+1）、193/1446/1564 | 同上 |
 | `demo_data` 10 份 markdown 共 55 个检索单元；`seed_demo` 三库 25 个（8/10/7） | 用 `parser.parse_document` + `chunking.split_blocks` 探针实算 |
 | `demo_data/questions.json` 44 题（fact/cross/multi_hop/no_answer 各 11） | 直接读文件统计 |
-| 检索耗时 min 6.0 / P50 6.8 / max 14.3 ms | 9 条查询跑 `retrieve()`，离线哈希向量（旧实现实测，本轮未复测） |
-| 测试基线 157 passed, 1 skipped | `cd backend && pytest tests/ -q`（本轮实跑，294.97 s） |
+| 检索耗时 min 6.0 / P50 6.8 / max 14.3 ms | 9 条查询跑 `retrieve()`，离线哈希向量（旧实现实测，本轮未复测）。**当前离线实测口径以第一波 `docs/results/summary.md`「检索耗时（9 题 × 10 次）」为准**（样本 90，min 20.253 / P50 25.218 / P95 44.981 / max 52.812 / 均值 27.407 ms）；接入真实 embedding 后必须重测 |
+| 测试基线 | 见 [docs/FACTS.md](FACTS.md) §2（全仓唯一记录：`python -m pytest backend/tests -q` 的一次真实运行输出、环境、1 项 skip 来源；本文不复述数字） |
 | 1000 块库能生成 Wiki 且覆盖字段出现在 notes | `tests/test_wiki_scale.py::test_wiki_builds_on_thousand_chunk_library` |
 
 检索耗时是**离线哈希向量 + 内存遍历**的端到端时间，不含网络往返。接入真实 embedding 后必须重测。
