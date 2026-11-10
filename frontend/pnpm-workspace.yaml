@@ -1,3 +1,10 @@
+# 本项目是单包工程，pnpm-lock.yaml 只有一个 importer（.）。
+# 但 pnpm 9 只要发现 pnpm-workspace.yaml，就要求 packages 非空，否则直接报
+# "ERROR packages field missing or empty"（CI 的 pnpm 9.15.9 即栽在这里）。
+# 把根包自身列进 packages 即可满足该校验：不会新增 importer、不会改变依赖解析，
+# 锁文件保持可复现；同时 pnpm 10+ 仍能读取下面的构建脚本白名单。
+packages:
+  - '.'
 onlyBuiltDependencies:
   - esbuild
   - electron
