@@ -1,0 +1,5 @@
+﻿overlap,chunk_count,total_chars,avg_len,vector_batches,anchors_duplicated_by_overlap,seam_pairs_in_one_chunk,seam_total_pairs,seam_pair_hit_rate
+0,8,5336,667.0,1,0,24,31,0.7742
+60,11,5943,540.27,1,10,31,31,1.0
+120,11,6543,594.82,1,10,31,31,1.0
+240,15,8703,580.2,1,28,31,31,1.0
