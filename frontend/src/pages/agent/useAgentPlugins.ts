@@ -13,6 +13,14 @@ export interface AgentPluginsState {
   rescanPlugins: () => Promise<void>
 }
 
+/**
+ * 本页只跑本机 CLI：内置检索核心（kind 为 kb）即便后端仍返回，也不展示、不可选——
+ * 检索问答由「智能问答」页负责。过滤只放在这一处，免得每个列表、下拉各自判断。
+ */
+function cliCores(items: AgentCore[]): AgentCore[] {
+  return items.filter((core) => core.kind !== 'kb')
+}
+
 /** 核心与插件：清单列表、加载错误、插件目录与启停操作。 */
 export function useAgentPlugins(notify: (text: string) => void): AgentPluginsState {
   const [cores, setCores] = useState<AgentCore[]>([])
@@ -21,7 +29,7 @@ export function useAgentPlugins(notify: (text: string) => void): AgentPluginsSta
   const [busyPlugin, setBusyPlugin] = useState('')
 
   function applyCoreList(data: AgentCoreList) {
-    setCores(data.items)
+    setCores(cliCores(data.items))
     setCoreErrors(data.errors)
     setPluginDir(data.plugin_dir)
   }
@@ -29,7 +37,7 @@ export function useAgentPlugins(notify: (text: string) => void): AgentPluginsSta
   async function refreshCores(): Promise<AgentCore[]> {
     const data = await agentApi.cores()
     applyCoreList(data)
-    return data.items
+    return cliCores(data.items)
   }
 
   async function togglePlugin(core: AgentCore) {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { agentApi, kbApi } from '../../api'
+import { agentApi } from '../../api'
 import type {
   AgentCore,
   AgentCoreList,
@@ -7,7 +7,6 @@ import type {
   AgentSession,
   AgentSessionDetail,
   EvidenceItem,
-  KnowledgeBase,
 } from '../../types'
 import { errorText } from '../../utils'
 import { coreUsable, type LiveRun } from './constants'
@@ -19,7 +18,7 @@ export interface AgentSessionsOptions {
   setPluginsOpen: (open: boolean) => void
 }
 
-/** 会话、当前会话详情、模型/知识库选项，以及一次运行的事件轮询。 */
+/** 会话、当前会话详情、模型选项，以及一次运行的事件轮询。 */
 export function useAgentSessions({
   cores,
   applyCoreList,
@@ -29,7 +28,6 @@ export function useAgentSessions({
   const [sessions, setSessions] = useState<AgentSession[]>([])
   const [active, setActive] = useState<AgentSessionDetail | null>(null)
   const [models, setModels] = useState<AgentModelOption[]>([])
-  const [kbs, setKbs] = useState<KnowledgeBase[]>([])
   const [boot, setBoot] = useState(true)
   const [loadError, setLoadError] = useState<unknown>(null)
   const [draft, setDraft] = useState('')
@@ -47,25 +45,20 @@ export function useAgentSessions({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const availableCores = useMemo(() => cores.filter(coreUsable), [cores])
-  const preferredCore = useMemo(
-    () => availableCores.find((c) => c.kind === 'kb') ?? availableCores[0] ?? null,
-    [availableCores],
-  )
+  const preferredCore = useMemo(() => availableCores[0] ?? null, [availableCores])
   const isBusy = Boolean(live) || Boolean(active?.running)
 
   useEffect(() => {
     let alive = true
     void (async () => {
       try {
-        const [coreData, sessionData, kbData] = await Promise.all([
+        const [coreData, sessionData] = await Promise.all([
           agentApi.cores(),
           agentApi.sessions(),
-          kbApi.list(),
         ])
         if (!alive) return
         applyCoreList(coreData)
         setSessions(sessionData.items)
-        setKbs(kbData.items)
         if (sessionData.items[0]) {
           await openSession(sessionData.items[0].id, alive)
         }
@@ -203,7 +196,6 @@ export function useAgentSessions({
       const created = await agentApi.createSession({
         core_id: chosen.id,
         model_config_id: modelId ?? chosen.default_model_id ?? null,
-        kb_ids: chosen.kind === 'kb' ? kbs.map((k) => k.id) : [],
       })
       await refreshSessions()
       await openSession(created.id)
@@ -228,7 +220,6 @@ export function useAgentSessions({
         const created = await agentApi.createSession({
           core_id: chosen.id,
           model_config_id: chosen.default_model_id ?? null,
-          kb_ids: chosen.kind === 'kb' ? kbs.map((k) => k.id) : [],
         })
         sessionId = created.id
         await openSession(created.id)
@@ -310,20 +301,6 @@ export function useAgentSessions({
     }
   }
 
-  async function toggleKb(kbId: number) {
-    if (!active || isBusy) return
-    const next = active.kb_ids.includes(kbId)
-      ? active.kb_ids.filter((id) => id !== kbId)
-      : [...active.kb_ids, kbId]
-    try {
-      const updated = await agentApi.updateSession(active.id, { kb_ids: next })
-      setActive((prev) => (prev ? { ...prev, kb_ids: updated.kb_ids } : prev))
-      setSessions((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))
-    } catch (err) {
-      notify(errorText(err))
-    }
-  }
-
   async function saveTitle() {
     if (!active) return
     try {
@@ -369,7 +346,6 @@ export function useAgentSessions({
     sessions,
     active,
     models,
-    kbs,
     boot,
     loadError,
     draft,
@@ -396,7 +372,6 @@ export function useAgentSessions({
     stopRun,
     changeCore,
     changeModel,
-    toggleKb,
     saveTitle,
     saveWorkspace,
     removeSession,

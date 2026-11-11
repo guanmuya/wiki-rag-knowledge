@@ -993,6 +993,10 @@ export interface AgentSessionPayload {
   title?: string
   core_id?: string
   model_config_id?: number | null
+  /**
+   * 个人 Agent 已不再与知识库交互，前端不再发送这个字段；
+   * 保留声明只为对齐后端 `AgentSessionIn`（check:contract），后端去掉该字段后一并删除。
+   */
   kb_ids?: number[]
   workspace?: string
 }

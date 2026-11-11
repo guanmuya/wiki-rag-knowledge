@@ -1,6 +1,6 @@
 import type { AgentCore, AgentPluginError } from '../../types'
 import { Badge, Button, Field, Modal, TextInput } from '../../components/ui'
-import { IconAgent, IconRefresh, IconTerminal } from '../../components/icons'
+import { IconRefresh, IconTerminal } from '../../components/icons'
 import { EXAMPLE_PLUGIN, coreUsable } from './constants'
 
 export function PluginPanel({
@@ -70,7 +70,7 @@ export function PluginPanel({
           {cores.map((core) => (
             <div key={core.id} className="agent-plugin-row">
               <span className="agent-core-icon" data-kind={core.kind}>
-                {core.kind === 'kb' ? <IconAgent size={16} /> : <IconTerminal size={16} />}
+                <IconTerminal size={16} />
               </span>
               <div className="agent-plugin-main">
                 <div className="row">
@@ -79,16 +79,14 @@ export function PluginPanel({
                   {core.installed
                     ? <Badge tone="success">已安装</Badge>
                     : <Badge tone="warn">未安装</Badge>}
-                  {core.kind === 'cli' && core.installed && !coreUsable(core)
+                  {core.installed && !coreUsable(core)
                     ? <Badge tone="warn">无兼容模型</Badge>
                     : null}
                   {!core.enabled ? <Badge tone="danger">已停用</Badge> : null}
                 </div>
                 <div className="tiny muted agent-plugin-desc">{core.description}</div>
                 <div className="tiny muted">
-                  {core.kind === 'cli'
-                    ? `${core.bins.join(' / ')}${core.version ? ` · ${core.version}` : ''}${core.path ? ` · ${core.path}` : ''}`
-                    : '内置 RAG 核心，无需安装'}
+                  {`${core.bins.join(' / ')}${core.version ? ` · ${core.version}` : ''}${core.path ? ` · ${core.path}` : ''}`}
                 </div>
                 {core.protocol_labels.length > 0 ? (
                   <div className="tiny muted">协议：{core.protocol_labels.join(' / ')}</div>
@@ -98,11 +96,9 @@ export function PluginPanel({
                 variant={core.enabled ? 'ghost' : 'primary'}
                 size="sm"
                 loading={busyPlugin === core.id}
-                disabled={core.id === 'kb'}
-                title={core.id === 'kb' ? '内置知识库核心不能停用' : undefined}
                 onClick={() => onTogglePlugin(core)}
               >
-                {core.id === 'kb' ? '内置' : core.enabled ? '停用' : '启用'}
+                {core.enabled ? '停用' : '启用'}
               </Button>
             </div>
           ))}
