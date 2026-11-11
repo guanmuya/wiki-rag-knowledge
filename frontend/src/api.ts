@@ -30,6 +30,7 @@ import type {
   ModelImportItem,
   ModelImportResult,
   ModelPayload,
+  ModelPricePayload,
   ModelTestResult,
   DiscoverModelsResult,
   Paged,
@@ -393,6 +394,20 @@ export const metaApi = {
 }
 
 // ---------------------------------------------------------------- 已记录用量（管理员）
+/**
+ * 金额是按单价估算的**参考值**：`priced_records` 找到单价的行数，
+ * `unpriced_records` / `unpriced_tokens` 是没找到单价的部分（含全部向量 token），
+ * 两者相加不等于 `record_count` 时差值是「没有 Token 记录的调用」
+ * （`unmetered_records`）。
+ */
+export interface UsageCost {
+  currency: string
+  amount: number
+  priced_records: number
+  unpriced_records: number
+  unpriced_tokens: number
+}
+
 export interface UsageTotals {
   calls: number
   live_calls: number
@@ -406,18 +421,97 @@ export interface UsageTotals {
   total_tokens: number
   latency_ms: number
   record_count: number
+  /** 有调用记录、但一条 Token 都没记下来的行数（供应商没回报 / 纯文本 CLI） */
+  unmetered_records: number
+  cost: UsageCost
 }
 
 export interface UsageSummary {
   period_days: number
   timezone: 'UTC'
+  currency: string
+  price_unit: string
   totals: UsageTotals
   daily: Array<UsageTotals & { date: string }>
-  by_source: Array<UsageTotals & { source: 'processing' | 'chat'; label: string }>
+  by_source: Array<UsageTotals & { source: 'processing' | 'chat' | 'agent'; label: string }>
+  /** 仅个人 Agent：按核心（kb / codex / …）拆分 */
+  by_core: Array<UsageTotals & { core_id: string; label: string }>
 }
 
 export const usageApi = {
   summary: (days: 0 | 7 | 30) => request<UsageSummary>(`/usage${qs({ days })}`),
+}
+
+// ---------------------------------------------------------------- 模型参考单价（管理员）
+/** 内置参考价目录里的一条（公开价目页 + 查证日期）。 */
+export interface ModelPriceView {
+  model_id: string
+  currency: string
+  price_unit: string
+  input_per_1m: number
+  output_per_1m: number
+  source: string
+  source_url: string
+  verified_at: string
+  note: string
+}
+
+/** 管理员为某个模型配置填写的覆盖价。 */
+export interface UserModelPriceView {
+  currency: string
+  price_unit: string
+  input_per_1m: number
+  output_per_1m: number
+  updated_by: number | null
+  updated_at: string | null
+}
+
+/** 最终生效价：`origin` 说明来源，`none` 表示未计价。 */
+export interface EffectiveModelPrice {
+  origin: 'user' | 'builtin' | 'none'
+  currency: string
+  price_unit: string
+  input_per_1m: number | null
+  output_per_1m: number | null
+  model_id: string
+  source: string
+  source_url: string
+  verified_at: string
+  note: string
+}
+
+export interface ModelPriceItem {
+  model_config_id: number
+  model: string
+  label: string
+  provider: string
+  purpose: ModelPurpose
+  match_key: string
+  builtin: ModelPriceView | null
+  user: UserModelPriceView | null
+  effective: EffectiveModelPrice
+}
+
+export interface PricingCatalog {
+  currency: string
+  price_unit: string
+  /** 恒为 true：价格是参考值，不能当账单 */
+  reference: boolean
+  note: string
+  sources: Array<{ id: string; name: string; url: string }>
+  items: ModelPriceItem[]
+}
+
+export const pricingApi = {
+  list: () => request<PricingCatalog>('/settings/pricing'),
+  set: (modelConfigId: number, payload: ModelPricePayload) =>
+    request<ModelPriceItem>(`/settings/pricing/${modelConfigId}`, {
+      method: 'PUT',
+      body: payload,
+    }),
+  /** 删除覆盖价，回到内置参考价；没有覆盖价时同样成功（幂等） */
+  clear: (modelConfigId: number) =>
+    request<ModelPriceItem>(`/settings/pricing/${modelConfigId}`, { method: 'DELETE' }),
 }
 
 // ---------------------------------------------------------------- 首次初始化

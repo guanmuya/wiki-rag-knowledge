@@ -857,6 +857,16 @@ export interface ModelPayload {
   embed_dim: number
 }
 
+/**
+ * 管理员为一个模型配置填写的单价（每 100 万 token）。
+ * 后端 `schemas.py` 的 `ModelPriceIn`：两个字段都必填、都不能为负；
+ * 0 是合法价格（表示这个渠道不额外计费），「没填」与 0 由是否存在此行区分。
+ */
+export interface ModelPricePayload {
+  input_per_1m: number
+  output_per_1m: number
+}
+
 /** 自动更新状态（主进程 updater.cjs 推送） */
 export type UpdateStatus =
   | 'idle'

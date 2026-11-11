@@ -1,0 +1,72 @@
+P1-11 个人 Agent 用量入统计 + 模型参考价：门禁输出（2026-11-11）
+====================================================================
+
+环境：Windows 11（10.0.26200）、Python 3.13.11、pytest 9.2.0、
+      Node v24.18.0、pnpm 12.3.4、全局解释器（当前 checkout 无 .venv）。
+所有命令都在仓库根目录（前端门禁在 `frontend/`）执行。
+
+一、后端（新增/改动用例，逐组实跑）
+-----------------------------------
+$ python -m pytest backend/tests/test_model_prices.py backend/tests/test_pricing_api.py -q
+25 passed in 1.45s
+
+$ python -m pytest backend/tests/test_usage.py -q
+23 passed in 9.20s
+
+$ python -m pytest backend/tests/test_agent_plugins.py backend/tests/test_agent_runtime.py -q
+105 passed in 22.78s
+
+$ python -m pytest backend/tests/test_login_rate_limit.py -q
+7 passed in 1.54s
+
+二、后端全量（基线见 docs/evidence/pytest-baseline.txt）
+---------------------------------------------------------
+$ python -m pytest backend/tests -q
+754 passed, 1 skipped in 231.24s (0:03:51)
+
+口径变化：707 → 754（+47 项展开后的用例），文件数 53 → 55（新增
+`test_model_prices.py`、`test_pricing_api.py`），`def test_` 496 → 521，
+`@pytest.mark.parametrize` 80 → 83。跳过仍是 `test_tables.py:319`
+（可选依赖 reportlab 未安装），未新增 skip。
+
+三、前端四项门禁
+----------------
+$ cd frontend && pnpm install --frozen-lockfile
+Done in 5.3s using pnpm v12.3.4
+
+$ pnpm check:contract
+契约校验通过（18 组）：
+  - [请求体] ModelPricePayload ↔ ModelPriceIn（2 字段）
+  - [路由] 后端 80 条路由，docs/API.md 已覆盖
+  （其余 16 组为既有对照项，全部通过）
+
+$ pnpm typecheck
+（无输出，退出码 0）
+
+$ pnpm build:web
+dist/index.html                   2.09 kB │ gzip:   1.32 kB
+dist/assets/index-ufMAgdvt.css   64.97 kB │ gzip:  12.55 kB
+dist/assets/index-DarY-LuR.js   502.04 kB │ gzip: 156.31 kB
+✓ built in 1.36s
+
+$ pnpm test
+ℹ tests 10
+ℹ pass 10
+ℹ fail 0
+（前端主链路 E2E 5 条 + 失败文案单一来源 5 条）
+
+四、本轮跑全量时出现的两次「偶发失败」（如实记录，均与本次改动无关）
+----------------------------------------------------------------------
+1. `test_login_rate_limit.py::test_account_locks_after_threshold_and_stops_being_a_password_oracle`
+   报 `assert '901' == '900'`（Retry-After 多 1 秒）。根因在
+   `backend/app/services/login_guard.py` 的浮点减法：`now + 900 - now`
+   有 1e-10 级尾巴，`ceil` 会多报 1 秒，且只在部分 `time.monotonic()` 取值下出现
+   （本机 20 万次采样中约 25% 命中）。本轮顺手修掉（`_retry_after()` + 1 微秒 epsilon），
+   并补 `test_retry_after_rounds_up_without_float_noise`；该文件随后 7 passed。
+2. `test_agent_runtime.py::test_kb_session_flow` 在两次全量跑里失败 1 次（去掉 1 次失败后
+   复跑全量即 754 passed）。与 `docs/FACTS.md` §2.5 记录的 `_wait_run()` 15 秒超时偶发同类，
+   属负载相关，未被本次改动触碰；单文件复跑 26 passed。
+
+五、结论
+--------
+后端全量、前端四项门禁全绿；新增功能对应的用例全部通过，未新增 skip。

@@ -1,0 +1,41 @@
+数据表条数：按代码重数（2026-11-11，P1-11 个人 Agent 用量与参考价）
+===============================================================
+
+背景
+----
+`docs/FACTS.md` §1「数据表数量」原口径是 **23 张**（`models.py` 22 张 +
+`migrations.py` 的 `schema_migrations` 1 张）。本轮新增 `model_prices`
+（管理员按模型配置填写的参考单价），需要按代码重新数一遍再改数字，
+不靠人工点。
+
+命令与输出（仓库根目录，Python 3.13.11）
+----------------------------------------
+$ python -c "import re,pathlib;text=pathlib.Path('backend/app/models.py').read_text(encoding='utf-8');print(len(re.findall(r'^    __tablename__ = \"([a-z_]+)\"', text, re.M)))"
+23
+
+23 个 `__tablename__`（字典序）：
+
+agent_messages, agent_sessions, app_settings, audit_logs, chunks, conversations,
+cost_records, document_versions, documents, index_versions, kb_grants,
+knowledge_bases, messages, model_configs, model_prices, providers, tasks, users,
+wiki_evidence, wiki_generation_sources, wiki_page_versions, wiki_pages,
+wiki_sections
+
+交叉校验（建表结果必须一致，否则说明有表没声明或声明了没建）：
+
+$ python -c "import sys;sys.path.insert(0,'backend');import app.models as m;print(len(m.Base.metadata.tables))"
+23
+
+结论
+----
+- `models.py` 声明 **23** 张（旧口径 22 + 本轮新增 `model_prices` 1 张）。
+- 加上 `backend/app/migrations.py` 里用原始 SQL 建的 `schema_migrations`
+  （不进 `Base.metadata`，所以 `create_all()` 不建它，也不会被上面的 23 数到）
+  → **总计 24 张**。
+- `docs/FACTS.md` §1 与 §2 之外复述条数的文档（`README.md`、`docs/THESIS.md`）
+  已按该节口径写作「23 张表」的那些句子，本轮同步改为 24 张。
+
+复现脚本
+--------
+本轮用的临时脚本等价于上面两条命令（读 `backend/app/models.py` 数
+`__tablename__`，再对比 `Base.metadata.tables`），跑完即删，不留脚本进仓库。

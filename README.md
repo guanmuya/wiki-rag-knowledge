@@ -177,7 +177,7 @@ Wiki-Rag-Knowledge/
 │   │   ├── config.py             # 全部可调参数（环境变量覆盖）
 │   │   ├── main.py               # FastAPI 入口、引导管理员、/api/meta
 │   │   ├── desktop_entry.py      # sidecar 入口：动态端口 + WRK_READY
-│   │   ├── models.py             # 23 张表（22 个 __tablename__ + migrations 的 schema_migrations）
+│   │   ├── models.py             # 24 张表（23 个 __tablename__ + migrations 的 schema_migrations）
 │   │   ├── migrations.py         # 老库自愈迁移（schema_migrations 账本，P1-8）
 │   │   ├── db.py                 # 引擎、WAL、老库补列自愈
 │   │   ├── deps.py               # 鉴权、库级授权、审计
@@ -205,7 +205,7 @@ Wiki-Rag-Knowledge/
 │   ├── tests/                    # 自动化测试（pnpm test，纳入 CI；见 tests/README.md）
 │   └── electron-builder.yml      # NSIS 配置
 ├── demo_data/                    # 3 篇演示文档 + fixtures（表格压力样本）
-├── docs/                         # DESIGN.md API.md EXPERIMENT.md HANDOFF.md
+├── docs/                         # DESIGN.md API.md EXPERIMENT.md HANDOFF.md PRICING.md
 │   ├── screenshots/current/      # 「当前版本」界面图，供论文/设计说明引用（见 screenshots/README.md）
 │   └── archive/                  # 历史档案：旧看板、历史交接快照、历史 before/after 截图（见 archive/README.md）
 ├── scripts/                      # 长期维护的入口脚本：dev.sh start_backend.sh start_frontend.sh make_fixtures.py …
@@ -311,7 +311,7 @@ Wiki-Rag-Knowledge/
 
 界面在 `/admin/models`，接口在 `/api/settings/*`。供应商（Provider）→ 模型（ModelConfig，`purpose` = `llm` / `embedding` / `vision`，各自可设默认）。添加供应商时可选常用直连接口预设或自定义地址；请求直接发往配置的供应商，模型列表和可用能力以供应商实际支持为准。
 
-管理员可在「用量概览」（`/admin/usage`）查看近 7 天、近 30 天或全部已记录用量。数据来自知识库处理流水及成功保存的问答；检索调试、连接测试和未保存或失败的问答不包含在内。供应商可能不返回 Token 数，失败或中断的调用也可能消耗用量，所示数字不能当作完整账单、余额或按供应商划分的用量。
+管理员可在「用量概览」（`/admin/usage`）查看近 7 天、近 30 天或全部已记录用量。数据来自知识库处理流水、成功保存的问答，以及个人 Agent 的每次成功执行（单独列为「个人 Agent」，按核心拆分）。页面还会给出**参考金额**：优先用管理员为具体模型配置填写的单价，其次用随代码发布的内置参考价；向量 Token 与查不到单价的记录按「未计价」单列，金额只是估算，不能当作完整账单、余额或按供应商划分的用量。取价口径与来源见 [docs/PRICING.md](docs/PRICING.md)，单价接口见 [docs/API.md](docs/API.md) §8。检索调试、连接测试和未保存或失败的问答不包含在内；供应商可能不返回 Token 数，失败或中断的调用也可能消耗用量。
 
 ### 6.1 三种协议
 
@@ -474,6 +474,7 @@ git 里是删除状态。
 | [docs/EXPERIMENT.md](docs/EXPERIMENT.md) | 实验方案（§1–§7）与配置 A 离线实测结果（§8）；未实测项标「待实验」 |
 | [docs/results/](docs/results/README.md) | 第一波实验原始数据、汇总表、数据字典与复现命令 |
 | [docs/AGENT_PLUGINS.md](docs/AGENT_PLUGINS.md) | 个人 Agent 核心、CLI 适配与插件清单规范 |
+| [docs/PRICING.md](docs/PRICING.md) | 模型参考单价：口径与来源、归一化匹配规则、取价优先级、维护流程与未计价范围 |
 | [docs/THESIS.md](docs/THESIS.md) | 论文可复用章节素材：设计、关键实现、实验方法与结果、创新点与局限 |
 | [docs/HANDOFF.md](docs/HANDOFF.md) | 交接说明：v1.0.18 当前状态首屏、已知遗留、如何验证 |
 | [docs/archive/HANDOFF_HISTORY.md](docs/archive/HANDOFF_HISTORY.md) | 历史快照归档（v1.0.0 → v1.0.10，历史读数，非当前事实） |

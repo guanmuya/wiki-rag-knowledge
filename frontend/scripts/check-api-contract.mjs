@@ -51,6 +51,7 @@ const PAYLOAD_MODELS = [
   ['ProviderPayload', 'ProviderIn'],
   ['ModelPayload', 'ModelIn'],
   ['ModelImportItem', 'ModelImportItemIn'],
+  ['ModelPricePayload', 'ModelPriceIn'],
   ['AgentSessionPayload', 'AgentSessionIn'],
 ]
 

@@ -38,6 +38,8 @@ from .. import config
 # 内存上限：被扫的随机用户名不能把进程撑爆。超过就整批丢最旧的一半——
 # 计数是可丢失的防护状态，不值得为它做精确淘汰。
 _MAX_KEYS = 4096
+# 浮点减法会带来 1e-9 级的尾巴；算剩余秒数时先抹掉，避免 Retry-After 多报 1 秒。
+_SECONDS_EPSILON = 1e-6
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,17 @@ def _thresholds() -> tuple[int, int, int, int]:
     )
 
 
+def _retry_after(locked_until: float, now: float) -> int:
+    """还有几秒解锁，向上取整。
+
+    为什么要先减 `_SECONDS_EPSILON`：锁定时刻通常是 `now + lock_seconds`，
+    再减回同一个 `now` 时，浮点减法可能得到 900.0000000001，直接 `ceil`
+    就会把 `Retry-After` 报成 901（客户端白等一秒）。抹掉 1 微秒的浮点尾巴
+    不影响「还剩多少秒」的语义——那是远小于 1 秒的误差。
+    """
+    return max(1, math.ceil(locked_until - now - _SECONDS_EPSILON))
+
+
 def _prune(bucket: deque[float], *, now: float, window: int) -> None:
     cutoff = now - window
     while bucket and bucket[0] < cutoff:
@@ -116,7 +129,7 @@ def _decision(username: str, source: str, *, now: float) -> Decision:
             continue
         locked_until = bucket[-1] + lock_seconds
         if locked_until > now:
-            return Decision(False, retry_after=max(1, math.ceil(locked_until - now)),
+            return Decision(False, retry_after=_retry_after(locked_until, now),
                             reason=reason, failures=failures)
     return Decision(True, failures=failures)
 
