@@ -26,7 +26,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import QueuePool
 
-from . import config
+from . import config, migrations
 
 log = logging.getLogger("wrk.db")
 
@@ -396,6 +396,9 @@ def ensure_sqlite_columns(bind, metadata) -> list[str]:
     这里只处理「加列」这一种情况——改类型、加约束等破坏性变更不做自动处理，
     宁可启动时报错让人工迁移，也不要静默改坏数据。
 
+    每补一列都记进 `migrations` 的 schema 账本（P1-8）：升级路径因此可追溯，
+    也让 `migrations.downgrade()` 有确切的逆 DDL 可用。
+
     bind / metadata 作为参数传入，是为了能在测试里对独立的临时库验证，
     不依赖全局单例。
     """
@@ -406,6 +409,12 @@ def ensure_sqlite_columns(bind, metadata) -> list[str]:
     inspector = inspect(bind)
     existing_tables = set(inspector.get_table_names())
     added: list[str] = []
+    applied: list[dict] = []
+    # 老库第一次升级时账本是空的：先补记基线，后面补的列才是「版本 2、3…」。
+    try:
+        migrations.record_baseline(bind)
+    except Exception as exc:      # 账本写不进去不该挡住升级本身
+        log.warning("建立 schema 迁移账本基线失败（升级继续）：%s", exc)
 
     with bind.begin() as conn:
         for table in metadata.sorted_tables:
@@ -420,13 +429,31 @@ def ensure_sqlite_columns(bind, metadata) -> list[str]:
                     continue
                 try:
                     conn.execute(text(ddl))
-                    added.append(f"{table.name}.{column.name}")
                 except Exception as exc:  # pragma: no cover - 依赖具体数据
                     log.warning("补列失败 %s.%s：%s", table.name, column.name, exc)
+                    continue
+                added.append(f"{table.name}.{column.name}")
+                applied.append({
+                    "name": f"add_column:{table.name}.{column.name}",
+                    "detail": ddl,
+                    # SQLite 3.35+ 支持 DROP COLUMN；这是「只加列」唯一可能的逆操作。
+                    "revert_sql": f'ALTER TABLE "{table.name}" DROP COLUMN "{column.name}"',
+                })
 
     if added:
         log.warning("数据库已补齐缺失列：%s", ", ".join(added))
+        _record_migration_steps(bind, applied)
     return added
+
+
+def _record_migration_steps(bind, applied: list[dict]) -> None:
+    """把本次升级写进 schema 账本。账本失败只告警：升级本身已经生效。"""
+    try:
+        for step in applied:
+            migrations.record(bind, kind="add_column", name=step["name"],
+                              detail=step["detail"], revert_sql=step["revert_sql"])
+    except Exception as exc:      # pragma: no cover - 账本表不可写
+        log.warning("记录 schema 迁移账本失败（升级已生效，可追溯信息缺失）：%s", exc)
 
 
 def _sqlite_add_column_ddl(bind, table_name: str, column) -> str | None:

@@ -79,7 +79,7 @@ def _search(client, case, headers, query):
 def _add_user(sessions, case, level):
     with sessions() as db:
         user = models.User(username=f"visibility-{level}", password_hash="unused",
-                           role="employee", status="active")
+                           role="employee", status="active", must_change_password=False)
         db.add(user)
         db.flush()
         db.add(models.KbGrant(kb_id=case["kb"], user_id=user.id, level=level))

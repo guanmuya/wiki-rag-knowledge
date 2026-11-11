@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import mark_user_ready
+
 
 @pytest.fixture(scope="module")
 def provider(app_client, admin_headers):
@@ -124,6 +126,7 @@ def test_non_admin_cannot_read_settings(app_client, admin_headers):
                         json={"new_password": PWD})
     r = app_client.post("/api/auth/login", json={"username": "emp_set", "password": PWD})
     assert r.status_code == 200, r.text
+    mark_user_ready("emp_set")      # P1-8：先完成初始改密，否则下面测到的是改密拦截
     headers = {"Authorization": f"Bearer {r.json()['token']}"}
     for path in ["/api/settings/providers", "/api/settings/models", "/api/settings/audit"]:
         assert app_client.get(path, headers=headers).status_code == 403, path

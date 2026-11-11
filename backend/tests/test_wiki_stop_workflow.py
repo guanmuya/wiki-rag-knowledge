@@ -58,9 +58,14 @@ def env(app_client, tmp_path, monkeypatch):
     monkeypatch.setattr(config, "FILES_DIR", tmp_path / "files")
     with sessions() as db:
         db.add_all([
-            models.User(id=1, username="stop-admin", password_hash="unused", role="admin"),
-            models.User(id=2, username="stop-reader", password_hash="unused", role="employee"),
-            models.User(id=3, username="stop-manager", password_hash="unused", role="employee"),
+            # 模拟「已改过初始口令的既有账号」：P1-8 之后 must_change_password=True
+            # 的账号会被后端拒绝业务接口（这条边界本身由 test_must_change_password 覆盖）。
+            models.User(id=1, username="stop-admin", password_hash="unused", role="admin",
+                        must_change_password=False),
+            models.User(id=2, username="stop-reader", password_hash="unused", role="employee",
+                        must_change_password=False),
+            models.User(id=3, username="stop-manager", password_hash="unused", role="employee",
+                        must_change_password=False),
         ])
         db.commit()
     headers = {

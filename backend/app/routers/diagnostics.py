@@ -20,9 +20,9 @@ import threading
 
 from fastapi import APIRouter, Depends, Request
 
-from .. import config, models
+from .. import config, models, security
 from ..deps import require_admin
-from ..services import threadpool, warmup, watchdog
+from ..services import login_guard, threadpool, warmup, watchdog
 
 router = APIRouter(tags=["diagnostics"])
 
@@ -74,6 +74,10 @@ def _process_info(request: Request) -> dict:
         # 出现其它名字说明有代码绕过了线程池、事件循环又开始自己建线程了。
         "served_by": threading.current_thread().name,
         "watchdog": status,
+        # P1-8 的可观测性：登录失败限流状态（只给数量与阈值，不回显账号）
+        # 与密钥文件权限收紧结果（失败时里面有原因）。
+        "login_guard": login_guard.status(),
+        "secrets": security.hardening_status(),
         # 「有任务在处理时整个软件卡住」的两道防线，出问题时先看这里：
         # threadpool.started=False 说明常驻池没起来（事件循环又会自己建线程）；
         # warmup.done=False 说明重模块还没预热完，首次任务仍要现场加载 DLL。

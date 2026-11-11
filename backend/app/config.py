@@ -86,6 +86,22 @@ ACCESS_TOKEN_TTL_MINUTES = int(os.getenv("WRK_TOKEN_TTL_MINUTES", "720"))
 BOOTSTRAP_ADMIN_USERNAME = os.getenv("WRK_ADMIN_USERNAME", "admin")
 BOOTSTRAP_ADMIN_PASSWORD = os.getenv("WRK_ADMIN_PASSWORD", "")
 
+# ---- 登录失败限流（P1-8）
+# 账号维度默认 5 次 / 15 分钟 → 锁 15 分钟；来源维度 20 次 / 15 分钟 → 锁 15 分钟。
+# 阈值口径刻意保守：家庭/办公场景下正常人敲错 5 次已经很罕见，而锁定 15 分钟
+# 对合法用户只是「等一下」，对穷举攻击则是把有效试错率压到 1/180。
+# 实现与取舍见 services/login_guard.py。
+LOGIN_MAX_FAILURES = int(os.getenv("WRK_LOGIN_MAX_FAILURES", "5"))
+LOGIN_MAX_FAILURES_PER_SOURCE = int(os.getenv("WRK_LOGIN_MAX_FAILURES_PER_SOURCE", "20"))
+LOGIN_FAIL_WINDOW_SECONDS = int(os.getenv("WRK_LOGIN_FAIL_WINDOW", "900"))
+LOGIN_LOCK_SECONDS = int(os.getenv("WRK_LOGIN_LOCK_SECONDS", "900"))
+
+# ---- 密钥文件权限（P1-8）
+# 非 Windows 直接 chmod；Windows 上 chmod 不设 ACL，要用 icacls 去掉继承并只授权
+# 当前账号 + 管理员组 + SYSTEM。默认开启；万一某台机器上的 icacls 行为异常，
+# 可以设 WRK_HARDEN_SECRETS=0 关掉（不会影响密钥本身可用性）。
+HARDEN_SECRET_PERMISSIONS = os.getenv("WRK_HARDEN_SECRETS", "1") == "1"
+
 CORS_ORIGINS = [o for o in os.getenv(
     "WRK_CORS_ORIGINS",
     "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173",

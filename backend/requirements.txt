@@ -1,8 +1,8 @@
 # 运行时依赖 —— 精确锁定版本（本文件即运行时锁文件）
 #
 # 来源：在 Python 3.13.11 / pytest 9.2.0 的验证环境中，取这 13 个直接依赖的
-#       实际安装版本；该环境下全量 `python -m pytest backend/tests -q` 为
-#       583 passed, 1 skipped（见 docs/FACTS.md §2 与 docs/evidence/pytest-baseline.txt）。
+#       实际安装版本。全量测试的 passed / skipped 数字只记在 docs/FACTS.md §2
+#       （本文件不再写死，避免依赖升级后两处数字漂移）。
 # 规则：
 #   - 全部用 == 锁定，不要改回下限写法。升级依赖时同步更新本文件、constraints.txt，
 #     并在 CI 上重跑一次全量测试，数字按 docs/FACTS.md §2.4 的口径更新。

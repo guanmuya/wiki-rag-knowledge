@@ -8,6 +8,7 @@ import pytest
 
 from app import models
 from app.services import answering, retrieval
+from conftest import mark_user_ready
 
 
 PREFIX = "（离线演示模式：生成模型调用失败 —— "
@@ -59,6 +60,7 @@ def test_employee_cannot_read_old_provider_errors(app_client, admin_headers, db_
         "role": "employee", "grants": [],
     })
     assert user.status_code == 201, user.text
+    mark_user_ready(username)       # P1-8：先完成初始改密，再测业务接口
     login = app_client.post("/api/auth/login", json={"username": username, "password": password})
     assert login.status_code == 200, login.text
     headers = {"Authorization": f"Bearer {login.json()['token']}"}
