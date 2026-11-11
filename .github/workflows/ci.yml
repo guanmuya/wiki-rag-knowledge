@@ -1,10 +1,11 @@
 name: CI
 
-# 最小 CI（体检清单 P1-1 + P1-3）：PR / push 到 master 自动跑四项检查，任意一项失败即失败。
+# 最小 CI（体检清单 P1-1 + P1-3 + P1-5）：PR / push 到 master 自动跑五项检查，任意一项失败即失败。
 #   1. python -m pytest backend/tests -q
-#   2. pnpm typecheck
-#   3. pnpm build:web
-#   4. pnpm test（前端 E2E，离线确定性 mock，见 frontend/tests/README.md）
+#   2. pnpm check:contract（前后端契约一致性，见 docs/API.md §10）
+#   3. pnpm typecheck
+#   4. pnpm build:web
+#   5. pnpm test（前端 E2E，离线确定性 mock，见 frontend/tests/README.md）
 # 后端依赖来自 P1-2 的锁文件（requirements-dev.txt + constraints.txt）；
 # 前端依赖来自 frontend/pnpm-lock.yaml（--frozen-lockfile）。
 # 与本地命令完全一致，见 README.md §9。
@@ -25,8 +26,8 @@ concurrency:
 jobs:
   ci:
     name: 后端测试 + 前端类型检查、构建与自动化测试
-    # 本项目是 Windows 桌面程序，测试基线 583 passed, 1 skipped 在
-    # Windows 11 / Python 3.13.11 实测；用 windows-latest 保持同一套环境。
+    # 本项目是 Windows 桌面程序，测试基线 673 passed, 1 skipped 由
+    # windows-latest 与本地一致的依赖集合产出；基线数字的事实源是 docs/FACTS.md §2。
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -54,7 +55,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r backend/requirements-dev.txt -c backend/constraints.txt
 
-      - name: 检查 1/4｜全量后端测试
+      - name: 检查 1/5｜全量后端测试
         shell: pwsh
         run: |
           python -m pytest backend/tests -q | Tee-Object -FilePath pytest-output.txt
@@ -88,11 +89,18 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
         run: pnpm install --frozen-lockfile
 
-      - name: 检查 2/4｜前端类型检查
+      # 纯静态比对，不需要 Python 与浏览器：读 backend/app/schemas.py 的 Pydantic 模型、
+      # backend/app/routers/*.py 的路由装饰器、frontend/electron/preload.cjs 的暴露面，
+      # 与 frontend/src/types.ts、docs/API.md 对齐。校验项见 docs/API.md §10。
+      - name: 检查 2/5｜前后端契约一致性
+        working-directory: frontend
+        run: pnpm check:contract
+
+      - name: 检查 3/5｜前端类型检查
         working-directory: frontend
         run: pnpm typecheck
 
-      - name: 检查 3/4｜前端 Web 构建
+      - name: 检查 4/5｜前端 Web 构建
         working-directory: frontend
         run: pnpm build:web
 
@@ -100,6 +108,6 @@ jobs:
         working-directory: frontend
         run: pnpm exec playwright install chromium
 
-      - name: 检查 4/4｜前端自动化测试
+      - name: 检查 5/5｜前端自动化测试
         working-directory: frontend
         run: pnpm test

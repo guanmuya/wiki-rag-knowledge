@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 import { getApiBase, isDesktop, probeBackend, metaApi, SETUP_COMPLETED_EVENT } from '../api'
 import { useAuth } from '../auth'
-import type { DesktopInfo } from '../types'
+import type { DesktopInfo, StartupFailure } from '../types'
 import { Spinner } from './ui'
 
 interface ProbeState {
@@ -10,27 +10,6 @@ interface ProbeState {
   message: string
   version?: string
   latencyMs: number
-}
-
-/**
- * 主进程给的启动失败说明。
- *
- * `electron/main.cjs` 里有一张同样的映射表（退出码 / errno → 人话），
- * 那边是权威来源：只有主进程知道退出码、命令行、工作目录。
- * 前端这里不重复判断，只负责展示；拿不到时才用本地兜底文案。
- */
-interface StartupFailure {
-  id: string
-  title: string
-  action: string
-  detail: string
-}
-
-/** api.ts 的 wrkDesktop 类型不在本次改动范围内，这里按需扩展读取。 */
-interface DesktopBridgeExtras {
-  getFailure?: () => Promise<StartupFailure | null>
-  /** P1-9：首次改密成功后清除主进程内存里的初始凭据。 */
-  clearInitialCredential?: () => Promise<{ ok: boolean }>
 }
 
 /**
@@ -101,18 +80,16 @@ export default function BackendGate({ children }: { children: ReactNode }) {
     }
     if (!hadMustChange.current) return
     hadMustChange.current = false
-    const bridge = window.wrkDesktop as unknown as DesktopBridgeExtras | undefined
-    void Promise.resolve(bridge?.clearInitialCredential?.()).catch(() => {
-      /* 浏览器模式或旧版 preload 没有该接口，忽略 */
+    void Promise.resolve(window.wrkDesktop?.clearInitialCredential()).catch(() => {
+      /* 浏览器模式没有 preload，忽略 */
     })
   }, [mustChangePassword])
 
   /** 问主进程要「这次启动到底为什么失败」，拿不到就返回 null。 */
   const readFailure = useCallback(async (): Promise<StartupFailure | null> => {
     if (!isDesktop()) return null
-    const bridge = window.wrkDesktop as unknown as DesktopBridgeExtras | undefined
     try {
-      return (await bridge?.getFailure?.()) ?? null
+      return (await window.wrkDesktop?.getFailure()) ?? null
     } catch {
       return null
     }

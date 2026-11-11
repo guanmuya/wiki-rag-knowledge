@@ -79,7 +79,14 @@ function createMock(options = {}) {
   const listing = () => [...conversations.values()].map(({ messages, ...conv }) => ({
     ...conv, message_count: messages.length,
   }))
-  const state = { loginAttempts: [], createKbRequests: [], askRequests: [], unknown: [] }
+  const state = {
+    loginAttempts: [], createKbRequests: [], askRequests: [], unknown: [],
+    // 错误兜底用例：持续下发结构损坏的响应，直到用例自己把它关掉。
+    // 为什么不是「只坏一次」：StrictMode 下页面会双挂载、发两次请求，
+    // 「坏一次」的预算可能被一次不会被渲染的请求消费掉，用例会时灵时不灵。
+    corruptKb: Boolean(options.corruptKbAlways),
+    corruptKbServed: 0,
+  }
   let nextId = 1000
   let nextConversationId = 2
 
@@ -124,6 +131,16 @@ function createMock(options = {}) {
     }
 
     if (path === '/api/kbs' && method === 'GET') {
+      // corruptKbAlways：把 name 换成一个对象。React 渲染 `{kb.name}` 会抛
+      // 「Objects are not valid as a React child」，正好用来验证 ErrorBoundary 兜底。
+      // 用例断言完兜底页后把 state.corruptKb 置为 false，再验证能恢复正常列表。
+      if (state.corruptKb) {
+        state.corruptKbServed += 1
+        return await json(route, {
+          items: [{ ...kbs[0], name: { broken: true } }],
+          total: kbs.length,
+        })
+      }
       return await json(route, { items: kbs, total: kbs.length })
     }
     if (path === '/api/kbs' && method === 'POST') {
@@ -350,6 +367,44 @@ describe('前端主链路 E2E（离线、可重复、纳入 CI）', () => {
         20000,
       )
       assert.deepEqual(pageErrors, [], `页面不应有未捕获异常：${pageErrors.join('; ')}`)
+    } finally {
+      await context.close()
+    }
+  })
+
+  /**
+   * 体检清单 P1-10 的验收：「制造一次页面渲染异常时显示兜底页而非白屏」。
+   * 这里不 mock 组件，而是让后端返回结构损坏的 KB（name 是对象），
+   * 由真实 React 渲染真的抛错——只有 ErrorBoundary 真接住了才会出现兜底页。
+   */
+  test('页面渲染异常时显示兜底页而不是白屏，且能从兜底页恢复', { timeout: 60000 }, async () => {
+    const { context, page, mock } = await openWithMock({
+      loggedIn: true,
+      corruptKbAlways: true,
+    })
+    try {
+      await page.goto(`${BASE}/#/kbs`, { waitUntil: 'domcontentloaded' })
+
+      // 1) 兜底页出现，而不是一片空白
+      const heading = page.getByRole('heading', { name: '界面出了点问题' })
+      await heading.waitFor({ timeout: 20000 })
+      assert.equal(await heading.count(), 1)
+      assert.ok(mock.state.corruptKbServed >= 1, '损坏的响应确实被下发过')
+
+      // 2) 兜底页可读、有自救入口（白屏的话这里是空串）
+      const text = await page.locator('#root').innerText()
+      assert.ok(text.includes('重试'), `兜底页缺「重试」入口：${text.slice(0, 200)}`)
+      assert.ok(text.includes('回到首页'), `兜底页缺「回到首页」入口：${text.slice(0, 200)}`)
+
+      // 3) 数据恢复正常后，从兜底页能回到业务页（boundary 复位成功）
+      mock.state.corruptKb = false
+      await page.getByRole('button', { name: '回到首页' }).click()
+      await waitFor(
+        () => page.getByRole('button', { name: '+ 新建知识库' }).isVisible().catch(() => false),
+        '从兜底页恢复到知识库列表',
+        20000,
+      )
+      assert.equal(await page.locator('.backend-down').count(), 0)
     } finally {
       await context.close()
     }

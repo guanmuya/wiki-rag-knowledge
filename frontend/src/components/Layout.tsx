@@ -4,6 +4,7 @@ import { useAuth } from '../auth'
 import { isDesktop, metaApi, setupApi } from '../api'
 import OfflineBanner from './OfflineBanner'
 import LockBanner from './LockBanner'
+import ErrorBoundary from './ErrorBoundary'
 import { IconClose, IconMenu } from './icons'
 
 interface NavItem {
@@ -341,7 +342,11 @@ export default function Layout() {
           {location.pathname.startsWith('/kbs') && !location.pathname.startsWith('/kbs/') ? (
             <OfflineBanner />
           ) : null}
-          <Outlet />
+          {/* 页面渲染抛错时只兜住内容区：侧边栏与顶栏还在，用户能换页面自救援。
+              key 用 pathname：换路由即重新挂载，上一次的错误状态自动清掉。 */}
+          <ErrorBoundary key={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </main>      </div>
     </div>
   )

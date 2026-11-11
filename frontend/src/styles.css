@@ -801,6 +801,15 @@ code {
 }
 .boot-screen .state-block { padding: 0; }
 
+/* 页面级错误兜底（Layout 里的 ErrorBoundary）：内容区居中，但不像 .boot-screen
+   那样占满视口——那时侧边栏还在，撑满高度会凭空多一条滚动条。 */
+.error-boundary {
+  min-height: 60vh;
+  display: grid;
+  place-items: center;
+  padding: 32px 0;
+}
+
 .backend-down {
   width: min(640px, 100%);
   background: var(--c-surface);

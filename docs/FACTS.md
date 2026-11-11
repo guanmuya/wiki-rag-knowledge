@@ -33,7 +33,7 @@
 | SQLite 写锁等待 | **三档 3s / 30s / 1s**（见 §1.1） | `backend/app/config.py` 的 `BUSY_TIMEOUT_INTERACTIVE` / `BUSY_TIMEOUT_WORKER` / `BUSY_TIMEOUT_PROGRESS` | 一刀切 `busy_timeout=15000`；DESIGN.md §4.5 又写 `3s` |
 | 拿不到锁的重试次数 | `5`（`WRK_LOCK_RETRY_ATTEMPTS`，兼容别名 `WRK_LOCK_RETRY`） | `backend/app/config.py` 的 `LOCK_RETRY_ATTEMPTS` | 未进文档 |
 | 可调项 | `config.py` 中 **38 个 `WRK_*`** 环境变量（另有若干由 `desktop_entry.py` / `security.py` / `answering.py` 读取） | `backend/app/config.py` | README §5 漏列 11 个（见 §1.2） |
-| 后端测试基线 | **583 passed, 1 skipped**（见 §2） | 一次真实全量运行，原始输出 `docs/evidence/pytest-baseline.txt` | 六份文档 8 个互不相同的数字 |
+| 后端测试基线 | **673 passed, 1 skipped**（见 §2） | 合并 master 后本机实跑，原始输出 `docs/evidence/pytest-baseline.txt`；CI 待验（§2.1） | 六份文档 8 个互不相同的数字 |
 
 > 表里「当前值」一列在 2026-11 本轮逐条回查代码确认；D1–D7 的结论在代码里**仍然成立**
 > （`config.py:26` 仍是 `1`，`config.py:34-40` 仍是三档，`main.py:36` 仍是 `1.0.17`，
@@ -91,59 +91,105 @@
 | --- | --- |
 | 命令 | `python -m pytest backend/tests -q` |
 | 工作目录 | 仓库根目录 |
-| 环境 | Windows 11（10.0.26200）、Python 3.13.11、pytest 9.2.0、本机全局解释器（当前 checkout 无 `.venv`） |
+| 权威环境（CI） | `windows-latest`、Python 3.13.x、依赖来自 `backend/requirements-dev.txt` + `backend/constraints.txt` |
+| 本次实测环境 | Windows 11（10.0.26200）、Python 3.13.11、pytest 9.2.0、全局解释器（当前 checkout 无 `.venv`） |
 | 数据隔离 | `backend/tests/conftest.py` 用独立临时目录并关闭 Worker 与预热，不污染 `data/` |
-| 本轮实跑 | 2026-11，`583 passed, 1 skipped in 207.46s (0:03:27)` |
+| 当前基线 | **`673 passed, 1 skipped`** |
+| 本次实测 | 合并 `origin/master` 后的本分支工作区，`673 passed, 1 skipped in 184.88s (0:03:04)`；同日另一次复跑 `198.88s`，计数相同 |
+| 独立佐证 | `docs/PR42_FIX_REPORT.md` §验收表记录了另一个任务在合并 master 后跑出的 `673 passed, 1 skipped`，与本机两次实跑一致 |
+| CI 状态 | **待验**：产出本基线的合并提交还没有 CI 运行 |
+
+> **为什么这次记的是本机数字，而不是 CI artifact**：§2.4 第 3 条要求从 CI artifact 取数，
+> 但本次改动是**合并 master 之后**的树（master 带进来一批 Wiki 生成的测试），这棵树还没有任何
+> CI 运行，也就没有对应的 artifact。按「拿不到远端结果就写待验、并给出本机等价证据」的口径，
+> 这里先落本机实跑、把 CI 明确标为待验；PR 的 CI 跑完后按第 3 条用 artifact 覆盖本行与 §2.2。
+>
+> 本机与 CI 在同一提交上的历史一致性可以支撑「本机等价证据」这个说法：上一版基线（`638`）时，
+> CI #14（run `42860672282`，job `129985607428`）的 artifact 与本机在同一提交 `350009c` 上的复跑
+> **进度条逐行相同、计数完全相同**，只差耗时与 CI 环境特有的 warning 行。但它不是同一份 artifact，
+> 所以本节的来源标注不写成「CI 实测」。
 
 ### 2.2 一次真实运行输出（原文，完整内容见证据文件）
 
 ```
-........................................................................ [ 12%]
-........................................................................ [ 24%]
-........................................................................ [ 36%]
-........................................................................ [ 49%]
-........................................................................ [ 61%]
-...............................s........................................ [ 73%]
-........................................................................ [ 86%]
-........................................................................ [ 98%]
-........                                                                 [100%]
-583 passed, 1 skipped in 207.46s (0:03:27)
+........................................................................ [ 10%]
+........................................................................ [ 21%]
+........................................................................ [ 32%]
+........................................................................ [ 42%]
+........................................................................ [ 53%]
+........................................................................ [ 64%]
+..........s............................................................. [ 74%]
+........................................................................ [ 85%]
+........................................................................ [ 96%]
+..........................                                               [100%]
+673 passed, 1 skipped in 184.88s (0:03:04)
 ```
 
-> 上面最后一行进度条按原样转录；`docs/evidence/pytest-baseline.txt` 是同一次运行
-> 未经改写的完整 stdout（由 UTF-16 转存为 UTF-8）。**以证据文件为准。**
+> 上面是本次实跑的 stdout 原样转录（`pytest -q`，`Tee-Object` 落盘后转存为 UTF-8），
+> `docs/evidence/pytest-baseline.txt` 是同一份内容，共 11 行。**以证据文件为准。**
+> 本机最后一行没有 `N warning`，因为旧版 CI 里那 1 个 warning 来自 CI 环境的
+> starlette/httpx 版本组合（见 §2.3），不是项目代码。
 
 ### 2.3 数字的来龙去脉
 
-- **583 passed, 1 skipped**：`backend/tests/` 有 **42 个 `test_*.py` + 1 个 `conftest.py`**，
-  文件内 **403 个 `def test_`**、**73 个 `@pytest.mark.parametrize`**；参数化展开后正好得到 583 项。
-  这与体检清单 §3.1 的实测（583 passed / 170.56 s）相互印证。
-- **1 skipped 的来源**：`backend/tests/test_tables.py` 中生成 PDF 表格夹具的用例调用了
-  `pytest.importorskip("reportlab", reason="需要 reportlab 生成 PDF 夹具")`；本机未安装
+- **673 passed, 1 skipped**：`backend/tests/` 有 **47 个 `test_*.py` + 1 个 `conftest.py`**
+  （共 48 个 `.py`），文件内 **462 个 `def test_`**、**80 个 `@pytest.mark.parametrize`**；
+  参数化展开后正好得到 673 项。三条分解数字可用同一条命令复核：
+  `Get-ChildItem backend/tests -Filter 'test_*.py' -Recurse`、
+  `Select-String -Pattern '^\s*def test_'`、`Select-String -Pattern '@pytest\.mark\.parametrize'`。
+- **比上一版多 35 项的原因**：`master` 的 Wiki 生成改动带进来 4 个新测试文件
+  （`test_wiki_generation_source_migration.py`、`test_wiki_generation_visibility.py`、
+  `test_wiki_input_source_race.py`、`test_wiki_input_timestamp.py`）以及既有文件的增补；
+  `43 → 47` 个测试文件、`430 → 462` 个 `def test_`、`77 → 80` 个 `parametrize`，
+  展开后 `638 → 673`。**这不是新增了失败用例，全部为 passed。**
+- **1 skipped 的来源（与上一版相同，未新增）**：`backend/tests/test_tables.py:319` 调用
+  `pytest.importorskip("reportlab", reason="需要 reportlab 生成 PDF 夹具")`；本机与 CI 都未安装
   可选的 `reportlab`，该用例被跳过。用 `python -m pytest backend/tests -q -rs` 复核可见
   `SKIPPED [1] backend/tests/test_tables.py:319`。**它是可选依赖缺失，不是漏测，也不是新增 skip。**
-- **耗时不是验收指标**：同机另一次 `-rs` 复核为 197.53 s、交付前最终复核为 114.57 s，
-  体检时为 170.56 s，随机器负载变化；**passed / skipped 计数在多次运行中稳定为 583 / 1**。
-- 旧 README 的 `535 passed` / `28 个文件，300 项` 是早期快照，已由本节取代；
-  仓库内原先没有任何测试报告佐证 535。
+- **耗时不是验收指标**：本机两次 184.88 s 与 198.88 s，旧版 CI 为 196.41 s，随机器负载变化；
+  **passed / skipped 计数在本机两次运行中稳定为 673 / 1**。
+- **warning 行与代码无关**：旧版 CI 曾出现 1 个
+  `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.`，
+  出自第三方 `starlette` 的 `testclient.py`，由 CI 环境的版本组合触发；本机实跑没有该行。
+- 更早的两个口径（`583 passed` 与 `638 passed`）都已过时：前者是批次一体检时的快照，
+  后者是 `master@350009c` 的基线；本节按当前测试树统一重算。
 
 ### 2.4 维护约定（避免再次散落）
 
-> 批次二 P1-1 的 CI 已落地，本节的「CI 建立后如何维护」从约定变成可执行流程。
-> CI 首次运行前，§2.1 / §2.2 仍沿用批次一那次实跑作为初始基线；首次 CI 通过后按第 3 条同步。
+> 批次二 P1-1 的 CI 已落地，本节的「CI 建立后如何维护」是可执行流程；
+> 批次三 P1-5 又给 CI 加了第 5 项检查（契约一致性），不影响本节口径。
 
 1. **只有本节可以出现 passed/skipped 数字**。六份文档一律写「见 `docs/FACTS.md` §2」，
-   不写数字、不写「约 580 项」这类近似值；README 顶部只放 CI 状态徽标。
+   不写数字、不写「大概六百多项」这类近似值；README 顶部只放 CI 状态徽标。
 2. **CI 是权威运行**：`.github/workflows/ci.yml` 在每次 push 到 `master` / PR 上，用
    `backend/requirements-dev.txt` + `backend/constraints.txt` 装出与本地一致的环境
    （Python 3.13），运行 `python -m pytest backend/tests -q`，并把完整 stdout 存为名为
    `pytest-baseline` 的 workflow artifact（保留 30 天）。
-3. **更新基线**：从**最近一次 CI 通过**的 artifact 取数，覆盖
-   `docs/evidence/pytest-baseline.txt`，并同步 §2.1 的「本轮实跑」与 §2.2 的转录。
-   CI 未通过不得更新数字；本机为排障临时跑出的数字不写进本节。
+3. **更新基线**：从**最近一次 CI 通过的后端测试步骤**的 artifact 取数，覆盖
+   `docs/evidence/pytest-baseline.txt`，并同步 §2.1 的「CI 实测」与 §2.2 的转录。
+   该步骤未通过不得更新数字；若整轮 run 因**其它步骤**失败，须在 §2.1 写明是哪一步、
+   与本计数无关，并给出至少一处独立佐证。
+   **唯一例外**（本节当前正处在这个例外里）：基线要描述的是刚合并、还没跑过 CI 的树，
+   此时允许先写本机实跑，但必须同时满足三条——① 把 CI 明确标为「待验」；
+   ② 给出本机等价证据与环境；③ CI artifact 出来后立即覆盖。
    （CI 不回写仓库：自动写回需要带写权限的机器人提交，最小 CI 不引入该权限。）
 4. **不得新增 skip**；若环境变化导致新增 skip，必须在本节写明是哪条用例、因何跳过。
 5. 本节数字若与 CI artifact 不一致，以 CI artifact 为准，并在本节注明更正原因。
+6. **改基线时分解数字必须一起重算**：文件数 / `def test_` / `parametrize` 三项与 passed 数
+   是同一套事实的四张脸，只改标题数字会立刻自相矛盾。
+
+### 2.5 本轮已知残留（如实记录，未在本任务范围内修改）
+
+- `backend/requirements.txt` 第 5 行的注释仍写 `583 passed, 1 skipped`。本任务的文件所有权
+  限定为 `frontend/**`、`docs/API.md`、`docs/FACTS.md` 与 CI 步骤（并行任务正在拆
+  `backend/app/services/llm.py` / `routers/kbs_*.py`），因此**未改动该文件**；
+  按 §2.4 第 1 条，该注释应当在下一个碰 `backend/**` 的任务里改成指向本节。
+- `docs/HEALTH_CHECK.md` §3.1 的 `583` 是体检当时的实测快照，属于历史记录，**不回改**。
+- `docs/PR42_FIX_REPORT.md` 的验收表里另有一份 `673 passed, 1 skipped`，并仍写着「四项检查」
+  ——那是该任务交付当时的点对点报告（当时 CI 还是四项，本轮才加到五项）。它属于历史报告，
+  本轮未回改；本节已把它当作独立佐证引用（§2.1）。
+
+
 
 ---
 
@@ -199,9 +245,10 @@
   定下来。批次二之后 P1-1（CI）、P1-2（锁依赖）与 P1-3（前端自动化测试）均已落地：见
   `.github/workflows/ci.yml`、`backend/requirements*.txt`、`backend/constraints.txt`、
   `frontend/tests/` 与 `frontend/package.json` 的 `test` 脚本；§2.4 的维护约定已同步更新。
-  CI 现在跑四项检查（后端 pytest、前端 `typecheck` / `build:web` / `test`），任意一项失败
-  即阻断合并。前端 E2E 用确定性 mock 拦截全部 `/api/**`，离线可重复，
-  详见 `frontend/tests/README.md`。
+  CI 现在跑**五项**检查（后端 pytest、前后端契约 `check:contract`、前端 `typecheck` /
+  `build:web` / `test`），任意一项失败即阻断合并。第 2 项由批次三 P1-5 加入，
+  见 `frontend/scripts/check-api-contract.mjs` 与 `docs/API.md` §10。
+  前端 E2E 用确定性 mock 拦截全部 `/api/**`，离线可重复，详见 `frontend/tests/README.md`。
 - **不改产品代码**（`backend/app/**`、`frontend/**`）；本波只动文档与新增证据/归档文件。
 - 不清理写死的本机路径、`.dsh-kanban.json`、截图等 P2 项；这些仍在
   `docs/HEALTH_CHECK.md` §4.3 的清单里，可在答辩准备阶段并行处理。
