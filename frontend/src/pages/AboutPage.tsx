@@ -3,7 +3,7 @@ import { version as packageVersion } from '../../package.json'
 import { getApiBase, isDesktop, metaApi, probeBackend } from '../api'
 import { useAuth } from '../auth'
 import { resetOfflineBannerDismiss } from '../components/OfflineBanner'
-import type { DesktopInfo, MetaInfo } from '../types'
+import type { DesktopInfo, MetaInfo, OpenPathKind } from '../types'
 import { Badge, Button, ConfirmDialog, ErrorState, SkeletonLines, Spinner } from '../components/ui'
 import UpdateCard from '../components/UpdateCard'
 import { errorText, formatMs } from '../utils'
@@ -21,32 +21,17 @@ interface ProbeResult {
 }
 
 /**
- * 主进程补给的运行环境信息。
- * `api.ts` 的 `DesktopInfo` 只声明业务必需字段；关于页要展示安装位置、
- * 各层版本号，属于诊断用途，这里单独扩展读取，不改 api.ts 的契约。
- * `pid` / `backendPid` 由新版主进程上报，旧版没有，所以是可选的。
+ * 打开目录的三种类别，与 `preload.cjs` 的 `openPath(kind)` 契约一致
+ * （`types.ts` 的 `OpenPathKind`；三个值都由 `pnpm check:contract` 比对锁定）。
  */
-interface DesktopInfoExtended extends DesktopInfo {
-  installDir?: string
-  installDirExe?: string
-  logDir?: string
-  electronVersion?: string
-  chromeVersion?: string
-  nodeVersion?: string
-  platform?: string
-  isPackaged?: boolean
-  pid?: number
-  backendPid?: number
-}
-
-type OpenKind = 'data' | 'logs' | 'install'
+type OpenKind = OpenPathKind
 
 export default function AboutPage() {
   const { user, isAdmin } = useAuth()
   const [meta, setMeta] = useState<MetaInfo | null>(null)
   const [metaLoading, setMetaLoading] = useState(true)
   const [metaError, setMetaError] = useState<unknown>(null)
-  const [desktopInfo, setDesktopInfo] = useState<DesktopInfoExtended | null>(null)
+  const [desktopInfo, setDesktopInfo] = useState<DesktopInfo | null>(null)
   const [probe, setProbe] = useState<ProbeResult | null>(null)
   const [probing, setProbing] = useState(false)
   const [logHint, setLogHint] = useState('')
@@ -82,19 +67,19 @@ export default function AboutPage() {
     if (!isDesktop()) return
     void window.wrkDesktop
       ?.getInfo()
-      .then((info) => setDesktopInfo(info as DesktopInfoExtended))
+      .then((info) => setDesktopInfo(info))
       .catch(() => setDesktopInfo(null))
   }, [])
 
   /**
    * 后端 pid 的两个来源，按可靠性排序：
-   * 1) 新版主进程在 `wrk:info` 里直接给（backendPid / pid）；
+   * 1) 新版主进程在 `wrk:info` 里直接给（`backendPid`）；
    * 2) 旧版主进程不给，但日志里有一行「后端就绪：{... "pid": N}」——sidecar 的
    *    WRK_READY payload 本来就带 pid，从这里捞出来，用户不用升级也能看到进程号。
    * 都拿不到才显示「未上报」，不留一个空值让人猜。
    */
   useEffect(() => {
-    if (!isDesktop() || desktopInfo?.backendPid || desktopInfo?.pid) return
+    if (!isDesktop() || desktopInfo?.backendPid) return
     let alive = true
     void window.wrkDesktop
       ?.getLogs()
@@ -134,7 +119,7 @@ export default function AboutPage() {
       return
     }
     try {
-      await window.wrkDesktop?.openPath(kind as 'data' | 'logs')
+      await window.wrkDesktop?.openPath(kind)
       setLogHint('')
     } catch {
       setLogHint('打开目录失败，请检查桌面主进程日志。')
@@ -179,7 +164,7 @@ export default function AboutPage() {
   const electronVersion = desktopInfo?.electronVersion || ''
   const installDir = desktopInfo?.installDirExe || desktopInfo?.installDir || ''
   // 后端进程号：新版主进程会带上；旧版从日志兜底，两个都没有才说「未上报」
-  const reportedPid = desktopInfo?.backendPid ?? desktopInfo?.pid ?? null
+  const reportedPid = desktopInfo?.backendPid ?? null
   const backendPid = reportedPid ?? logPid
 
   /**
