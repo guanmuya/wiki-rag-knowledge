@@ -524,6 +524,8 @@ def agent_session_out(
     core_name: str = "",
     model_label: str = "",
 ) -> dict:
+    # 不再返回 kb_ids：个人 Agent 不检索知识库。列还留在库里（历史 kb 会话），
+    # 由 routers/agent.py 按 core_id 判断「核心已下线」并给切换指引。
     return {
         "id": s.id,
         "title": s.title,
@@ -531,7 +533,6 @@ def agent_session_out(
         "core_name": core_name,
         "model_config_id": s.model_config_id,
         "model_label": model_label,
-        "kb_ids": _json_value(s.kb_ids, []),
         "workspace": s.workspace,
         "status": s.status or "idle",
         "message_count": message_count,

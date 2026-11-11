@@ -1,4 +1,4 @@
-"""个人 Agent 运行时：知识库核心、CLI 核心、核心切换、停止与权限、执行边界。"""
+"""个人 Agent 运行时：CLI 核心、核心切换、停止与权限、执行边界、历史 kb 会话。"""
 from __future__ import annotations
 
 import json
@@ -103,16 +103,17 @@ def cli_plugin(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def offline_llm(monkeypatch):
-    """让知识库核心这一轮问答完全离线：一次出网调用都不发，也不解析真实域名。
+    """让这些用例完全离线：一次出网调用都不发，也不解析真实域名。
 
-    为什么需要这一步：知识库核心会拿会话上带着的默认模型做意图分析、路由与生成，
-    而测试库里这些供应商的地址是假域名（`_make_model()` 用的是
-    `https://example.test`）。本机实测解析该域名要 11 秒、请求 10.6 秒，一次出网
-    就把 `_wait_run()` 的 15 秒预算吃光——同一条用例于是「本机必挂、CI 全绿」
-    （CI 对 `.test` 直接 NXDOMAIN）。实测与判定见
+    由来：曾经的知识库核心会拿会话上的默认模型做意图分析、路由与生成，而测试库里
+    供应商地址是假域名（`_make_model()` 用 `https://example.test`）。本机实测解析
+    该域名要 11 秒、请求 10.6 秒，一次出网就把 `_wait_run()` 的 15 秒预算吃光——
+    同一条用例于是「本机必挂、CI 全绿」（CI 对 `.test` 直接 NXDOMAIN）。实测与判定见
     `docs/evidence/release-v1.0.18-build.txt` §3.1。
 
-    两件事都不改业务代码，也不放宽 `_wait_run()` 的超时：
+    知识库核心已经下线（个人 Agent 不再与知识库交互），但这条守卫仍然值钱：它拦的是
+    「用例悄悄长出出网路径」这件事本身，而不是某一条链路。两个手段都不改业务代码，
+    也不放宽 `_wait_run()` 的超时：
     1. 在 HTTP 客户端这一层就地失败（`llm._client` 是仓库约定的测试接缝）：
        模型调用立刻拿到「不可用」，链路按设计降级为规则判断 + 抽取式回答；
     2. 把非回环域名的解析拦成异常：万一以后又长出绕过 `llm._client` 的出网路径，
@@ -133,38 +134,109 @@ def offline_llm(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
 
 
-def test_kb_session_flow(app_client, admin_headers, db_session, offline_llm):
+def test_create_session_ignores_legacy_kb_ids(app_client, admin_headers,
+                                              db_session, cli_plugin, offline_llm):
+    """个人 Agent 不再和知识库交互：核心列表里没有 kb，请求里的 kb_ids 被忽略。
+
+    旧前端（或旧脚本）仍可能带着 `kb_ids`，这里保证它不会 422，也不会被写进会话。
+    """
     kb_id = _make_kb(db_session)
+    model_id = _make_model(db_session)
+    _write_fake_agent(cli_plugin, body="print('ok')\n")
+    plugins.clear_detection_cache()
+
+    cores = app_client.get("/api/agent/cores", headers=admin_headers)
+    assert cores.status_code == 200, cores.text
+    ids = [item["id"] for item in cores.json()["items"]]
+    assert "kb" not in ids
+    assert all(item["kind"] == "cli" for item in cores.json()["items"])
+
     created = app_client.post("/api/agent/sessions", headers=admin_headers, json={
-        "core_id": "kb", "kb_ids": [kb_id], "title": "知识库测试",
+        "core_id": "fake-cli", "model_config_id": model_id,
+        "kb_ids": [kb_id], "title": "忽略 kb_ids",
     })
     assert created.status_code == 201, created.text
-    session = created.json()
-    assert session["core_id"] == "kb"
-    assert session["kb_ids"] == [kb_id]
+    body = created.json()
+    assert "kb_ids" not in body
+    session = db_session.get(models.AgentSession, body["id"])
+    assert json.loads(session.kb_ids or "[]") == []
+
+
+def test_create_session_with_kb_core_explains_where_to_ask(app_client, admin_headers):
+    """旧的前端还在传 core_id=kb 时，要说清「去智能问答页」，而不是干巴巴 404。"""
+    res = app_client.post("/api/agent/sessions", headers=admin_headers, json={
+        "core_id": "kb", "title": "旧会话",
+    })
+    assert res.status_code == 400, res.text
+    detail = res.json()["detail"]
+    assert "智能问答" in detail
+    assert "CLI 核心" in detail
+
+
+def test_legacy_kb_session_stays_readable_but_cannot_run(app_client, admin_headers,
+                                                        db_session, cli_plugin,
+                                                        offline_llm):
+    """历史 kb 会话：历史消息可读、改标题可用、换核心后可继续，但不能直接再执行。"""
+    admin = db_session.execute(
+        select(models.User).where(models.User.username == "admin")).scalar_one()
+    legacy = models.AgentSession(
+        user_id=admin.id, title="旧的知识库会话", core_id="kb",
+        kb_ids=json.dumps([_make_kb(db_session)]), status="idle")
+    db_session.add(legacy)
+    db_session.flush()
+    db_session.add(models.AgentMessage(
+        session_id=legacy.id, role="user", content="差旅报销标准是什么？",
+        core_id="kb", status="ok"))
+    db_session.add(models.AgentMessage(
+        session_id=legacy.id, role="assistant", content="住宿上限 600 元。",
+        core_id="kb", status="ok"))
+    db_session.commit()
+
+    detail = app_client.get(f"/api/agent/sessions/{legacy.id}", headers=admin_headers)
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["core_id"] == "kb"
+    assert body["core_name"] == "知识库助手（已下线）"
+    assert body["core_available"] is False
+    assert body["core_legacy"] is True
+    assert body["core"] is None
+    assert [m["content"] for m in body["messages"]][0] == "差旅报销标准是什么？"
+    assert body["messages"][1]["core_name"] == "知识库助手（已下线）"
+
+    blocked = app_client.post(
+        f"/api/agent/sessions/{legacy.id}/messages",
+        headers=admin_headers, json={"content": "再问一次"})
+    assert blocked.status_code == 400, blocked.text
+    assert "智能问答" in blocked.json()["detail"]
+
+    renamed = app_client.patch(
+        f"/api/agent/sessions/{legacy.id}", headers=admin_headers,
+        json={"title": "重命名后的旧会话"})
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["title"] == "重命名后的旧会话"
+
+    model_id = _make_model(db_session)
+    _write_fake_agent(cli_plugin, body="import sys\nprint('switched:' + sys.argv[1][-12:])\n")
+    plugins.clear_detection_cache()
+    switched = app_client.patch(
+        f"/api/agent/sessions/{legacy.id}", headers=admin_headers,
+        json={"core_id": "fake-cli", "model_config_id": model_id})
+    assert switched.status_code == 200, switched.text
+    assert switched.json()["core_id"] == "fake-cli"
+    assert switched.json()["core_available"] is True
+    assert switched.json()["core_legacy"] is False
+
+    detail = app_client.get(f"/api/agent/sessions/{legacy.id}", headers=admin_headers).json()
+    assert any(m["role"] == "system" and "知识库助手（已下线）" in m["content"]
+               for m in detail["messages"])
 
     sent = app_client.post(
-        f"/api/agent/sessions/{session['id']}/messages",
-        headers=admin_headers, json={"content": "差旅报销标准是什么？"},
-    )
+        f"/api/agent/sessions/{legacy.id}/messages", headers=admin_headers,
+        json={"content": "换核心后继续"})
     assert sent.status_code == 200, sent.text
-    run_id = sent.json()["run_id"]
-
-    result = _wait_run(app_client, admin_headers, run_id)
+    result = _wait_run(app_client, admin_headers, sent.json()["run_id"])
     assert result["status"] == "ok", result
-    assert result["message"]["status"] == "ok"
-    assert result["message"]["content"]
-    assert result["message"]["core_id"] == "kb"
-    # 本轮一次真实供应商调用都没有：断言「有回复」而不是「模型答的」，
-    # 这样用例不再靠真实网络（含域名解析）才能变绿，见 offline_llm。
-    assert result["message"]["meta"]["usage"]["live_calls"] == 0
-
-    detail = app_client.get(f"/api/agent/sessions/{session['id']}", headers=admin_headers)
-    assert detail.status_code == 200
-    body = detail.json()
-    assert len(body["messages"]) == 2
-    assert body["messages"][0]["role"] == "user"
-    assert body["messages"][1]["role"] == "assistant"
+    assert "switched:" in result["message"]["content"]
 
 
 def test_cli_core_streams_and_injects_model(app_client, admin_headers, db_session, cli_plugin):
@@ -199,14 +271,16 @@ def test_cli_core_streams_and_injects_model(app_client, admin_headers, db_sessio
 
 
 def test_switch_core_mid_session(app_client, admin_headers, db_session, cli_plugin,
-                                offline_llm):
-    kb_id = _make_kb(db_session)
+                                 offline_llm):
     model_id = _make_model(db_session)
-    _write_fake_agent(cli_plugin, body="import sys\nprint('switched:' + sys.argv[1][-20:])\n")
+    _write_fake_agent(cli_plugin, body="import sys\nprint('first:' + sys.argv[1][-20:])\n",
+                      plugin_id="fake-cli")
+    _write_fake_agent(cli_plugin, body="import sys\nprint('switched:' + sys.argv[1][-20:])\n",
+                      plugin_id="fake-cli-2")
     plugins.clear_detection_cache()
 
     created = app_client.post("/api/agent/sessions", headers=admin_headers, json={
-        "core_id": "kb", "kb_ids": [kb_id],
+        "core_id": "fake-cli", "model_config_id": model_id,
     })
     session_id = created.json()["id"]
     first = app_client.post(
@@ -216,10 +290,10 @@ def test_switch_core_mid_session(app_client, admin_headers, db_session, cli_plug
 
     switched = app_client.patch(
         f"/api/agent/sessions/{session_id}", headers=admin_headers,
-        json={"core_id": "fake-cli", "model_config_id": model_id},
+        json={"core_id": "fake-cli-2", "model_config_id": model_id},
     )
     assert switched.status_code == 200, switched.text
-    assert switched.json()["core_id"] == "fake-cli"
+    assert switched.json()["core_id"] == "fake-cli-2"
 
     detail = app_client.get(f"/api/agent/sessions/{session_id}", headers=admin_headers).json()
     assert any(m["role"] == "system" and "已切换" in m["content"] for m in detail["messages"])
@@ -229,7 +303,7 @@ def test_switch_core_mid_session(app_client, admin_headers, db_session, cli_plug
         json={"content": "第二轮"})
     result = _wait_run(app_client, admin_headers, second.json()["run_id"])
     assert result["status"] == "ok", result
-    assert result["message"]["core_id"] == "fake-cli"
+    assert result["message"]["core_id"] == "fake-cli-2"
     assert "switched:" in result["message"]["content"]
 
 
@@ -329,17 +403,18 @@ def test_plugin_toggle_blocks_new_session(app_client, admin_headers, db_session,
     assert allowed.status_code == 201, allowed.text
 
 
-def test_kb_core_cannot_be_disabled(app_client, admin_headers):
+def test_legacy_kb_core_toggle_explains_where_to_ask(app_client, admin_headers):
+    """kb 核心已下线：PATCH 它要说明去哪儿问，而不是 404 了事。"""
     res = app_client.patch(
         "/api/agent/plugins/kb", headers=admin_headers, json={"enabled": False})
     assert res.status_code == 400
-    assert "不能停用" in res.json()["detail"]
+    assert "智能问答" in res.json()["detail"]
 
 
 def test_recover_pending_marks_failed(app_client, db_session):
     admin = db_session.execute(
         select(models.User).where(models.User.username == "admin")).scalar_one()
-    session = models.AgentSession(user_id=admin.id, core_id="kb", status="running")
+    session = models.AgentSession(user_id=admin.id, core_id="codex", status="running")
     db_session.add(session)
     db_session.flush()
     message = models.AgentMessage(
@@ -358,7 +433,7 @@ def test_recover_pending_marks_failed(app_client, db_session):
 def test_events_for_unknown_run_reports_failed(app_client, admin_headers, db_session):
     admin = db_session.execute(
         select(models.User).where(models.User.username == "admin")).scalar_one()
-    session = models.AgentSession(user_id=admin.id, core_id="kb", status="running")
+    session = models.AgentSession(user_id=admin.id, core_id="codex", status="running")
     db_session.add(session)
     db_session.flush()
     message = models.AgentMessage(
@@ -394,13 +469,16 @@ def test_cannot_delete_running_session(app_client, admin_headers, db_session, cl
 
 # ------------------------------------------------------------------ P1-7 执行边界
 def test_workspace_must_stay_inside_agent_workspace(app_client, admin_headers,
-                                                    db_session, tmp_path):
+                                                    db_session, cli_plugin, tmp_path):
     """会话工作目录越界（含同前缀目录）必须返回 400。"""
+    model_id = _make_model(db_session)
+    _write_fake_agent(cli_plugin, body="print('ok')\n")
+    plugins.clear_detection_cache()
     root = Path(config.AGENT_WORKSPACE_DIR).resolve()
     inside = root / "nested-project"
     inside.mkdir(exist_ok=True)
     created = app_client.post("/api/agent/sessions", headers=admin_headers, json={
-        "core_id": "kb", "workspace": str(inside),
+        "core_id": "fake-cli", "model_config_id": model_id, "workspace": str(inside),
     })
     assert created.status_code == 201, created.text
     assert Path(created.json()["workspace"]) == inside.resolve()
@@ -411,12 +489,13 @@ def test_workspace_must_stay_inside_agent_workspace(app_client, admin_headers,
     outside.mkdir()
     for bad in [str(outside), str(sibling), str(root / ".." / "outside")]:
         res = app_client.post("/api/agent/sessions", headers=admin_headers, json={
-            "core_id": "kb", "workspace": bad,
+            "core_id": "fake-cli", "model_config_id": model_id, "workspace": bad,
         })
         assert res.status_code == 400, (bad, res.text)
     assert "工作区" in app_client.post(
         "/api/agent/sessions", headers=admin_headers,
-        json={"core_id": "kb", "workspace": str(sibling)},
+        json={"core_id": "fake-cli", "model_config_id": model_id,
+              "workspace": str(sibling)},
     ).json()["detail"]
 
     patched = app_client.patch(
@@ -424,6 +503,66 @@ def test_workspace_must_stay_inside_agent_workspace(app_client, admin_headers,
         json={"workspace": str(outside)},
     )
     assert patched.status_code == 400, patched.text
+
+
+def test_cli_prompt_is_a_generic_direct_answering_assistant():
+    """提示词不再有知识库语境，并明确「直接回答、别先让用户确认任务」。"""
+    ctx = runtime.RunContext(
+        message_id=1, session_id=2, user_id=3,
+        plugin=plugins.BUILTIN_BY_ID["codex"],
+        question="2026 年中国企业级 AI Agent 市场有多大？",
+        history=[
+            {"role": "user", "content": "先聊聊市场"},
+            {"role": "assistant", "content": "你想从哪个角度看？\n另外要哪个地区？"},
+            {"role": "user", "content": "2026 年中国企业级 AI Agent 市场有多大？"},
+        ],
+        workspace=str(config.AGENT_WORKSPACE_DIR),
+    )
+    prompt = runtime._build_cli_prompt(ctx)
+    assert "企业知识库" not in prompt
+    assert "文档整理" not in prompt
+    assert "知识库" not in prompt
+    assert "直接回答" in prompt
+    assert "不要先让用户确认任务类型" in prompt
+    assert "2026 年中国企业级 AI Agent 市场有多大？" in prompt
+    assert "助手：你想从哪个角度看？" in prompt
+    # 本轮提问只出现一次：历史里最后一条是本轮提问，应被剔掉后再单列。
+    assert prompt.count("2026 年中国企业级 AI Agent 市场有多大？") == 1
+    # 必须是单行：codex exec 只取位置参数第一行，多行会把后面的问题丢掉
+    # （codex-cli 0.167.0 本机实测），那样模型只会看到一个开场白。
+    assert "\n" not in prompt
+    assert "\r" not in prompt
+    assert prompt.endswith("请直接回答用户最新的问题：")
+    assert len(prompt) <= 20000
+
+
+def test_cli_gets_prompt_as_a_single_argument_line(app_client, admin_headers,
+                                                   db_session, cli_plugin):
+    """运行期真实传给 CLI 的提示词必须是没有换行的单行参数。
+
+    codex exec 只取位置参数第一行（本机 0.167.0 实测），多行会把用户提问丢掉。
+    这条用例守的是 `_run_cli` 实际拼出来的那个参数，而不只是提示词构造函数。
+    """
+    model_id = _make_model(db_session)
+    _write_fake_agent(cli_plugin, body=(
+        "import sys\n"
+        "prompt = sys.argv[-1]\n"
+        "print('NL=%d' % prompt.count(chr(10)))\n"
+        "print('HASQ=%d' % (1 if '市场有多大' in prompt else 0))\n"
+    ))
+    plugins.clear_detection_cache()
+
+    created = app_client.post("/api/agent/sessions", headers=admin_headers, json={
+        "core_id": "fake-cli", "model_config_id": model_id,
+    })
+    sent = app_client.post(
+        f"/api/agent/sessions/{created.json()['id']}/messages",
+        headers=admin_headers, json={"content": "2026 年中国企业级 AI Agent 市场有多大？"})
+    result = _wait_run(app_client, admin_headers, sent.json()["run_id"])
+    assert result["status"] == "ok", result
+    content = result["message"]["content"]
+    assert "NL=0" in content, content
+    assert "HASQ=1" in content, content
 
 
 def test_api_key_never_appears_in_command_line_or_events(

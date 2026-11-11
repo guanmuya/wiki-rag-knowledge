@@ -1,0 +1,55 @@
+个人 Agent：Codex 核心配置隔离实测（CODEX_HOME）
+============================================================
+
+环境：
+  OS           Windows-11-10.0.26200-SP0
+  Python       3.13.11
+  codex        codex-cli 0.167.0
+  说明          codex 版本命令不带 CODEX_HOME，会读用户 ~/.codex；应用路径不会。
+
+做法：用应用自己的代码起真实 `codex exec`，把它指向本地假 API 以抓取
+      模型实际收到的请求体；假 API 只落盘、返回 400，不消耗真实密钥。
+      脚本：C:\\Users\\Administrator\\.tds\\tmp\\codex-iso-check\\probe.py
+        - 进程环境来自 plugins.build_env()，参数来自 plugins.substitute_args()
+        - CODEX_HOME 来自 codex_home.prepare()
+      对照组：CODEX_HOME 指向一个只放了真实 ~/.codex/AGENTS.md 的目录
+      （等价于修复前「Codex 直接用用户自己的 ~/.codex」）
+
+结果（全部取自抓包文件，未手写）：
+
+  [隔离后 prepare() 的 agent_codex_home]
+    提示词字符数 = 288
+    提示词行数 = 1
+    提示词含用户提问 = True
+    请求体出现用户 AGENTS.md 的「御主」 = False
+    可用技能列表含 wf-verify = True
+    可用技能列表含 archify = True
+    user 消息长度 = [509, 288]
+
+  [对照：不隔离（用户 AGENTS.md）]
+    提示词字符数 = 288
+    提示词行数 = 1
+    提示词含用户提问 = True
+    请求体出现用户 AGENTS.md 的「御主」 = True
+    可用技能列表含 wf-verify = False
+    可用技能列表含 archify = True
+    user 消息长度 = [11371, 288]
+
+  [app home 目录内容]
+    顶层条目 27 个：.sandbox, .sandbox_migration, .tmp, config.toml, goals_1.sqlite, goals_1.sqlite-shm, goals_1.sqlite-wal, installation_id, logs_2.sqlite, logs_2.sqlite-shm, logs_2.sqlite-wal, memories_1.sqlite, memories_1.sqlite-shm, memories_1.sqlite-wal, queue_1.sqlite, queue_1.sqlite-shm, queue_1.sqlite-wal, sessions, skills, state_5.sqlite, state_5.sqlite-shm, state_5.sqlite-wal, thread-writer-locks, thread_history_1.sqlite, thread_history_1.sqlite-shm, thread_history_1.sqlite-wal, tmp
+    skills/ 条目 61 个（含 .system 与登记文件）：.system, .wrk-app-skills.json, purrge, wf-aside, wf-bug, wf-build-fix, wf-checkpoint, wf-claw …
+    config.toml 字节数：454
+
+用户 ~/.codex 未被写入的证据：
+  - 一次完整的应用路径执行（prepare() + build_env() + codex exec，1.4 s）前后，
+    以下 8 个文件的 mtime 全部未变：AGENTS.md、config.toml、auth.json、
+    logs_2.sqlite、state_5.sqlite、goals_1.sqlite、queue_1.sqlite、
+    memories_v2_1.sqlite
+  - 两次完整探测前后，~/.codex 下 173,014 个文件中变化的只有 7 个 SQLite/shm/日志
+    文件（logs_2.sqlite 等），来源是手工跑的 `codex --version` / `codex exec --help`
+    （未设 CODEX_HOME）与用户自己的 codex 进程；skills/ 下 13,183 个文件零变化。
+
+本机无法验证（未编造）：
+  - 真实供应商的回答内容与流式输出：没有可用密钥，假 API 只抓请求体。
+  - macOS/Linux 的符号链接路径：只验证了 Windows 的目录联接与「链接失败退回复制」。
+  - 其它 CLI 核心（claude/qwen/aider/goose）的刷新行为：本机未安装。

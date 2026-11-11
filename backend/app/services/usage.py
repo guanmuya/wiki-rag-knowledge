@@ -133,11 +133,14 @@ def _prices_by_config(db: Session) -> dict[int, dict]:
 
 
 def _core_label(core_id: str) -> str:
-    """个人 Agent 核心的展示名：内置核心取清单里的名字，插件/未知核心回落 id。"""
-    plugin = agent_plugins.BUILTIN_BY_ID.get(core_id or "")
-    if plugin is not None:
-        return plugin.name
-    return core_id or "未知核心"
+    """个人 Agent 核心的展示名：内置核心取清单里的名字，已下线的核心取「已下线」文案。
+
+    走 `agent_plugins.core_label()` 而不是直接查 `BUILTIN_BY_ID`：知识库核心（`kb`）已经
+    下线，但历史会话/历史执行记录还在用量里出现，用量页仍要给出可读的名字，而不是裸 id。
+    """
+    if not core_id:
+        return "未知核心"
+    return agent_plugins.core_label(core_id)
 
 
 def _final(bucket: dict) -> dict:

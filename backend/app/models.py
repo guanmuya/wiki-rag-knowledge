@@ -460,18 +460,22 @@ class Message(Base):
 class AgentSession(Base):
     """本地个人 Agent 的一次会话。
 
-    核心（core_id）是会话级字段而不是全局开关：同一个会话里可以把
-    「知识库助手」换成 Claude Code，下一条消息就用新核心执行。
-    所有内置/插件核心都是「每轮无状态」的（CLI 用回放历史、知识库核心
-    单轮检索），所以切换不需要迁移任何进程内状态。
+    核心（core_id）是会话级字段而不是全局开关：同一个会话里可以把 Codex CLI
+    换成 Claude Code，下一条消息就用新核心执行。所有核心都是「每轮无状态」的
+    （CLI 用回放历史），所以切换不需要迁移任何进程内状态。
+
+    个人 Agent 不检索知识库（知识库问答在「智能问答」页），所以会话上不再写
+    `kb_ids`；列留着只是为了不让历史库缺列，读写都不再经过它。
     """
 
     __tablename__ = "agent_sessions"
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(String(255), default="新会话")
-    core_id: Mapped[str] = mapped_column(String(64), default="kb")
+    core_id: Mapped[str] = mapped_column(String(64), default="")
     model_config_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 历史遗留列（旧版「知识库助手」核心用）。个人 Agent 已不与知识库交互，
+    # 这里始终是默认值 "[]"，保留是为了不打断老数据库与按需回滚。
     kb_ids: Mapped[str] = mapped_column(Text, default="[]")
     # CLI 核心的工作目录。默认是数据目录下的 agent_workspace，管理员可改成
     # 某个项目目录；核心能读写这里，不能越出这个目录去「顺手改点别的」。
