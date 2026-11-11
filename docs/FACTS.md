@@ -244,10 +244,14 @@ python -c "import re,pathlib;print(len(set(re.findall(r'\bWRK_[A-Z0-9_]+\b', pat
 - `docs/PR42_FIX_REPORT.md` 的验收表里另有一份 `673 passed, 1 skipped`，并仍写着「四项检查」
   ——那是该任务交付当时的点对点报告（当时 CI 还是四项，本轮才加到五项）。它属于历史报告，
   本轮未回改；§2.1 已把它当作上一版基线的独立佐证引用。
-- **一处与 P1-8 无关的已知偶发**：`backend/tests/test_agent_runtime.py` 的 `_wait_run()` 只等
-  15 秒，全量跑在负载高时会偶发超时（本轮全量跑中出现过 1 次，随后单独复跑 `13 passed`）。
-  它不涉及 P1-8 改动的任何代码路径，也不影响 `707 / 1` 的计数复现，本轮未修改；
-  若 CI 上再次出现，把等待上限按机器负载放宽即可。
+- ~~**与 P1-8 无关的已知偶发**：`backend/tests/test_agent_runtime.py` 的 `_wait_run()` 只等
+  15 秒，全量跑在负载高时会偶发超时~~ **已修（2026-11-11，独立任务「让 test_agent_runtime
+  的两条用例不再依赖真实 DNS」）**：根因不是「等得不够久」，而是这两条用例会拿假域名
+  `https://example.test` 发一次真实模型请求——本机解析该域名要 11 秒，一次出网就吃掉 15 秒预算。
+  改法是在测试侧断掉出网（`offline_llm` 夹具：`llm._client` 就地失败 + 非回环域名解析直接报错），
+  **`_wait_run()` 的超时没有放宽**；改后 `707 passed, 1 skipped` 不变，`.test` 不可解析 / 解析拖成
+  11 秒 / 断网三种条件下各连续 5 次全绿。根因、对照与逐次输出见
+  `docs/evidence/agent-runtime-offline.txt`。
 
 
 

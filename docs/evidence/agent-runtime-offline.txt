@@ -1,0 +1,179 @@
+# test_agent_runtime 两条用例「去 DNS 化」：根因、改法与实跑记录（2026-11-11）
+
+对应任务：**让 test_agent_runtime 的两条用例不再依赖真实 DNS**。
+背景与第一手实测见 [`release-v1.0.18-build.txt`](release-v1.0.18-build.txt) §3.1。
+
+## 1. 根因（本轮实测，不是推断）
+
+用 pytest 插件把假域名 `example.test` 的解析拖成 11 秒（等价于本机那次 11.45s 的慢 DNS），
+拿 **`master` 原样文件**连跑 5 次：
+
+```
+--- 第 1 次 ---
+FAILED backend/tests/test_agent_runtime.py::test_switch_core_mid_session - As...
+1 failed, 1 passed, 11 deselected in 17.06s
+（第 2～5 次同样是 1 failed / 16.87s、16.87s、16.92s、16.87s）
+```
+
+报错与 §3.1 一字不差：`AssertionError: run N 未在 15.0s 内结束：{… 'text': '正在检索 1 个知识库…'}`。
+
+出网链路（逐跳读代码确认）：
+
+1. `POST /api/agent/sessions`（`core_id=kb`）在建会话时并不要求指定模型，
+   `routers/agent.py::create_session` 会调 `plugins.default_model_id()` **直接查库**挑一条兼容的
+   `llm` 模型写进 `session.model_config_id`；
+2. `runtime._run_kb()` 把这个配置当 `cfg_override` 传给 `answering.answer()`；
+3. `qa_pipeline` 的意图分析 / 查询路由 / 证据评估各发一次 `llm.chat(...)`，URL 就是
+   `https://example.test/v1/chat/completions`（`_make_model()` 用的假域名）。
+
+由此得到三条结论：
+
+- **只改 `_make_model()` 的 `base_url` 修不掉它**：慢的是一次真实出网调用，
+  而「会话自己挑一条默认模型」这条路还绕过了 `llm.resolve_model`，
+  只清测试库里的模型也拦不住（`cfg_override` 走的是另一条分支）。
+- **换成回环端口也不是好修法**：本机实测连接关闭的回环端口要 **2.0 秒**才拿到
+  `ConnectionRefusedError`（`127.0.0.1:9`、`:1` 都是 2.03 / 2.05s），
+  一轮问答有 4～5 次调用，等于把 8～10 秒塞回 15 秒预算里。
+- `test_kb_session_flow` 单跑时库里还没有模型（它是本文件第一条用例），所以单跑 5/5 通过；
+  全量跑时前面测试文件留下的同类供应商让它一样依赖 DNS——与 §3.1 记的
+  「只在全量负载下偶发」完全吻合。
+
+## 2. 改法（只动测试，`backend/app/**` 零改动）
+
+`backend/tests/test_agent_runtime.py` 新增 `offline_llm` 夹具，挂到 `test_kb_session_flow`
+与 `test_switch_core_mid_session` 两条用例上，做两件事：
+
+1. **在 HTTP 客户端这一层就地失败**：`llm._client` 被替换成直接抛 `ModelUnavailable`
+   （`llm.py` 的模块说明里明确把 `_client` / `_post` / `_get` / `resolve_model` /
+   `active_embedding` 列为「被测试 monkeypatch 的名字」），于是任何模型调用秒失败，
+   链路按既有设计降级为规则判断 + 抽取式回答，一次域名解析都不发生；
+2. **兜底拦住真实解析**：`socket.getaddrinfo` 对非回环域名直接抛异常。万一以后又长出
+   绕过 `llm._client` 的出网路径，用例会当场在断言上暴露，而不是慢慢等到 15 秒超时。
+
+边界（按任务约束执行）：
+
+- `_wait_run()` 的超时 **保持 15 秒不变**，没有用「放宽口径」换绿；
+- `_make_model()` 的 `base_url` 保持 `https://example.test`：修好之后它不会再被调用，
+  而改它必须同时改 `test_cli_core_streams_and_injects_model` 里对
+  `BASE=https://example.test/v1` 的断言，与并行任务 #24 的重叠面反而更大；
+- 没有重排、没有重写其它用例；`test_kb_session_flow` 只多一条断言
+  `usage.live_calls == 0`（本轮一次真实供应商调用都没有），把「不靠模型也能答」钉住。
+
+## 3. 验收实跑（本机：Windows 11 10.0.26200 / Python 3.13.11 / pytest 9.2.0）
+
+三个模拟条件都只替换 socket 层（插件脚本不入库，源码见 §6）：
+
+| 条件 | 命令 | 连续 5 次的结果 |
+| --- | --- | --- |
+| `.test` 不可解析（等价 CI 的 NXDOMAIN） | `python -m pytest backend/tests/test_agent_runtime.py -q -p no_dns` | **5/5 全绿**，每次 `13 passed`（3.96～4.19s） |
+| 解析被拖成 11 秒（等价本机慢 DNS） | `python -m pytest backend/tests/test_agent_runtime.py -q -p slow_dns` | **5/5 全绿**，每次 `13 passed`（4.01～4.19s） |
+| 断网（非回环域名的解析与连接全部失败） | `… -p offline_net -k "kb_session_flow or switch_core_mid_session"` | **5/5 全绿**，每次 `2 passed`（1.74～1.93s） |
+
+修复前后对照（同一份 `master` 原样文件、同一个 `slow_dns` 插件、同一台机器）：
+
+| 用例 | 修复前 | 修复后 |
+| --- | --- | --- |
+| `test_switch_core_mid_session` | **5/5 失败**，每次 16.87～17.06s（撞满 15 秒预算） | 5/5 通过 |
+| 该用例单次耗时 | 15.15s | 0.38s |
+
+## 4. 全量门禁（`python -m pytest backend/tests -q`，仓库根目录，退出码 0）
+
+```
+..................................s..................................... [ 71%]
+........................................................................ [ 81%]
+........................................................................ [ 91%]
+............................................................             [100%]
+707 passed, 1 skipped in 141.47s (0:02:21)
+```
+
+- 计数与 `docs/FACTS.md` §2.1 的基线**完全一致**（`707 passed, 1 skipped`）：本轮新增用例 0 条、
+  删除 0 条，只改夹具与一条断言，所以展开数不变；1 skipped 仍是 `test_tables.py` 的
+  `reportlab` 可选依赖。
+- 同一套用例在本轮改完后耗时 141.47s（§3.1 记录的历史实跑是 243～279s），
+  差异主要来自两条 Agent 用例不再等 DNS（15.15s → 0.38s）与机器负载，**不作为验收指标**。
+
+
+## 5. 没有做 / 没验证到的
+
+- 未与并行任务 #24 的分支（同一文件 177 行改动）合并过。若在 `test_agent_runtime.py` 上冲突，
+  处理原则是**保留 `offline_llm` 夹具与两处挂载**；#24 已经把知识库核心下线、删掉了
+  `test_kb_session_flow`，那条用例消失后夹具对它自然失效（但 `test_switch_core_mid_session`
+  若仍保留知识库那一轮，夹具依旧需要）。
+- 三个模拟插件只用于本机复跑，**不入库**（避免测试目录里多出与 CI 无关的代码）；源码见下节，可原样复现。
+- 本记录没有覆盖「用户机器真的断网」这一情形；`offline_net` 是在进程内等价模拟（解析 + 连接都失败）。
+- 额外试过一次「**DNS 全程不可用**下的全量跑」：`python -m pytest backend/tests -q -p no_dns` →
+  `1 failed, 706 passed, 1 skipped in 177.70s`。唯一失败项是
+  `test_login_rate_limit.py::test_account_locks_after_threshold_and_stops_being_a_password_oracle`，
+  断言拿到的 `Retry-After` 是 `901`、配置值是 `900`（1 秒之差），与本改动无关
+  （本改动只碰 `test_agent_runtime.py` 与文档，不涉及 `login_guard` / 认证路由）。
+  单跑该用例 8/8 通过，说明这是它自身的边界偶发，不在本任务范围内；上面 §4 的判定门禁
+  仍是**不带插件**的标准全量跑，结果是 `707 passed, 1 skipped`。
+
+## 6. 附：三个复现插件（放临时目录，用 `PYTHONPATH` + `-p <名字>` 加载）
+
+`no_dns.py`：
+
+```python
+"""模拟 CI 形态：任何非回环域名直接 NXDOMAIN（不可解析）。"""
+import socket
+
+_real = socket.getaddrinfo
+
+
+def _nx(host, *args, **kwargs):
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        raise socket.gaierror(-2, "Name or service not known")
+    return _real(host, *args, **kwargs)
+
+
+def pytest_configure(config):
+    socket.getaddrinfo = _nx
+```
+
+`slow_dns.py`：
+
+```python
+"""复现「假域名解析很慢」：把 example.test 的解析拖成 11 秒。"""
+import socket
+import time
+
+_real = socket.getaddrinfo
+
+
+def _slow(host, *args, **kwargs):
+    if isinstance(host, str) and host.endswith("example.test"):
+        time.sleep(11.0)
+    return _real(host, *args, **kwargs)
+
+
+def pytest_configure(config):
+    socket.getaddrinfo = _slow
+```
+
+`offline_net.py`：
+
+```python
+"""模拟断网：非回环域名的解析与连接一律失败（回环放行）。"""
+import socket
+
+_real_gai = socket.getaddrinfo
+_real_connect = socket.socket.connect
+
+
+def _gai(host, *args, **kwargs):
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        raise socket.gaierror(-2, "Name or service not known")
+    return _real_gai(host, *args, **kwargs)
+
+
+def _connect(self, address):
+    host = address[0] if isinstance(address, tuple) else address
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        raise OSError(10051, "Network is unreachable")
+    return _real_connect(self, address)
+
+
+def pytest_configure(config):
+    socket.getaddrinfo = _gai
+    socket.socket.connect = _connect
+```
