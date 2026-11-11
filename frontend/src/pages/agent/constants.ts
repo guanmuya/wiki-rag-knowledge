@@ -28,7 +28,6 @@ export const EXAMPLE_PLUGIN = `{
 
 export function coreUsable(core: AgentCore): boolean {
   if (!core.available) return false
-  if (core.kind === 'kb') return true
   return (core.compatible_model_count ?? 0) > 0
 }
 

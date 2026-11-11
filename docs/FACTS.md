@@ -219,7 +219,9 @@ python -c "import re,pathlib;print(len(set(re.findall(r'\bWRK_[A-Z0-9_]+\b', pat
   `SKIPPED [1] backend/tests/test_tables.py:319`。**它是可选依赖缺失，不是漏测，也不是新增 skip。**
 - **耗时不是验收指标**：本机绿跑的耗时随机器负载变化（本轮全量 `231.24 s`，上一轮 `243.49 s`）；
   **passed / skipped 计数稳定为 754 / 1**。负载高时另出现过与本次改动无关的偶发
-  （`test_agent_runtime` / `test_freeze_during_task`，单独复跑均通过），见 §2.5。
+  （`test_agent_runtime` / `test_freeze_during_task`，单独复跑均通过）；其中
+  `test_agent_runtime` 那次的根因（用例向 `example.test` 发真实模型请求、被 DNS 拖满 15 秒）
+  已随合并 `origin/master` 的 `offline_llm` 夹具修掉，见 §2.5。
 - **warning 行与代码无关**：旧版 CI 曾出现 1 个
   `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.`，
   出自第三方 `starlette` 的 `testclient.py`，由 CI 环境的版本组合触发；本机实跑没有该行。
@@ -259,11 +261,17 @@ python -c "import re,pathlib;print(len(set(re.findall(r'\bWRK_[A-Z0-9_]+\b', pat
 - `docs/PR42_FIX_REPORT.md` 的验收表里另有一份 `673 passed, 1 skipped`，并仍写着「四项检查」
   ——那是该任务交付当时的点对点报告（当时 CI 还是四项，P1-5 才加到五项）。它属于历史报告，
   本节不回改。
-- **一处与 P1-8 无关的已知偶发**：`backend/tests/test_agent_runtime.py` 的 `_wait_run()` 只等
-  15 秒，全量跑在负载高时会偶发超时。P1-8 全量跑出现 1 次（单独复跑 `13 passed`）；
-  P1-11 全量跑又出现 1 次（`test_kb_session_flow`，随后单文件复跑 `26 passed`、全量复跑
-  `754 passed`）。两次都不是用例逻辑问题，也未修改该等待上限；若 CI 上再次出现，
-  把等待上限按机器负载放宽即可。
+- ~~**与 P1-8 / P1-11 无关的已知偶发**：`backend/tests/test_agent_runtime.py` 的 `_wait_run()`
+  只等 15 秒，全量跑在负载高时会偶发超时~~ **已修（2026-11-11，独立任务「让 test_agent_runtime
+  的两条用例不再依赖真实 DNS」）**：根因不是「等得不够久」，而是这两条用例会拿假域名
+  `https://example.test` 发一次真实模型请求——本机解析该域名要 11 秒，一次出网就吃掉 15 秒预算。
+  改法是在测试侧断掉出网（`offline_llm` 夹具：`llm._client` 就地失败 + 非回环域名解析直接报错），
+  **`_wait_run()` 的超时没有放宽**；改后 `707 passed, 1 skipped` 不变，`.test` 不可解析 / 解析拖成
+  11 秒 / 断网三种条件下各连续 5 次全绿。根因、对照与逐次输出见
+  `docs/evidence/agent-runtime-offline.txt`。
+  P1-11 的全量跑在该修复进入本分支**之前**也命中过一次同根因的偶发
+  （`test_kb_session_flow`，知识库核心同样会向 `example.test` 发模型请求）：单文件复跑
+  `26 passed`、全量复跑 `754 passed`；合并本修复后不再依赖真实 DNS。
 - ~~`Retry-After` 偶发多报 1 秒~~ **P1-11 已修**：`backend/app/services/login_guard.py` 的
   `now + lock_seconds - now` 会带 1e-10 级浮点尾巴，`ceil` 后 `Retry-After` 变成 `901`
   （本机 20 万次 `time.monotonic()` 采样中约 25% 命中），使

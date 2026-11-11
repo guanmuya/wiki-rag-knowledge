@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import time
 import uuid
@@ -12,6 +13,7 @@ import pytest
 from sqlalchemy import select
 
 from app import config, models, security
+from app.services import llm
 from app.services.agent import plugins, runtime
 
 
@@ -99,7 +101,39 @@ def cli_plugin(tmp_path, monkeypatch):
     plugins.clear_detection_cache()
 
 
-def test_kb_session_flow(app_client, admin_headers, db_session):
+@pytest.fixture()
+def offline_llm(monkeypatch):
+    """让知识库核心这一轮问答完全离线：一次出网调用都不发，也不解析真实域名。
+
+    为什么需要这一步：知识库核心会拿会话上带着的默认模型做意图分析、路由与生成，
+    而测试库里这些供应商的地址是假域名（`_make_model()` 用的是
+    `https://example.test`）。本机实测解析该域名要 11 秒、请求 10.6 秒，一次出网
+    就把 `_wait_run()` 的 15 秒预算吃光——同一条用例于是「本机必挂、CI 全绿」
+    （CI 对 `.test` 直接 NXDOMAIN）。实测与判定见
+    `docs/evidence/release-v1.0.18-build.txt` §3.1。
+
+    两件事都不改业务代码，也不放宽 `_wait_run()` 的超时：
+    1. 在 HTTP 客户端这一层就地失败（`llm._client` 是仓库约定的测试接缝）：
+       模型调用立刻拿到「不可用」，链路按设计降级为规则判断 + 抽取式回答；
+    2. 把非回环域名的解析拦成异常：万一以后又长出绕过 `llm._client` 的出网路径，
+       用例会当场在断言上暴露，而不是慢慢等到 15 秒超时——那才是把网络抖动藏起来。
+    """
+    def no_http_client(*args, **kwargs):
+        raise llm.ModelUnavailable("测试强制离线：不发起任何真实模型调用")
+
+    monkeypatch.setattr(llm, "_client", no_http_client)
+
+    real_getaddrinfo = socket.getaddrinfo
+
+    def guarded_getaddrinfo(host, *args, **kwargs):
+        if host not in (None, "127.0.0.1", "localhost", "::1"):
+            raise AssertionError(f"用例不应解析真实域名：{host}")
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
+
+
+def test_kb_session_flow(app_client, admin_headers, db_session, offline_llm):
     kb_id = _make_kb(db_session)
     created = app_client.post("/api/agent/sessions", headers=admin_headers, json={
         "core_id": "kb", "kb_ids": [kb_id], "title": "知识库测试",
@@ -121,6 +155,9 @@ def test_kb_session_flow(app_client, admin_headers, db_session):
     assert result["message"]["status"] == "ok"
     assert result["message"]["content"]
     assert result["message"]["core_id"] == "kb"
+    # 本轮一次真实供应商调用都没有：断言「有回复」而不是「模型答的」，
+    # 这样用例不再靠真实网络（含域名解析）才能变绿，见 offline_llm。
+    assert result["message"]["meta"]["usage"]["live_calls"] == 0
 
     detail = app_client.get(f"/api/agent/sessions/{session['id']}", headers=admin_headers)
     assert detail.status_code == 200
@@ -161,7 +198,8 @@ def test_cli_core_streams_and_injects_model(app_client, admin_headers, db_sessio
     assert result["message"]["meta"]["protocol"] == "openai"
 
 
-def test_switch_core_mid_session(app_client, admin_headers, db_session, cli_plugin):
+def test_switch_core_mid_session(app_client, admin_headers, db_session, cli_plugin,
+                                offline_llm):
     kb_id = _make_kb(db_session)
     model_id = _make_model(db_session)
     _write_fake_agent(cli_plugin, body="import sys\nprint('switched:' + sys.argv[1][-20:])\n")
