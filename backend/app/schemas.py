@@ -137,6 +137,9 @@ class WikiPageUpdateIn(BaseModel):
     content_md: str
     summary: str | None = None
     note: str = ""
+    # 草稿基底版本。带上时后端可拒绝基于旧版本的提交；旧调用方不带，
+    # 后端另行按正文识别已失效来源的旧草稿。
+    expected_version_id: int | None = None
 
 
 class RebuildIn(BaseModel):

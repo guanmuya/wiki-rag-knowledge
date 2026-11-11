@@ -108,7 +108,7 @@
 | POST | `/api/documents/{id}/versions` | multipart `file` 上传新版本 → `{version_id,task_id}` |
 | GET | `/api/documents/{id}/download?version_id=` | 原文件下载（后端校验权限） |
 | GET | `/api/documents/{id}/chunks?page=` | 分块预览（含 locator/heading/向量维度） |
-| DELETE | `/api/documents/{id}` | 删除文档及其分块；Wiki 库触发重建任务。切换模式触发的首次 Wiki 生成排队或运行期间返回 409，待任务结束后可重试。 |
+| DELETE | `/api/documents/{id}` | 删除文档及其分块；Wiki 库触发重建任务，受影响页面及版本按第 6 节限制可见性。切换模式触发的首次 Wiki 生成排队或运行期间返回 409，待任务结束后可重试。 |
 | GET | `/api/tasks?status=&kb_id=&include_running=` | 任务列表（轮询用）；`include_running=true` 额外包含符合筛选条件的运行中任务 |
 | GET | `/api/tasks/{id}` | 单任务详情 |
 | POST | `/api/tasks/{id}/stop-wiki?run_token=` | 需知识库 manage 权限；传任务响应中的 `run_token` 以停止对应执行 → `{ok:true}` |
@@ -128,16 +128,24 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/kbs/{id}/wiki/tree` | 目录：`{pages:[{id,slug,title,summary,status,human_locked,order_index,section_count}]}` |
-| GET | `/api/kbs/{id}/wiki/pages/{slug}` | 页面详情：`{page, version:{id,version_no,content_md,origin}, evidence:[...], related:[...]}` |
-| PUT | `/api/kbs/{id}/wiki/pages/{slug}` | manage。`{content_md,summary?,note?}` 保存人工版本 → 重建该页索引 |
+| GET | `/api/kbs/{id}/wiki/tree` | 目录：`{items:[{id,slug,title,summary,status,human_locked,order_index,section_count}],total,mode,mode_label,wiki_ready,status_detail,empty_reason}` |
+| GET | `/api/kbs/{id}/wiki/pages/{slug}` | 页面详情：`{id,slug,title,summary,status,...,version:{id,version_no,content_md,origin,...},evidence:[...],related:[...]}`；无当前版本时 `version` 为 `null` |
+| PUT | `/api/kbs/{id}/wiki/pages/{slug}` | manage。`{content_md,summary?,note?,expected_version_id?}` 保存人工版本 → 重建该页索引。`expected_version_id` 为草稿所基于的当前版本 ID，不匹配时返回 409；旧调用方不带该字段时，后端按正文识别来源已失效的旧草稿并同样拒绝（409） |
 | GET | `/api/kbs/{id}/wiki/pages/{slug}/versions` | 版本历史 |
 | POST | `/api/kbs/{id}/wiki/pages/{slug}/publish` | 发布草稿 |
 | POST | `/api/kbs/{id}/wiki/pages/{slug}/unlock` | 解除人工锁定（允许下次自动覆盖） |
 
 证据结构：`{chunk_id,doc_id,doc_name,doc_version_id,version_no,locator,quote}`
 
-删除文档后，当前版本的证据中只要有一条指向该文档，页面即从普通用户的目录、详情、关联页、检索和建议问题中隐藏（包括有其他有效来源的页面）；普通用户访问详情或修改接口返回 404。历史版本按各自的证据过滤。系统管理员仍可查看保留的页面和证据，此时响应的 `status` 为 `needs_review`、`status_label` 为「来源已删除，待复核」。人工编辑、发布或解锁不会解除隐藏；以有效来源重新生成当前版本后才恢复普通可见性。此规则依赖已有证据记录，无法识别历史版本中未记录的来源；已删除的原始文档文件不会因此保留。
+新生成的 Wiki 页面版本会持久记录主题归纳所合并的每个分片实际读取的全部文档，以及页面引用涉及的文档，作为该版本的来源依赖。这些依赖独立于面向用户的 `evidence` 引用：文档即使未被页面引用，也可能影响主题或摘要。可见性检查也使用已有证据记录，以兼容尚无生成来源依赖记录的旧版本。
+
+对于新记录了来源依赖的版本，当生成时读取或引用的文档被删除或文档引用失效时，受影响的当前版本会使页面从普通用户的目录、详情、关联页、检索和建议问题中隐藏；普通用户包括有知识库 `manage` 权限但不是系统管理员的管理者。直接访问受影响页面的详情、版本历史或修改接口返回 404。当前版本可见时，历史列表按各版本的来源和证据分别过滤受影响的版本。同一分片归纳出的页面共享该分片的依赖，因此删除一份文档可能暂时隐藏同批中实际与该文档无关的页面。旧版仅有证据而无稳定文档引用时，物理删除及 ID 复用仍可能使页面重新可见；当前草稿尚未修复这一缺口。
+
+系统管理员仍可在目录、页面详情和版本历史中查看保留内容；当前版本受影响时，页面的 `status` 为 `needs_review`、`status_label` 为「来源已删除，待复核」。页面详情的顶层可包含 `deleted_generation_sources:[{id,name}]`，列出当前版本记录的、生成时读取或引用的已删除或缺失文档；无条目时可为空或省略，非系统管理员不会收到该字段。来源文档行缺失时，`name` 使用占位名。该字段只列新记录的来源依赖，旧版仅因证据被隐藏时可能为空。
+
+人工编辑创建的新版本继承服务器当前版本的生成来源依赖和证据。当前接口尚不校验草稿的基底版本：页面以有效来源重新生成后，旧草稿仍可能把已删除来源内容重新发布；该缺口尚未修复。旧版本未曾记录的来源无法推断；已保存的会话、回答及其证据不会回溯清理，删除文档时也不会为保留 Wiki 页面而保留原始文件。
+
+如果客户端离线，或页面停留期间服务器上的可见性发生变化，已送达客户端的内容无法保证立即撤回。前端自动复查方案仍在开发，不承诺实时撤回或固定复查间隔。
 
 ## 7. 会话与问答
 

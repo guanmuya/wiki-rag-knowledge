@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { wikiApi } from '../api'
+import { ApiError, wikiApi } from '../api'
 import type {
   KnowledgeBase,
   WikiPage,
@@ -7,7 +7,7 @@ import type {
   WikiPageVersion,
 } from '../types'
 import { errorText, formatTime, taskStatusClass, wikiStatusLabel } from '../utils'
-import { IconArrowLeft, IconLock } from './icons'
+import { IconAlert, IconArrowLeft, IconLock } from './icons'
 import {
   Badge,
   Button,
@@ -23,11 +23,13 @@ import { Markdown } from './Markdown'
 
 export default function WikiTab({
   kb,
+  isAdmin,
   canManage,
   onToast,
   initialSlug,
 }: {
   kb: KnowledgeBase
+  isAdmin: boolean
   canManage: boolean
   onToast: (text: string, kind?: 'info' | 'success' | 'error') => void
   initialSlug?: string | null
@@ -40,14 +42,25 @@ export default function WikiTab({
   const [detail, setDetail] = useState<WikiPageDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<unknown>(null)
+  const [unavailable, setUnavailable] = useState(false)
+  const unavailableRef = useRef(false)
+  const revocationRef = useRef(0)
+  const detailRef = useRef<WikiPageDetail | null>(null)
   const selectedSlugRef = useRef<string | null>(initialSlug ?? null)
+  const selectionRef = useRef(0)
   const currentKbIdRef = useRef(kb.id)
   currentKbIdRef.current = kb.id
   const pageRequestRef = useRef(0)
   const treeRequestRef = useRef(0)
+  const foregroundTreeRequestRef = useRef<number | null>(null)
+  const versionsRequestRef = useRef(0)
   const mountedRef = useRef(true)
   const treeButtonRefs = useRef(new Map<string, HTMLButtonElement>())
   const focusSelectionRef = useRef(false)
+  // 撤销时记住草稿所基于的版本：只有同一版本恢复才保留草稿。
+  const revokedVersionIdRef = useRef<number | null>(null)
+  const editingRef = useRef(false)
+  const versionsOpenRef = useRef(false)
 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -69,6 +82,29 @@ export default function WikiTab({
   const [unlockOpen, setUnlockOpen] = useState(false)
   const [unlockBusy, setUnlockBusy] = useState(false)
 
+  useEffect(() => { editingRef.current = editing }, [editing])
+  useEffect(() => { versionsOpenRef.current = versionsOpen }, [versionsOpen])
+
+  const markUnavailable = useCallback((targetSlug: string) => {
+    if (!mountedRef.current || selectedSlugRef.current !== targetSlug) return
+    revokedVersionIdRef.current = detailRef.current?.version?.id ?? null
+    unavailableRef.current = true
+    revocationRef.current += 1
+    pageRequestRef.current += 1
+    treeRequestRef.current += 1
+    versionsRequestRef.current += 1
+    setUnavailable(true)
+    setPages((previous) => previous.filter((page) => page.slug !== targetSlug))
+    setTreeLoading(false)
+    setTreeError(null)
+    setDetailLoading(false)
+    setDetailError(null)
+    setVersionsOpen(false)
+    setViewVersion(null)
+    setVersions([])
+    setUnlockOpen(false)
+  }, [])
+
   // All page selection goes through here so an earlier response becomes stale immediately.
   const selectSlug = useCallback((next: string | null, focusSelection = false) => {
     if (selectedSlugRef.current === next) return
@@ -77,8 +113,14 @@ export default function WikiTab({
       return
     }
     selectedSlugRef.current = next
+    selectionRef.current += 1
     pageRequestRef.current += 1
+    versionsRequestRef.current += 1
+    unavailableRef.current = false
+    detailRef.current = null
     focusSelectionRef.current = focusSelection
+    setUnavailable(false)
+    setVersionsOpen(false)
     setSlug(next)
     setDetail(null)
     setDetailError(null)
@@ -87,6 +129,8 @@ export default function WikiTab({
 
   const loadTree = useCallback(async (background = false) => {
     const requestId = ++treeRequestRef.current
+    const selectionId = selectionRef.current
+    foregroundTreeRequestRef.current = requestId
     const isCurrent = () =>
       mountedRef.current && requestId === treeRequestRef.current && currentKbIdRef.current === kb.id
     if (!background) {
@@ -95,23 +139,31 @@ export default function WikiTab({
     }
     try {
       const data = await wikiApi.tree(kb.id)
-      if (!isCurrent()) return
+      if (!isCurrent() || selectionId !== selectionRef.current) return
       const list = [...(data.pages ?? [])].sort((a, b) => a.order_index - b.order_index)
-      setPages(list)
       const current = selectedSlugRef.current
-      if ((!current || !list.some((p) => p.slug === current)) && (!background || !current)) {
+      setPages(unavailableRef.current ? list.filter((page) => page.slug !== current) : list)
+      if (current && !list.some((p) => p.slug === current) && !isAdmin &&
+          (detailRef.current || unavailableRef.current)) {
+        markUnavailable(current)
+      } else if ((!current || !list.some((p) => p.slug === current)) && (!background || !current)) {
         selectSlug(list[0]?.slug ?? null)
       }
     } catch (err) {
-      if (!isCurrent()) return
-      if (!background) {
+      if (!isCurrent() || selectionId !== selectionRef.current) return
+      const current = selectedSlugRef.current
+      if (!isAdmin && current && isVisibilityError(err)) {
+        setPages([])
+        markUnavailable(current)
+      } else if (!background) {
         setTreeError(err)
         setPages([])
       }
     } finally {
+      if (foregroundTreeRequestRef.current === requestId) foregroundTreeRequestRef.current = null
       if (isCurrent()) setTreeLoading(false)
     }
-  }, [kb.id, selectSlug])
+  }, [kb.id, isAdmin, markUnavailable, selectSlug])
 
   const loadPage = useCallback(
     async (targetSlug: string) => {
@@ -126,19 +178,25 @@ export default function WikiTab({
       setDetailError(null)
       try {
         const data = await wikiApi.page(kb.id, targetSlug)
-        if (!isCurrent()) return
+        if (!isCurrent() || unavailableRef.current) return
+        detailRef.current = data
         setDetail(data)
         setDraft(data.version?.content_md ?? '')
         setDraftSummary(data.page?.summary ?? '')
       } catch (err) {
         if (!isCurrent()) return
-        setDetailError(err)
-        setDetail(null)
+        if (!isAdmin && isVisibilityError(err)) {
+          markUnavailable(targetSlug)
+        } else if (!unavailableRef.current) {
+          detailRef.current = null
+          setDetailError(err)
+          setDetail(null)
+        }
       } finally {
         if (isCurrent()) setDetailLoading(false)
       }
     },
-    [kb.id],
+    [kb.id, isAdmin, markUnavailable],
   )
 
   useEffect(() => {
@@ -191,6 +249,142 @@ export default function WikiTab({
     return () => { pageRequestRef.current += 1 }
   }, [slug, loadPage])
 
+  // 已打开的页面也要复核可见性；管理员同样要复核角色，避免降权后仍看到缓存内容。
+  // 复核发现当前版本变化时刷新正文/标题/关联，但不覆盖正在编辑的草稿。
+  useEffect(() => {
+    let alive = true
+    let treeBusy = false
+    let pageBusy = false
+    let versionsBusy = false
+    let versionsSeq = 0
+    let verifiedTree: { revocationId: number; pages: WikiPage[] } | null = null
+    let verifiedDetail: { revocationId: number; requestId: number; detail: WikiPageDetail } | null = null
+    const tick = () => {
+      const targetSlug = selectedSlugRef.current
+      const selectionId = selectionRef.current
+      const pageRequestId = pageRequestRef.current
+      const revocationId = revocationRef.current
+      let treeRequestId = 0
+      const isCurrent = () => alive && mountedRef.current && currentKbIdRef.current === kb.id &&
+        selectionRef.current === selectionId && selectedSlugRef.current === targetSlug
+      const restoreIfVisible = () => {
+        if (!isCurrent() || !targetSlug || !unavailableRef.current || !verifiedTree || !verifiedDetail ||
+            verifiedTree.revocationId !== revocationRef.current || verifiedDetail.revocationId !== revocationRef.current ||
+            verifiedDetail.requestId !== pageRequestRef.current) return
+        // 恢复时使用新详情。草稿所基于的版本若已变化，说明它是一份旧草稿，
+        // 必须丢弃，不能让已撤销的内容随新版本一起重新出现在编辑器里。
+        const detail = verifiedDetail.detail
+        const restoredId = detail.version?.id ?? null
+        const staleDraft = revokedVersionIdRef.current !== null &&
+          restoredId !== revokedVersionIdRef.current
+        detailRef.current = detail
+        setDetail(detail)
+        setPages(verifiedTree.pages)
+        if (staleDraft) {
+          setEditing(false)
+          setDraft(detail.version?.content_md ?? '')
+          setDraftSummary(detail.page?.summary ?? '')
+        }
+        setVersionsOpen(false)
+        setViewVersion(null)
+        setVersions([])
+        unavailableRef.current = false
+        setUnavailable(false)
+        setDetailError(null)
+        setDetailLoading(false)
+        revokedVersionIdRef.current = null
+      }
+      const refreshDetail = (next: WikiPageDetail) => {
+        // 后台复核发现服务端换了当前版本：清掉旧的正文、标题和版本历史，
+        // 但编辑中的草稿不能被动覆盖（用户尚未确认放弃）。
+        if ((detailRef.current?.version?.id ?? null) === (next.version?.id ?? null)) return
+        detailRef.current = next
+        setDetail(next)
+        if (!editingRef.current) {
+          setDraft(next.version?.content_md ?? '')
+          setDraftSummary(next.page?.summary ?? '')
+        }
+        setVersionsOpen(false)
+        setViewVersion(null)
+        setVersions([])
+        setDetailError(null)
+        setDetailLoading(false)
+      }
+
+      if (!treeBusy && foregroundTreeRequestRef.current !== treeRequestRef.current) {
+        treeBusy = true
+        treeRequestId = ++treeRequestRef.current
+        void wikiApi.tree(kb.id, { silent403: true }).then((data) => {
+          if (!isCurrent() || treeRequestId !== treeRequestRef.current ||
+              revocationId !== revocationRef.current) return
+          const list = [...(data.pages ?? [])].sort((a, b) => a.order_index - b.order_index)
+          setPages(unavailableRef.current ? list.filter((page) => page.slug !== targetSlug) : list)
+          setTreeLoading(false)
+          setTreeError(null)
+          if (!targetSlug) {
+            if (list.length) selectSlug(list[0].slug)
+            return
+          }
+          // 目录成功返回却不再包含当前页：服务端已不再暴露这一页，任何角色都要撤销。
+          if (!list.some((page) => page.slug === targetSlug)) {
+            markUnavailable(targetSlug)
+            return
+          }
+          if (revocationId === revocationRef.current) {
+            verifiedTree = { revocationId, pages: list }
+            restoreIfVisible()
+          }
+        }).catch((err: unknown) => {
+          if (!isCurrent() || treeRequestId !== treeRequestRef.current || !isVisibilityError(err)) return
+          // 整个目录请求失败不等于页面被撤销：管理员降权、网络抖动都先保留缓存内容。
+          if (!isAdmin) {
+            setPages([])
+            if (targetSlug) markUnavailable(targetSlug)
+            else {
+              setTreeLoading(false)
+              setTreeError(null)
+            }
+          }
+        }).finally(() => { treeBusy = false })
+      }
+
+      if (targetSlug && !pageBusy) {
+        pageBusy = true
+        void wikiApi.page(kb.id, targetSlug, { silent403: true }).then((data) => {
+          if (!isCurrent() || pageRequestId !== pageRequestRef.current ||
+              revocationId !== revocationRef.current) return
+          verifiedDetail = { revocationId, requestId: pageRequestId, detail: data }
+          if (unavailableRef.current) restoreIfVisible()
+          else refreshDetail(data)
+        }).catch((err: unknown) => {
+          if (!isAdmin && isCurrent() && pageRequestId === pageRequestRef.current && isVisibilityError(err)) {
+            markUnavailable(targetSlug)
+          }
+        }).finally(() => { pageBusy = false })
+      }
+
+      if (targetSlug && versionsOpenRef.current && !versionsBusy) {
+        versionsBusy = true
+        const myVersionsSeq = ++versionsSeq
+        void wikiApi.versions(kb.id, targetSlug).then((data) => {
+          if (!isCurrent() || myVersionsSeq !== versionsSeq ||
+              revocationId !== revocationRef.current || unavailableRef.current) return
+          const list = Array.isArray(data) ? data : data.items ?? []
+          setVersions([...list].sort((a, b) => b.version_no - a.version_no))
+          setVersionsError(null)
+          // 历史列表变了就不能继续展示已经不在列表里的旧版本正文。
+          setViewVersion((current) => current && !list.some((v) => v.id === current.id) ? null : current)
+        }).catch(() => { /* 历史复核失败不隐藏页面 */ })
+          .finally(() => { versionsBusy = false })
+      }
+    }
+    const timer = window.setInterval(tick, 5000)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [isAdmin, kb.id, slug, markUnavailable, selectSlug])
+
   useEffect(() => {
     setEditing(false)
     setViewVersion(null)
@@ -226,6 +420,7 @@ export default function WikiTab({
   useEffect(() => {
     if (saving || treeLoading || treeError || !deferredTreeSelectionRef.current) return
     deferredTreeSelectionRef.current = false
+    if (unavailableRef.current) return
     const current = selectedSlugRef.current
     if (!current || !pages.some((p) => p.slug === current)) selectSlug(pages[0]?.slug ?? null)
   }, [saving, treeLoading, treeError, pages, selectSlug])
@@ -255,24 +450,33 @@ export default function WikiTab({
   }
 
   const openVersions = async () => {
-    if (!slug) return
+    if (!slug || unavailableRef.current) return
+    const requestId = ++versionsRequestRef.current
+    const isCurrent = () => mountedRef.current && currentKbIdRef.current === kb.id &&
+      selectedSlugRef.current === slug && requestId === versionsRequestRef.current && !unavailableRef.current
     setVersionsOpen(true)
     setVersionsLoading(true)
     setVersionsError(null)
     try {
       const data = await wikiApi.versions(kb.id, slug)
+      if (!isCurrent()) return
       const list = Array.isArray(data) ? data : data.items ?? []
       setVersions([...list].sort((a, b) => b.version_no - a.version_no))
     } catch (err) {
-      setVersionsError(err)
-      setVersions([])
+      if (!isCurrent()) return
+      if (!isAdmin && isVisibilityError(err)) markUnavailable(slug)
+      else {
+        setVersionsError(err)
+        setVersions([])
+      }
     } finally {
-      setVersionsLoading(false)
+      if (isCurrent()) setVersionsLoading(false)
     }
   }
 
   const save = async () => {
-    if (!slug || !detail || savingRef.current) return
+    if (!slug || !detail || savingRef.current || unavailableRef.current) return
+    const revocationId = revocationRef.current
     if (draft.trim().length < 10) {
       onToast('正文至少 10 个字符', 'error')
       return
@@ -280,14 +484,17 @@ export default function WikiTab({
     savingRef.current = true
     setSaving(true)
     try {
-      await wikiApi.save(kb.id, slug, draft, draftSummary || undefined)
-      if (!mountedRef.current || selectedSlugRef.current !== slug) return
+      await wikiApi.save(kb.id, slug, draft, draftSummary || undefined, detail.version?.id ?? undefined)
+      if (!mountedRef.current || currentKbIdRef.current !== kb.id || selectedSlugRef.current !== slug ||
+          unavailableRef.current || revocationRef.current !== revocationId) return
       setEditing(false)
       onToast('已保存人工版本，该页索引正在重建', 'success')
       await loadPage(slug)
       await loadTree()
     } catch (err) {
-      if (mountedRef.current) onToast(errorText(err), 'error')
+      if (!mountedRef.current || currentKbIdRef.current !== kb.id || selectedSlugRef.current !== slug) return
+      if (!isAdmin && isVisibilityError(err)) markUnavailable(slug)
+      else onToast(errorText(err), 'error')
     } finally {
       savingRef.current = false
       if (mountedRef.current) setSaving(false)
@@ -322,7 +529,16 @@ export default function WikiTab({
     }
   }
 
-  const grouped = useMemo(() => groupPages(pages), [pages])
+  const grouped = useMemo(
+    () => groupPages(unavailable ? pages.filter((page) => page.slug !== slug) : pages),
+    [pages, unavailable, slug],
+  )
+  // 关联标题以最新目录为准：详情响应里的标题可能是上一次复核前的旧值。
+  const visibleRelated = (detail?.related ?? []).flatMap((related) => {
+    const current = pages.find((item) => item.slug === related.slug)
+    if (!isAdmin && !current) return []
+    return [{ ...related, title: current?.title ?? related.title }]
+  })
 
   if (treeLoading) {
     return (
@@ -340,7 +556,7 @@ export default function WikiTab({
     )
   }
 
-  if (pages.length === 0 && !(detail && (editing || saving))) {
+  if (pages.length === 0 && !unavailable && !(detail && (editing || saving))) {
     return (
       <div className="card">
         <EmptyState
@@ -355,7 +571,7 @@ export default function WikiTab({
     )
   }
 
-  const page = detail?.page ?? pages.find((p) => p.slug === slug) ?? null
+  const page = unavailable ? null : detail?.page ?? pages.find((p) => p.slug === slug) ?? null
 
   return (
     <div className="wiki-layout">
@@ -396,7 +612,16 @@ export default function WikiTab({
       </nav>
 
       <div className="wiki-main">
-        {detailLoading ? (
+        {unavailable ? (
+          <div className="card">
+            <EmptyState
+              title="该页面暂不可查看"
+              hint={editing
+                ? '页面权限或状态已变化；未保存的草稿暂存于当前页面，恢复后可继续编辑。'
+                : '页面权限或状态已变化，请稍后重试或联系管理员。'}
+            />
+          </div>
+        ) : detailLoading ? (
           <div className="card card-pad">
             <SkeletonLines rows={8} />
           </div>
@@ -445,7 +670,11 @@ export default function WikiTab({
                             发布
                           </Button>
                         ) : null}
-                        <Button size="sm" variant="primary" onClick={() => setEditing(true)}>
+                        <Button size="sm" variant="primary" onClick={() => {
+                          setDraft(detail.version?.content_md ?? '')
+                          setDraftSummary(detail.page?.summary ?? '')
+                          setEditing(true)
+                        }}>
                           编辑校对
                         </Button>
                       </>
@@ -461,6 +690,19 @@ export default function WikiTab({
                 共 {page.section_count} 个章节 · 更新于 {formatTime(page.updated_at)}
                 {detail.version ? ` · 当前版本 v${detail.version.version_no}（${originLabel(detail.version.origin)}）` : ''}
               </div>
+
+              {isAdmin && (detail.deleted_generation_sources?.length ?? 0) > 0 ? (
+                <div className="insufficient-banner" style={{ marginBottom: 14 }}>
+                  <span className="banner-icon"><IconAlert size={16} /></span>
+                  <div style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
+                    <strong>页面待复核</strong>
+                    <div style={{ marginTop: 2 }}>
+                      生成时读取或引用的已删除文档：{detail.deleted_generation_sources?.map((source) => source.name).join('、')}。
+                      该页面暂时对普通用户隐藏；复核后可使用有效来源重新生成。
+                    </div>
+                  </div>
+                </div>
+              ) : null}
 
               {page.human_locked && canManage && !editing ? (
                 <div className="insufficient-banner" style={{ marginBottom: 14 }}>
@@ -485,6 +727,7 @@ export default function WikiTab({
                       onChange={(e) => setDraftSummary(e.target.value)}
                       rows={2}
                       placeholder="页面摘要（可选）"
+                      disabled={saving}
                     />
                   </div>
                   <div className="field">
@@ -494,6 +737,7 @@ export default function WikiTab({
                       value={draft}
                       onChange={(e) => setDraft(e.target.value)}
                       spellCheck={false}
+                      disabled={saving}
                     />
                   </div>
                   <div className="tiny muted">
@@ -531,9 +775,9 @@ export default function WikiTab({
             <div className="panel">
               <div className="panel-head">关联页面</div>
               <div className="panel-body">
-                {detail.related && detail.related.length > 0 ? (
+                {visibleRelated.length > 0 ? (
                   <div className="related-chips">
-                    {detail.related.map((r) => (
+                    {visibleRelated.map((r) => (
                       <button
                         key={r.slug}
                         type="button"
@@ -555,15 +799,20 @@ export default function WikiTab({
       </div>
 
       <Modal
-        open={versionsOpen}
+        open={versionsOpen && !unavailable}
         title={`版本历史 · ${page?.title ?? ''}`}
         onClose={() => {
+          versionsRequestRef.current += 1
           setVersionsOpen(false)
           setViewVersion(null)
         }}
         width={720}
         footer={
-          <Button variant="ghost" onClick={() => setVersionsOpen(false)}>
+          <Button variant="ghost" onClick={() => {
+            versionsRequestRef.current += 1
+            setVersionsOpen(false)
+            setViewVersion(null)
+          }}>
             关闭
           </Button>
         }
@@ -642,7 +891,7 @@ export default function WikiTab({
       />
 
       <Modal
-        open={unlockOpen}
+        open={unlockOpen && !unavailable}
         title="解除人工锁定"
         onClose={() => setUnlockOpen(false)}
         width={440}
@@ -663,6 +912,10 @@ export default function WikiTab({
       </Modal>
     </div>
   )
+}
+
+function isVisibilityError(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 403 || error.status === 404)
 }
 
 function groupPages(pages: WikiPage[]): Array<{ key: string; label: string; items: WikiPage[] }> {
