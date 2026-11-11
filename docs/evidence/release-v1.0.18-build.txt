@@ -1,0 +1,183 @@
+# v1.0.18 构建与门禁实跑记录（2026-11-11）
+
+对应任务：**发布 v1.0.18（版本号、交付说明与安装包构建）**。
+本文件记录这一次真实构建的环境、五项门禁输出、产物指标、`latest.yml` 原文、
+安装包 sha512，以及**没做**的两件事（建 tag、上传 Release）和它们的后续执行命令。
+
+> 交付说明与上传步骤在 [`docs/RELEASE_NOTES_v1.0.18.md`](../RELEASE_NOTES_v1.0.18.md)；
+> 发版链路背景见 [`docs/UPDATE.md`](../UPDATE.md)；版本号口径见 [`docs/FACTS.md`](../FACTS.md) §1。
+
+## 1. 这次构建的是哪棵树
+
+| 项 | 值 |
+| --- | --- |
+| 基线提交 | `f1fdecd`（`master` tip：PR #60「docs(changelog): fix stale note that v1.0.17 had no git tag」） |
+| 本轮改动 | 只递增版本号（三处）+ 文档（`CHANGELOG.md`、`README.md`、`docs/FACTS.md`、`docs/HANDOFF.md`、`docs/THESIS.md`、`docs/screenshots/README.md`）+ 新增本文件与 `docs/RELEASE_NOTES_v1.0.18.md` |
+| 业务代码改动 | **零**：`backend/app/**`、`frontend/src/**`、`frontend/electron/**` 未改；`backend/app/main.py` 仅 `VERSION` 一行 |
+| 产物入库 | **不入库**：`frontend/release/`、`frontend/build/backend/`、`.venv/` 均被 `.gitignore` 覆盖（`git check-ignore` 逐项确认） |
+
+## 2. 环境
+
+| 项 | 值 |
+| --- | --- |
+| 系统 | Windows 11（10.0.26200） |
+| Python（测试 / 打包） | 3.13.11（打包用仓库根 `.venv`：`python -m venv .venv` + `pip install -r backend/requirements-build.txt -c backend/constraints.txt`） |
+| PyInstaller | 6.11.1（与 `backend/requirements-build.txt` 一致，脚本自校验通过） |
+| Node / pnpm | v24.18.0 / 12.3.4（高于 CI 的 22 / 9；五条门禁命令与 CI 完全一致） |
+| Electron / electron-builder | 33.4.11 / 25.1.8 |
+
+## 3. 五项门禁（全部在本树实跑）
+
+先说结论：**四项前端门禁两次实跑都是绿的；后端全量测试第一次实跑是绿的
+`707 passed, 1 skipped`，第二次实跑出现 2 条已知偶发失败**。两条失败与本轮改动无关，
+根因和证据见 §3.1——先把话说清楚，再报数。
+
+| # | 命令（仓库根目录） | 第一次实跑（12:05） | 第二次实跑（12:4x，最终树） |
+| --- | --- | --- | --- |
+| 1 | `python -m pytest backend/tests -q` | **`707 passed, 1 skipped in 279.78s (0:04:39)`**，退出码 0 | **`2 failed, 705 passed, 1 skipped in 256.16s (0:04:16)`** —— 见 §3.1 |
+| 2 | `cd frontend && pnpm check:contract` | 退出码 0 | 退出码 0：枚举 2 组、路由 77 条、`preload.cjs` 11 个键、`wrk:info` 14 个字段全部对齐 |
+| 3 | `cd frontend && pnpm typecheck` | 退出码 0 | 退出码 0：`tsc -b --noEmit` 无输出（无错误） |
+| 4 | `cd frontend && pnpm build:web` | 退出码 0 | 退出码 0：`vite v6.4.5`，90 modules，`dist/assets/index-DarY-LuR.js 502.04 kB`、`index-ufMAgdvt.css 64.97 kB`（两次哈希相同） |
+| 5 | `cd frontend && pnpm test` | 退出码 0 | 退出码 0：`tests 10 / pass 10 / fail 0`，2 个套件（主链路 E2E + 失败文案单一来源） |
+
+> 本机 Node/pnpm 比 CI 高，`pnpm` 走 stderr 回显命令行时 PowerShell 会显示成红色错误记录，
+> **不是失败**（第 2–5 条退出码均为 0）。1 skipped 仍是 `test_tables.py` 的 `reportlab` 可选依赖。
+
+### 3.1 第二次实跑的两条失败：`test_agent_runtime.py` 的 15 秒等待撞上本机慢 DNS
+
+失败的是 `test_kb_session_flow` 与 `test_switch_core_mid_session`，报错都是同一个 `_wait_run()` 超时：
+
+```
+AssertionError: run 6 未在 15.0s 内结束：{'status': 'running', ... 'text': '正在检索 1 个知识库…'}
+```
+
+判定为**本机网络环境导致的已知偶发，与本轮改动无关**，三条证据：
+
+1. **把本轮改动全部 `git stash -u` 掉、回到 `master` `f1fdecd` 原样**，单跑该文件同样是
+   `1 failed, 12 passed`（失败项相同）。本轮只改版本号与文档，不可能影响 Agent 运行时。
+2. **本机解析测试里那个假域名很慢**：`Resolve-DnsName example.test` 实测 **11.45s / 11.09s / 11.07s**，
+   请求 `https://example.test` 耗时 **10.59s**；而 `_wait_run()` 只等 **15s**
+   （`backend/tests/test_agent_runtime.py:28`）。`_make_model()` 的 `base_url` 正是
+   `https://example.test`，一次失败的出网调用就把 15 秒预算吃掉。单独复跑该文件 5 次，
+   `test_switch_core_mid_session` **5/5 失败**（本机网络决定）；`test_kb_session_flow` 单跑 5/5 通过，
+   只在全量跑的负载下偶发。
+3. **CI 是权威运行**（`docs/FACTS.md` §2.4）：`master` `f1fdecd` 的 CI run `42953906893`
+   是 **completed / success**，同一套后端用例在 GitHub runner 上（对 `.test` 直接 NXDOMAIN）全绿。
+   这件事与 `docs/FACTS.md` §2.5 记的「`_wait_run()` 只等 15 秒、负载高时偶发」是同一个已知问题。
+
+> 处置：本轮**不改测试、不改业务代码**去「修绿」（发布任务边界就是不碰逻辑）；
+> 「让这两条用例不依赖真实 DNS」已另记待办。发版判断以 CI 为准，本机这次的 705/2
+> 如实留在这里，不写成「全绿」。
+
+## 4. 构建安装包
+
+命令（`frontend/` 目录）：
+
+```powershell
+node scripts/build.mjs
+```
+
+关键过程输出：
+
+```
+[build] 图标: ...\frontend\build\icon.ico（0.1 MB）
+[build] 后端产物 OK: ...\frontend\build\backend\wrk-backend.exe（51.3 MB）
+[build-backend] --- 实测打包后的 exe ---
+[build-backend] 后端就绪：pid=12268 http://127.0.0.1:64398 v1.0.18
+[build-backend] /api/health → {"ok":true,"version":"1.0.18"}
+[build-backend] /api/meta → app=企业知识库文档整理与问答系统 v1.0.18 initialized=false
+[build-backend] --- 实测通过（140.5s）---
+• downloading     url=https://github.com/electron/electron/releases/download/v33.4.11/electron-v33.4.11-win32-x64.zip size=115 MB parts=8
+• building        target=nsis file=release\wiki-rag-knowledge-1.0.18-x64-setup.exe archs=x64 oneClick=false perMachine=false
+• building block map  blockMapFile=release\wiki-rag-knowledge-1.0.18-x64-setup.exe.blockmap
+[build] 更新源配置校验通过：交付配置无明文 HTTP 源
+[build] 更新文件已收集：...\frontend\release\updates（3 个）
+[build] 完成（用时 295.1s）
+```
+
+> **打包后自检**：`build-backend.mjs` 会拉起打出来的 `wrk-backend.exe` 并实打
+> `/api/health`、`/api/meta`，两条都返回 **`1.0.18`**，说明安装包里的后端版本号已同步。
+> `signing with signtool.exe ... no signing info identified, signing is skipped` 是预期行为
+> （无证书，`forceCodeSigning: false`，见 `docs/UPDATE.md` §6.2）。
+
+## 5. 产物指标（`frontend/release/`）
+
+| 文件 | 大小 | 说明 |
+| --- | --- | --- |
+| `wiki-rag-knowledge-1.0.18-x64-setup.exe` | **128,864,266 B（122.9 MB）** | NSIS 安装包，本次要上传的资产 |
+| `wiki-rag-knowledge-1.0.18-x64-setup.exe.blockmap` | 134,708 B（131.6 KB） | 差量下载用 |
+| `latest.yml` | 376 B | 更新源元数据 |
+| `win-unpacked/`（未打包目录） | 288.7 MB | 其中 `resources/app.asar` 8.69 MB、`resources/backend/wrk-backend.exe` 51.3 MB |
+
+`frontend/release/updates/` 里就是上面三件套（`latest.yml` + 安装包 + `.blockmap`），
+与 `docs/UPDATE.md` §2 的「目录里至少要有这三个文件」一致。
+
+**安装包 sha512**（base64，与 `latest.yml` 一致；hex 供人工比对）：
+
+```
+size    : 128864266
+base64  : RrI2kSyajfUhArQqQE+MG270wPQKUaTAh8xLkK5HMxcCXuC2cgDVXFKllWLmQwk7L9EHSrHjPaXFDIn4AQCiqQ==
+hex     : 46b236912c9a8df52102b42a404f8c1b6ef4c0f40a51a4c087cc4b90ae473317025ee0b67200d55c52a59562e643093b2
+          2fd1074ab1e33da5c50c89f80100a2a9
+复现    : Get-FileHash frontend/release/updates/wiki-rag-knowledge-1.0.18-x64-setup.exe -Algorithm SHA512
+```
+
+**`latest.yml` 原文**（`frontend/release/updates/latest.yml`，未改动）：
+
+```yaml
+version: 1.0.18
+files:
+  - url: wiki-rag-knowledge-1.0.18-x64-setup.exe
+    sha512: RrI2kSyajfUhArQqQE+MG270wPQKUaTAh8xLkK5HMxcCXuC2cgDVXFKllWLmQwk7L9EHSrHjPaXFDIn4AQCiqQ==
+    size: 128864266
+path: wiki-rag-knowledge-1.0.18-x64-setup.exe
+sha512: RrI2kSyajfUhArQqQE+MG270wPQKUaTAh8xLkK5HMxcCXuC2cgDVXFKllWLmQwk7L9EHSrHjPaXFDIn4AQCiqQ==
+releaseDate: '2026-11-11T04:12:44.573Z'
+```
+
+三项一致性自检（都是本机实读，不是推断）：
+
+1. `latest.yml` 的 `version` = `1.0.18`，与 `frontend/package.json` 的 `version`、安装包文件名一致；
+2. `files[0].url` 与 `path` = 实际上传的安装包文件名（ASCII，无中文，避免静态源 404）；
+3. `files[0].sha512` 与 `files[0].size` 与本地对安装包重算的 SHA-512、字节数**完全相同**。
+
+## 6. 发布凭据探测结果（如实记录）
+
+| 探测 | 结果 |
+| --- | --- |
+| `$env:GH_TOKEN` | **不存在** |
+| `$env:GITHUB_TOKEN` | **不存在** |
+| `gh auth status` | 显示本机装有 GitHub CLI 且已登录 `guanmuya`（keyring 存储，作用域 `gist, read:org, repo, workflow`）——这是操作者本机的登录态，**未在本轮取用**，也**没有**把任何 token 写入文件、日志或聊天 |
+
+结论：**本轮不上传**。原因有两条，缺一不可：
+
+1. **`v1.0.18` tag 还不存在，也不该由本轮创建**。tag 要打在 `master` 的合并提交上（平台在合并后创建）；
+   而 GitHub Release 必须挂在某个 tag 上——`electron-builder --publish always` 在 release 不存在时
+   会自己建 release 并**连带创建 tag**，那会把 `v1.0.18` 指到错误提交。所以本轮只构建、不发布。
+2. 上传是「外部权威动作」，按团队约定需由用户在发布时点确认，并可现取本机 `gh` 登录态执行
+   （`gh auth token` 即可，命令见 `docs/RELEASE_NOTES_v1.0.18.md` §2）。
+
+## 7. 合并落地后要做什么（命令已写好，照抄即可）
+
+完整步骤与校验在 [`docs/RELEASE_NOTES_v1.0.18.md`](../RELEASE_NOTES_v1.0.18.md) §2，摘要：
+
+```powershell
+# 0) 先确认 tag 已在远端（由平台在合并后创建）
+git ls-remote --tags origin | Select-String 'v1\.0\.18'
+
+# 1) 建 Release 并上传三个资产；--verify-tag 保证 tag 不存在时直接失败，不会顺手建 tag
+gh release create v1.0.18 --verify-tag --title "v1.0.18" --notes-file docs/RELEASE_NOTES_v1.0.18.md `
+  frontend/release/updates/latest.yml `
+  frontend/release/updates/wiki-rag-knowledge-1.0.18-x64-setup.exe `
+  frontend/release/updates/wiki-rag-knowledge-1.0.18-x64-setup.exe.blockmap
+
+# 2) 匿名可下载性（三个都应为 200；刚上传后 1–2 分钟 CDN 延迟属正常）
+$base = 'https://github.com/guanmuya/wiki-rag-knowledge/releases/download/v1.0.18'
+foreach ($f in @('latest.yml','wiki-rag-knowledge-1.0.18-x64-setup.exe','wiki-rag-knowledge-1.0.18-x64-setup.exe.blockmap')) {
+  "$f -> $(curl.exe -sIL -o NUL -w '%{http_code}' "$base/$f")"
+}
+```
+
+> 换机器重建：`cd frontend && node scripts/build.mjs`。前提是 Node 22+ 与 pnpm、能联网下载
+> Electron 二进制与 NSIS 工具链，以及一个装了 `backend/requirements-build.txt` 的 Python 环境
+> （默认取仓库根 `.venv`，可用 `WRK_PYTHON` 覆盖）。构建**不会**改变 `latest.yml` 之外的任何仓库文件。

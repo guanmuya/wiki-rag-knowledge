@@ -6,7 +6,7 @@
 
 后端是 FastAPI + SQLAlchemy + SQLite 的单机进程，前端是 React + Vite，Electron 负责把后端作为 **sidecar 子进程**拉起并动态分配端口。没有外部队列、没有独立数据库服务、不需要运维。
 
-- 应用名 `企业知识库文档整理与问答系统`，版本 `1.0.17`（`backend/app/main.py` 的 `VERSION` 常量；`frontend/package.json` 的 `version` 同为 `1.0.17`）
+- 应用名 `企业知识库文档整理与问答系统`，版本 `1.0.18`（`backend/app/main.py` 的 `VERSION` 常量；`frontend/package.json` 的 `version` 同为 `1.0.18`）
 - 安装包产品名 `企业知识库`，appId `com.wikiraq.knowledge`（`frontend/electron-builder.yml`）
 - 后端测试基线见 [docs/FACTS.md](docs/FACTS.md) §2（全仓唯一记录，附一次真实运行输出；本页不复述数字）
 
@@ -475,12 +475,14 @@ git 里是删除状态。
 | [docs/results/](docs/results/README.md) | 第一波实验原始数据、汇总表、数据字典与复现命令 |
 | [docs/AGENT_PLUGINS.md](docs/AGENT_PLUGINS.md) | 个人 Agent 核心、CLI 适配与插件清单规范 |
 | [docs/THESIS.md](docs/THESIS.md) | 论文可复用章节素材：设计、关键实现、实验方法与结果、创新点与局限 |
-| [docs/HANDOFF.md](docs/HANDOFF.md) | 交接说明：v1.0.17 当前状态首屏、已知遗留、如何验证 |
+| [docs/HANDOFF.md](docs/HANDOFF.md) | 交接说明：v1.0.18 当前状态首屏、已知遗留、如何验证 |
 | [docs/archive/HANDOFF_HISTORY.md](docs/archive/HANDOFF_HISTORY.md) | 历史快照归档（v1.0.0 → v1.0.10，历史读数，非当前事实） |
 | [docs/archive/README.md](docs/archive/README.md) | 归档索引：旧看板、历史截图、历史交接快照，以及「为什么不删除」 |
 | [docs/screenshots/README.md](docs/screenshots/README.md) | 界面图索引：当前版本配图清单、拍摄口径、历史对比图去哪了 |
 | [docs/evidence/pytest-baseline.txt](docs/evidence/pytest-baseline.txt) | 测试基线一次真实运行的完整 stdout |
 | [docs/evidence/gates-2026-11-11.txt](docs/evidence/gates-2026-11-11.txt) | 五项门禁在本地一次全绿实跑的记录（环境、命令、退出码、真实输出） |
-| [CHANGELOG.md](CHANGELOG.md) | 变更记录：v1.0.0 → v1.0.17 的关键变化（数字口径仍以 `docs/FACTS.md` 为准） |
+| [docs/RELEASE_NOTES_v1.0.18.md](docs/RELEASE_NOTES_v1.0.18.md) | v1.0.18 交付说明：Release 正文草稿 + 合并后上传/校验命令 |
+| [docs/evidence/release-v1.0.18-build.txt](docs/evidence/release-v1.0.18-build.txt) | v1.0.18 构建记录：门禁输出、产物大小、`latest.yml` 原文、安装包 sha512 |
+| [CHANGELOG.md](CHANGELOG.md) | 变更记录：v1.0.0 → v1.0.18 的关键变化（数字口径仍以 `docs/FACTS.md` 为准） |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 协作约定：环境准备、五项门禁、提交格式、目录与归档规则、密钥纪律 |
 | [LICENSE](LICENSE) | 许可证（MIT） |

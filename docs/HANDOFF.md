@@ -1,10 +1,11 @@
 # 交接说明
 
-> **当前版本 v1.0.17（2026-11-07）｜当前状态：答辩材料 P0 已闭环，功能可交付**
+> **当前版本 v1.0.18（2026-11-11）｜当前状态：答辩材料 P0 已闭环，功能可交付；桌面安装包已构建，Release 待合并后发布**
 >
 > | 项 | 当前状态 |
 > | --- | --- |
-> | 版本 | `1.0.17`（`backend/app/main.py` 的 `VERSION`、`frontend/package.json` 的 `version`） |
+> | 版本 | `1.0.18`（`backend/app/main.py` 的 `VERSION`、`frontend/package.json` 的 `version`） |
+> | 桌面安装包 | `wiki-rag-knowledge-1.0.18-x64-setup.exe`（NSIS，未签名，Win 会提示 SmartScreen）；产物指标与上传命令见 `docs/evidence/release-v1.0.18-build.txt` 与 `docs/RELEASE_NOTES_v1.0.18.md` |
 > | 后端测试 | 全量 `python -m pytest backend/tests -q` **通过、无新增 skip**；计数口径与一次真实运行输出见 `docs/FACTS.md` §2（全仓唯一记录，本首屏不复述数字） |
 > | 实验数据 | **配置 A 离线结果已落库**（`docs/results/` 16 个文件、`docs/EXPERIMENT.md` §8、`docs/THESIS.md` §4）；配置 B 在线、人工标注与实际 p 值仍按约定标「待实验」 |
 > | 文档事实口径 | 已统一到 `docs/FACTS.md`（版本、表数、并发、锁超时、测试基线、代码锚点）；六份文档只放链接 |
@@ -34,16 +35,23 @@
 清单同步见 `docs/EXPERIMENT.md` §8.6、`docs/THESIS.md` §4.5、
 `docs/results/summary.md` 末节、`docs/results/README.md` §8。
 
-### 1.2 工程化门禁（批次二，尚未开工）
+### 1.2 工程化门禁（批次二，**已闭环**）
 
-`docs/HEALTH_CHECK.md` §4.2 的 P1-1 ~ P1-3：无 CI / lint、依赖只写下界、
-前端装了 `playwright` 却没有测试运行器。**全量后端测试目前靠人记得跑**
-（约 3 分钟），CI 建立后由它自动产出测试基线并更新 `docs/FACTS.md` §2。
+`docs/HEALTH_CHECK.md` §4.2 的 P1-1 ~ P1-3 已全部落地：
 
-### 1.3 结构、安全与清理（批次三 / 四）
+- **CI**：`.github/workflows/ci.yml`，PR / push 到 `master` 自动跑五项检查（后端全量测试、前后端契约一致性、前端类型检查、前端 Web 构建、前端自动化测试），任一失败即阻断合并；
+- **依赖锁定**：`backend/requirements.txt`（运行时依赖全部 `==`）、`backend/constraints.txt`（传依赖）、
+  `frontend/pnpm-lock.yaml`；CI 用 `pnpm install --frozen-lockfile`；
+- **前端测试运行器**：`frontend/tests/`（Playwright，离线确定性 mock），`pnpm test` 已接入 CI。
 
-超大模块拆分、令牌可撤销、Agent 插件执行边界、Electron 渲染进程加固，
-以及 `.dsh-kanban.json` 归档、截图引用、写死本机路径清理等 P2 项，
+本机一次全绿实跑见 `docs/evidence/gates-2026-11-11.txt`；v1.0.18 发版前又整跑一遍，
+输出见 `docs/evidence/release-v1.0.18-build.txt` §3。
+
+### 1.3 结构、安全与清理（批次三 / 四，**已闭环**）
+
+`kbs` 路由按职责拆分、签名令牌可撤销、个人 Agent 插件执行边界收紧、Electron 渲染进程
+加固（CSP / `sandbox` / 更新源 HTTPS 校验）、`.dsh-kanban.json` 与历史截图归档、
+写死开发机路径清理等 P1-8 / P2 项均已完成，逐条变更见 `CHANGELOG.md` 的 `[1.0.18]` 一节；
 完整清单与验收标准见 `docs/HEALTH_CHECK.md` §4.2、§4.3。
 原始 `HANDOFF.md` 末尾「仍未完成」4 项（Wiki 版本历史正文、历史消息字段、
 模型 `params` 提示、检索调试保存实验）随历史快照一并归档，仍可在
@@ -93,6 +101,7 @@ PYTHONIOENCODING=utf-8 python backend/scripts/inspect_chunks.py
 | `docs/results/` | 第一波实验原始数据、汇总表、数据字典与复现命令 |
 | `docs/evidence/pytest-baseline.txt` | 测试基线一次真实运行的完整 stdout |
 | `docs/evidence/` 下另两份 | `gates-2026-11-11.txt`：五项门禁本地实跑记录；`wrk-count-2026-11-11.txt`：`WRK_*` 可调项条数核准与旧数字扫查 |
+| `docs/RELEASE_NOTES_v1.0.18.md` / `docs/evidence/release-v1.0.18-build.txt` | v1.0.18 交付说明（Release 正文 + 上传命令）/ 构建记录（产物大小、`latest.yml`、sha512、门禁） |
 | `docs/AGENT_PLUGINS.md` / `docs/UPDATE.md` | 个人 Agent 插件规范 / 自动更新发版流程 |
 
 ---

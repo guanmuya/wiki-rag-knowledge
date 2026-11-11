@@ -8,7 +8,7 @@
 | 项 | 值 |
 | --- | --- |
 | 拍摄时间 | 2026-11-11 |
-| 对应版本 | `1.0.17`（`backend/app/main.py` 的 `VERSION`、`frontend/package.json` 的 `version`） |
+| 对应版本 | 拍摄于 `1.0.17`（`backend/app/main.py` 的 `VERSION`、`frontend/package.json` 的 `version`）；`1.0.18` 只递增版本号与打包，**界面零改动**，这批图仍是当前界面 |
 | 数据 | `backend/scripts/seed_demo.py` 灌的 3 个演示知识库（人事制度库 / 客户支持库 / 产品与销售库） |
 | 环境 | 本机开发实例：`uvicorn` 后端 + Vite 前端（`127.0.0.1`），Chromium 无头浏览器 |
 | 视口 | 1440×900，`zh-CN`，浅色主题，浏览器缩放 100% |

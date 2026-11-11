@@ -10,7 +10,13 @@
 
 ---
 
-## 未发布（v1.0.17 版本号之后合入 master 的改动）
+## [1.0.18] - 2026-11-11
+
+> 本版是**发版版**：只递增版本号（`backend/app/main.py` 的 `VERSION`、`frontend/package.json`
+> 的 `version`、`docs/FACTS.md` §1 三处同步为 `1.0.18`）并产出 Windows 安装包，不改业务逻辑。
+> 下面的改动区间是 `v1.0.17` 之后合入 `master` 的部分，用 `git log v1.0.17..HEAD` 可核对。
+> `v1.0.18` tag 由平台在合并落地后打在 `master` 的合并提交上，本节不预设 tag 存在；
+> 测试计数不在本文件复述，见 `docs/FACTS.md` §2。
 
 ### 新增
 
@@ -40,13 +46,29 @@
 - **补建版本 tag**：`v1.0.17`（轻量 tag，与 `v1.0.0`～`v1.0.16` 同口径，指向 master tip `d5ffe20`）。
   下面 `[1.0.17]` 一节原先的注记称该版本没有对应 tag，补 tag 后已不成立，本轮一并订正
 
+### 发布
+
+- 版本号递增到 `1.0.18`（三处口径同步），`docs/FACTS.md` §1 的「应用版本」随之更新；
+  `README.md`、`docs/HANDOFF.md`、`docs/THESIS.md` 里写当前版本的那几句同步改数字（历史快照、
+  实验结果与截图记录**不动**）
+- `docs/HANDOFF.md` 的「已知遗留」按现状订正：批次二的工程化门禁（CI / 依赖锁定 / 前端测试）与
+  批次三、四的结构安全项都已闭环，不再写成「尚未开工」
+- 产出 Windows NSIS 安装包 `wiki-rag-knowledge-1.0.18-x64-setup.exe` 与更新源三件套
+  （`latest.yml` + 安装包 + `.blockmap`）；构建环境、产物大小、`latest.yml` 原文、安装包 sha512
+  与五项门禁的实跑输出见 `docs/evidence/release-v1.0.18-build.txt`（后端门禁一次全绿，
+  第二次实跑撞上 `test_agent_runtime` 的 15 秒等待与本机慢 DNS，该文件 §3.1 有根因与判定）
+- 交付说明（Release 正文草稿 + 上传命令）见 [`docs/RELEASE_NOTES_v1.0.18.md`](docs/RELEASE_NOTES_v1.0.18.md)：
+  Release 资产在 `master` 合并、tag `v1.0.18` 打上之后再上传，本版不预先建 tag
+- 安装包**没有代码签名证书**，Windows 首次安装会弹 SmartScreen「未知发布者」；
+  风险与后续步骤仍是 `docs/UPDATE.md` §6 的书面记录，未变
+
 ---
 
 ## [1.0.17] - 2026-11-07
 
 > 本次只 bump 版本号并合并功能分支。`v1.0.17` 是轻量 tag（与 `v1.0.0`～`v1.0.16` 同口径，无附注对象），
 > 指向创建时的 master tip `d5ffe20`：用 `git log v1.0.16..v1.0.17` 可核对本版改动；
-> 同一条区间也包含补 tag 之前已合入 master、记在上文「未发布」的那部分内容（tag 打在 tip 上，两节共用同一区间）。
+> 同一条区间也包含补 tag 之前已合入 master、记在上文 `[1.0.18]` 一节的那部分内容（tag 打在 tip 上，两节共用同一区间）。
 
 ### 新增
 
