@@ -26,9 +26,8 @@ concurrency:
 jobs:
   ci:
     name: 后端测试 + 前端类型检查、构建与自动化测试
-    # 本项目是 Windows 桌面程序，测试基线 638 passed, 1 skipped 在
-    # Windows Server 2022 / Python 3.13.17（setup-python 解析到的 3.13 最新补丁版）实测；
-    # 用 windows-latest 保持与本地一致的运行环境。基线数字的事实源是 docs/FACTS.md §2。
+    # 本项目是 Windows 桌面程序，测试基线 673 passed, 1 skipped 由
+    # windows-latest 与本地一致的依赖集合产出；基线数字的事实源是 docs/FACTS.md §2。
     runs-on: windows-latest
     timeout-minutes: 30
     env:
