@@ -5,16 +5,24 @@
 
 ## 1. 它是什么
 
-应用里新增了一个「个人 Agent」工作台：左侧是会话，顶部可以随时切换 **Agent 核心**，
+应用里有一个「个人 Agent」工作台：左侧是会话，顶部可以随时切换 **Agent 核心**，
 每个核心都可以使用你在「模型设置」里已经配置好的模型。
 
-- **知识库助手**（内置）：直接走现有 RAG 链路，检索知识库、带引用回答；
-  没有配置模型时仍可用抽取式回答。
 - **CLI 核心**（内置 + 插件）：Claude Code、Codex CLI、Qwen Code、Aider、Goose
   等本机命令行 Agent。应用负责找到可执行文件、把当前会话选中的模型注入成该 CLI
   认识的环境变量，然后启动它并把输出流回界面。
 - **核心可随时更换**：会话是「每轮无状态」的，切换核心不会丢历史；下一轮消息
   就由新核心执行，聊天里会留一条「已切换核心」的系统提示。
+- **不检索知识库**：知识库问答在「智能问答」页（那边有完整的检索、引用与拒答
+  链路）。个人 Agent 只做「本机助手」这一件事，所以没有知识库核心、也不带
+  `kb_ids`；两者各司其职，不重复实现。
+
+提示词是通用个人助手定位（回答用户问题、必要时用本机工具），并明确要求
+**直接回答问题**：不先让用户确认任务类型，不复述自己收到的设定，不罗列任务清单。
+这条规则来自一次真实反馈——模型把用户本机 Codex 的人格设定当成了本应用的设定，
+两轮都没回答用户问的市场规模。事后查清是两个原因叠在一起：① Codex 直接用了用户
+`~/.codex`（人设被当成本应用的设定，见 §2.1）；② 提示词是多行的，而 `codex exec`
+只取第一行的位置参数，用户的问题根本没送到模型（见 §3.3）。两处都已修。
 
 这和 magpie 的关系：
 
@@ -23,15 +31,14 @@
 | Agents 页：检测已安装的 Agent、为它选模型 | 「核心」注册表 + `shutil.which` 探测 + 模型选择器 |
 | 本地 gateway：所有 Agent 共用一个模型入口 | 不做网关，直接把供应商的 base_url / key / model 按协议注入 CLI 环境变量 |
 | 插件（npm 包，provider / middleware） | JSON 清单插件：只描述「怎么启动一个 CLI 核心」，不加载第三方代码 |
-| 改各 Agent 的配置文件 | 不落盘改配置；只在本轮子进程的环境变量里注入，退出即失效 |
+| 改各 Agent 的配置文件 | 只在本轮子进程的环境变量里注入，退出即失效；唯一的例外是 Codex 的应用独占配置目录（见 §2.1，它是「隔离」而不是「改用户配置」） |
 
 ## 2. 内置核心
 
 | id | 名称 | 协议 | 探测命令 | 注入的环境变量 |
 | --- | --- | --- | --- | --- |
-| `kb` | 知识库助手 | 应用内 | — | — |
 | `claude-code` | Claude Code | `anthropic` | `claude` | `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_MODEL` |
-| `codex` | Codex CLI | `openai` / `openai-responses` | `codex` | `OPENAI_BASE_URL`、`OPENAI_API_KEY` |
+| `codex` | Codex CLI | `openai` / `openai-responses` | `codex` | `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`CODEX_HOME`（应用独占，见 §2.1） |
 | `qwen-code` | Qwen Code | `openai` | `qwen` | `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`OPENAI_MODEL` |
 | `aider` | Aider | `openai` | `aider` | `OPENAI_API_BASE`、`OPENAI_API_KEY` |
 | `goose` | Goose | `openai` | `goose` | `GOOSE_PROVIDER=openai`、`GOOSE_MODEL`、`OPENAI_BASE_URL`、`OPENAI_API_KEY` |
@@ -40,9 +47,51 @@
 协议不兼容的模型不会出现在该核心的模型列表里（例如 Claude Code 只列
 Anthropic Messages 协议的供应商）。
 
-> CLI 自己的登录态、配置文件、权限策略仍然生效。应用只注入「这一轮用哪个模型」，
-> 不会替 CLI 打开 `--dangerously-skip-permissions` 之类的开关；需要工具权限时，
-> 请在插件清单的 `run_args` 里按该 CLI 的文档自行配置，并清楚这样做的风险。
+> 除 Codex 之外，CLI 自己的登录态、配置文件、权限策略仍然生效。应用只注入
+> 「这一轮用哪个模型」，不会替 CLI 打开 `--dangerously-skip-permissions` 之类的开关；
+> 需要工具权限时，请在插件清单的 `run_args` 里按该 CLI 的文档自行配置，并清楚风险。
+
+### 2.1 Codex 的配置隔离（`CODEX_HOME`）
+
+Codex CLI 默认从 `~/.codex` 读**用户自己的** `AGENTS.md`、`config.toml`、hooks、
+memories、人格设定、登录态和历史会话。个人 Agent 直接用那个目录，就会把用户长期
+使用的开发规范当成本应用的系统提示词（§1 提到的那次答非所问就是这么来的）。所以
+Codex 核心跑在应用自己的配置目录里：
+
+| 项 | 值 / 行为 |
+| --- | --- |
+| 目录 | `<数据目录>/agent_codex_home`（默认 `<仓库>/data/agent_codex_home`），持久、应用独占，**所有会话共用一份**。里面除了应用写的 `config.toml` 和 `skills/`，其余是 Codex 自己写的运行状态（`sessions/`、`logs_*.sqlite` 等）——它们都留在这个目录里，既不进用户 `~/.codex`，也不进仓库（`data/` 已被 gitignore） |
+| `config.toml` | 应用生成，只有说明性注释，没有任何个性化配置；被手改过会在下次执行前恢复 |
+| 模型与供应商 | **不落盘**，每轮仍用 `-c model_provider=openai -c openai_base_url=…` 和 `OPENAI_API_KEY` 注入，换模型/换供应商照旧 |
+| 用户 `~/.codex` | 不读取、不改写：`AGENTS.md`、`config.toml`、`hooks`、`memories`、`auth.json`、`sessions` 都不参与 |
+| 技能 | 用户 `~/.codex/skills/*`（含 `SKILL.md` 的技能目录，跳过 `.system`）以**目录联接/符号链接**挂到 `<home>/skills/<名字>`，只读复用；链接不可用时复制到应用目录（仍然不写用户目录）。登记结果写在 `<home>/skills/.wrk-app-skills.json`，源里删掉的技能会同步撤掉 |
+| 探测 | 版本探测（`codex --version`）也带上同一个 `CODEX_HOME`，避免探测过程往用户 `~/.codex` 里写 `installation_id`、`.sandbox` 之类的东西 |
+| 失败 | 隔离目录建不出来时直接报错，**不会**偷偷退回用户 `~/.codex`——那样等于把人设又带回来 |
+
+为什么不用 `[[skills.config]]`：在 codex-cli 0.167.0 上实测，`[[skills.config]]` 里指向
+`CODEX_HOME` 之外的绝对路径**不会**出现在技能目录里（`codex exec` 发给模型的请求体里
+看不到该技能）；而 `<CODEX_HOME>/skills/` 是技能根，链接进去的技能会进
+「Available skills」。技能内容不进仓库，也不复制进用户目录。
+
+> Codex 自身的「宿主技能发现」仍会读 `~/.agents/skills`（那是另一套共享技能库）。
+> 这属于「技能复用」，与提示词/人设无关；如果不想让它出现，请在那个目录里清理技能。
+
+**本机实测**（Windows + codex-cli 0.167.0，2026-11-11）。做法：用应用自己的
+`codex_home.prepare()` + `plugins.build_env()` 起真实的 `codex exec`，把它的 base_url
+指向一个只记录请求体的本地假 API（不消耗真实密钥），再比对模型实际收到的内容：
+
+| 指标 | 隔离后（`<数据目录>/agent_codex_home`） | 不隔离（`CODEX_HOME` 指向放了真实 `AGENTS.md` 的目录） |
+| --- | --- | --- |
+| 用户 `~/.codex/AGENTS.md` 的人格设定（探针串「御主」） | **不出现** | 出现（额外 11,371 字符的 user 消息） |
+| 应用提示词 | 288 字符、单行，含用户提问 | 同 |
+| 用户技能 `wf-verify`（只存在于 `~/.codex/skills`） | 出现在可用技能列表（`r0/wf-verify/SKILL.md`） | 不出现 |
+| `~/.agents/skills` 的共享技能 `archify` | 出现 | 出现 |
+
+同一轮执行前后，`~/.codex` 的 `AGENTS.md`、`config.toml`、`auth.json` 与 4 个 SQLite
+库的修改时间全部未变；两次完整探测前后，`skills/` 下 13,183 个文件也一个没动。
+**本机无法验证的**：真实供应商的回答质量（没有可用密钥）、macOS/Linux 上的符号链接
+路径（只验证了 Windows 的目录联接与「链接失败退回复制」）、其它 CLI 核心的刷新行为。
+
 
 ## 3. 写一个插件
 
@@ -80,7 +129,7 @@ Anthropic Messages 协议的供应商）。
 | `id` | 是 | 小写字母/数字/`.`/`_`/`-`，以字母开头，≤64 字符；不能与内置核心重名 |
 | `name` | 是 | 界面显示名，≤80 字符 |
 | `description` | 否 | 卡片上的一句话说明 |
-| `kind` | 是 | 外部插件只能是 `cli`；`kb` 是内置实现，不允许插件声明 |
+| `kind` | 是 | 只能是 `cli`。个人 Agent 不再内置知识库核心，`kb` 是保留 id，插件也不能占用 |
 | `protocols` | 是 | `openai` / `openai-responses` / `anthropic` 的非空子集 |
 | `bins` | 是 | 按顺序探测的**命令名**，只能写 PATH 中可查找的名字（如 `qwen`、`python`）；不接受绝对路径、相对路径、`..`、空格或 shell 元字符；解析结果若是 `.cmd/.bat` 等批处理脚本或命令解释器会被拒绝 |
 | `version_args` | 否 | 探测版本用的参数，默认 `["--version"]`；失败不影响可用性 |
@@ -110,12 +159,21 @@ Anthropic Messages 协议的供应商）。
 | `{api_key}` | 供应商密钥；没有配置时是 `local`。**只允许出现在 `env` 模板里**，写进 `run_args` 的清单会被直接拒绝 |
 | `{workspace}` | 会话工作目录的绝对路径（一定在 `AGENT_WORKSPACE_DIR` 内） |
 | `{session_id}` | 会话 id |
-| `{app_name}` | 应用名 |
+| `{app_name}` | 应用内的界面名（当前是「个人 Agent」） |
+
+> `isolated_home` 是内置 Codex 核心的字段（见 §2.1），清单里写它会被拒绝——
+> 外部插件不允许给自己要一份应用独占的配置目录。
 
 参数和环境变量都会做占位符替换；不会经过 shell，`run_args` 是数组，不拼接字符串。
 应用不再为 `.cmd/.bat` 包一层 `cmd.exe /c`（那样参数会被二次解析，`& | ^ %VAR%` 可注入命令），
 `Popen(shell=False)` 由 Python 自己转义参数。命令行摘要、运行日志、正文与错误信息会统一
 把密钥替换成 `<密钥>`、把完整提示词替换成 `<提示词>`。
+
+> **`{prompt}` 一定是单行。** `codex exec [PROMPT]` 只把位置参数的第一行当成任务：
+> 传多行提示词时，后面的工作目录、对话记录和用户提问会被静默丢掉，模型只看到第一行，
+> 于是答非所问（codex-cli 0.167.0 本机实测，请求体里只剩第一行）。应用因此在拼提示词
+> 时就把换行压成空格，插件不需要也不应该自己处理换行；不要用「多行提示词」来表达结构，
+> 用一句话把要求和用户问题都说清楚。
 
 ### 3.4 JSONL 输出
 
@@ -188,6 +246,21 @@ Anthropic Messages 协议的供应商）。
 - 应用重启时，所有 `pending` 的 Agent 消息会收尾为 `failed`，不会永远转圈。
 - 事件只保存在内存里，最终结果落在 `agent_messages`；历史会话刷新后仍可读。
 
+### 5.1 历史上的「知识库助手」会话
+
+早期版本内置过 `kb` 核心，那些会话的 `core_id` 仍是 `kb`，消息也还在库里。现在的处理：
+
+- **还能打开、还能读**：会话列表里照常出现，标题旁标注「知识库助手（已下线）」，
+  历史消息完整可读；会话载荷里 `core_available=false`、`core_legacy=true`。
+- **不能再用它提问**：非历史的 `core_id=kb` 请求返回 400，并指路「智能问答」页；
+  历史 kb 会话发消息同样 400，提示先换核心。
+- **可以改标题、可以换核心**：换到任意 CLI 核心后照常继续对话，聊天里会留一条
+  「已切换 Agent 核心：知识库助手（已下线） → …」的系统消息；换核心时如果没指定
+  模型，会自动挑一条与新核心协议兼容的。
+- **只读的数据不迁移**：`agent_sessions.kb_ids` 列留在库里（历史值仍可查），但应用
+  不再读它、也不写它，接口不再返回 `kb_ids`。删列会让老库升级时多一次不必要的迁移，
+  所以保留。
+
 ## 6. 安全边界
 
 - 入口、核心管理、插件启停都要求管理员；普通员工调用返回 403。
@@ -212,14 +285,14 @@ Anthropic Messages 协议的供应商）。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/agent/cores` | 核心列表 + 探测结果 + 插件目录 + 清单错误 |
+| GET | `/agent/cores` | 核心列表 + 探测结果 + 插件目录 + 清单错误；`isolated_home=codex` 表示该核心用应用独占的配置目录 |
 | GET | `/agent/models?core_id=` | 模型列表，`compatible` 标记协议是否匹配 |
 | POST | `/agent/plugins/rescan` | 清探测缓存并重新扫描插件目录 |
-| PATCH | `/agent/plugins/{id}` | `{enabled}`：停用/启用核心 |
+| PATCH | `/agent/plugins/{id}` | `{enabled}`：停用/启用核心（`kb` 返回 400 并指路「智能问答」） |
 | GET | `/agent/sessions` | 当前管理员的 Agent 会话 |
-| POST | `/agent/sessions` | `{title,core_id,model_config_id,kb_ids,workspace}` |
-| GET | `/agent/sessions/{id}` | 会话详情 + 消息 + 核心信息 |
-| PATCH | `/agent/sessions/{id}` | 改标题/核心/模型/知识库/工作目录 |
+| POST | `/agent/sessions` | `{title,core_id,model_config_id,workspace}`；不再接受 `kb_ids` |
+| GET | `/agent/sessions/{id}` | 会话详情 + 消息 + 核心信息 + `core_available`/`core_legacy` |
+| PATCH | `/agent/sessions/{id}` | 改标题/核心/模型/工作目录（不再有知识库） |
 | DELETE | `/agent/sessions/{id}` | 删除会话（执行中返回 409） |
 | POST | `/agent/sessions/{id}/messages` | `{content}` → `{run_id, user_message, assistant_message}` |
 | GET | `/agent/runs/{id}/events?after=` | 轮询事件；`status` 为 `running/ok/failed/stopped` |
@@ -236,6 +309,11 @@ Anthropic Messages 协议的供应商）。
 | `WRK_AGENT_HISTORY_MESSAGES` | `12` | 回放给 CLI 的历史消息条数 |
 | `WRK_AGENT_HISTORY_CHARS` | `1200` | 单条历史消息的最大字符数 |
 
+Codex 的隔离配置目录**不新增环境变量**：它固定是 `<数据目录>/agent_codex_home`，
+跟着 `WRK_DATA_DIR` 走（换数据目录就换一份隔离目录，里面只有应用自己写的配置）。
+给 Codex 子进程设置的 `CODEX_HOME` 是内部注入值，不需要你配置；调用进程里已有的
+`CODEX_HOME` 也会被它覆盖。
+
 ## 9. 排障
 
 | 现象 | 原因与处理 |
@@ -243,9 +321,15 @@ Anthropic Messages 协议的供应商）。
 | 核心显示「未安装」 | `bins` 里的命令不在 PATH；装好后点「重新扫描」 |
 | 模型列表为空 | 没有与该核心协议兼容的已启用 LLM；去「模型设置」添加对应协议的供应商 |
 | 启动后立刻失败 | 看消息里的 stderr；常见是 CLI 版本参数不兼容、需要登录、或工作目录不存在 |
+| 回复里还带着你本机 Codex 的人格设定（「御主」之类） | 这一轮没有走隔离目录，或 `CODEX_HOME` 没生效：先点「重新扫描」看 Codex 是否显示为可用，再查 `<数据目录>/agent_codex_home/config.toml` 是否存在、日志里有没有「使用应用自己的配置目录」那行 |
+| Codex 说技能不存在 | 用户 `~/.codex/skills/<名字>/SKILL.md` 缺失或缺少 YAML frontmatter（`---` 包裹的 `name`/`description`）；修好后下一轮执行会自动同步（第一次执行时会建链接） |
+| 技能目录里出现奇怪目录 | `<home>/skills/.system` 是 Codex 自己写的，应用不同步也不清理它；`.wrk-app-skills.json` 是应用的登记文件 |
+| 「隔离配置目录准备失败」 | 数据目录不可写，或 `<数据目录>/agent_codex_home` 被同名文件占了；清掉它并确认数据目录可写后重试（应用不会退回用户 `~/.codex`） |
+| 历史会话提示「知识库助手已下线」 | 见 §5.1：换成任意 CLI 核心即可继续对话，历史消息不会丢 |
 | 输出乱码 | CLI 不是 UTF-8 输出；在清单 `env` 里加 `PYTHONIOENCODING` 或该 CLI 的编码开关 |
 | 插件没出现 | 看「核心与插件」顶部的清单错误；常见是 JSON 语法、id 重复、缺 `{prompt}` |
 | 清单里写了绝对路径，插件没出现 | `bins` 只能写 PATH 中的命令名；改成命令名，或把可执行文件所在目录加进 PATH |
 | 装了 CLI 仍显示「未安装」 | 若 PATH 解析到 `.cmd/.bat` 批处理脚本会被安全边界拒绝；改用该 CLI 的原生可执行文件（`.exe`），或安装提供原生二进制的版本 |
 | 提示「env.xxx 不在允许的白名单键内」 | 把该环境变量登记到 `ALLOWED_ENV_KEYS`，或改用白名单里已有的键 |
 | 提示「工作目录必须位于 Agent 工作区内」 | 把项目目录放到 `WRK_AGENT_WORKSPACE` 下，或把 `WRK_AGENT_WORKSPACE` 指到包含它的父目录后重启 |
+| 清单里写了 `isolated_home`，插件被拒 | 该字段只给内置 Codex 核心用；外部插件删除这一项即可 |

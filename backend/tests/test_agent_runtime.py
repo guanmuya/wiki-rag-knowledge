@@ -470,7 +470,7 @@ def test_cli_prompt_is_a_generic_direct_answering_assistant():
         question="2026 年中国企业级 AI Agent 市场有多大？",
         history=[
             {"role": "user", "content": "先聊聊市场"},
-            {"role": "assistant", "content": "你想从哪个角度看？"},
+            {"role": "assistant", "content": "你想从哪个角度看？\n另外要哪个地区？"},
             {"role": "user", "content": "2026 年中国企业级 AI Agent 市场有多大？"},
         ],
         workspace=str(config.AGENT_WORKSPACE_DIR),
@@ -485,6 +485,41 @@ def test_cli_prompt_is_a_generic_direct_answering_assistant():
     assert "助手：你想从哪个角度看？" in prompt
     # 本轮提问只出现一次：历史里最后一条是本轮提问，应被剔掉后再单列。
     assert prompt.count("2026 年中国企业级 AI Agent 市场有多大？") == 1
+    # 必须是单行：codex exec 只取位置参数第一行，多行会把后面的问题丢掉
+    # （codex-cli 0.167.0 本机实测），那样模型只会看到一个开场白。
+    assert "\n" not in prompt
+    assert "\r" not in prompt
+    assert prompt.endswith("请直接回答用户最新的问题：")
+    assert len(prompt) <= 20000
+
+
+def test_cli_gets_prompt_as_a_single_argument_line(app_client, admin_headers,
+                                                   db_session, cli_plugin):
+    """运行期真实传给 CLI 的提示词必须是没有换行的单行参数。
+
+    codex exec 只取位置参数第一行（本机 0.167.0 实测），多行会把用户提问丢掉。
+    这条用例守的是 `_run_cli` 实际拼出来的那个参数，而不只是提示词构造函数。
+    """
+    model_id = _make_model(db_session)
+    _write_fake_agent(cli_plugin, body=(
+        "import sys\n"
+        "prompt = sys.argv[-1]\n"
+        "print('NL=%d' % prompt.count(chr(10)))\n"
+        "print('HASQ=%d' % (1 if '市场有多大' in prompt else 0))\n"
+    ))
+    plugins.clear_detection_cache()
+
+    created = app_client.post("/api/agent/sessions", headers=admin_headers, json={
+        "core_id": "fake-cli", "model_config_id": model_id,
+    })
+    sent = app_client.post(
+        f"/api/agent/sessions/{created.json()['id']}/messages",
+        headers=admin_headers, json={"content": "2026 年中国企业级 AI Agent 市场有多大？"})
+    result = _wait_run(app_client, admin_headers, sent.json()["run_id"])
+    assert result["status"] == "ok", result
+    content = result["message"]["content"]
+    assert "NL=0" in content, content
+    assert "HASQ=1" in content, content
 
 
 def test_api_key_never_appears_in_command_line_or_events(

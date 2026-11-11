@@ -382,8 +382,19 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
+def _one_line(text: str) -> str:
+    """把提示词压成一行——这是能真正把问题送到模型的前提。
+
+    `codex exec [PROMPT]` 只认位置参数的第一行（codex-cli 0.167.0 实测：把多行
+    提示词传进去，落库的 user 消息只剩第一行，后面的工作目录、对话记录和用户提问
+    全部被静默丢掉，模型的回答自然牛头不对马嘴）。其它 CLI 读单行也没问题，
+    所以统一压成一行，而不是给每个核心各写一套传参方式。
+    """
+    return " ".join(line.strip() for line in text.splitlines() if line.strip())
+
+
 def _build_cli_prompt(ctx: RunContext) -> str:
-    """拼这一轮给 CLI 的提示词。
+    """拼这一轮给 CLI 的提示词（单行，见 `_one_line`）。
 
     定位写成通用的本地个人助手，不再提知识库/文档整理：这个页面不检索知识库
     （那是「智能问答」页），套上知识库语境只会让它反问「要处理哪个知识库」。
@@ -405,7 +416,6 @@ def _build_cli_prompt(ctx: RunContext) -> str:
             and transcript[-1]["content"] == ctx.question:
         transcript = transcript[:-1]
     if transcript:
-        lines.append("")
         lines.append("对话记录：")
         for item in transcript[-config.AGENT_HISTORY_MESSAGES:]:
             text = (item["content"] or "").strip()
@@ -416,8 +426,9 @@ def _build_cli_prompt(ctx: RunContext) -> str:
             role = {"user": "用户", "assistant": "助手", "system": "系统"}.get(
                 item["role"], item["role"])
             lines.append(f"{role}：{text}")
-    lines += ["", f"用户：{ctx.question}", "", "请直接回答用户最新的问题："]
-    return "\n".join(lines)[:20000]
+    lines.append(f"用户：{ctx.question}")
+    lines.append("请直接回答用户最新的问题：")
+    return _one_line("\n".join(lines))[:20000]
 
 
 def _clean_env(plugin: plugins.AgentPlugin, binding: dict,

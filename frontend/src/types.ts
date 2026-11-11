@@ -993,6 +993,6 @@ export interface AgentSessionPayload {
   title?: string
   core_id?: string
   model_config_id?: number | null
-  kb_ids?: number[]
+  /** 个人 Agent 不检索知识库，后端已不接受 `kb_ids`；知识库问答在「智能问答」页 */
   workspace?: string
 }
