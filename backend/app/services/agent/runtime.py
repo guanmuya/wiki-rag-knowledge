@@ -458,6 +458,18 @@ def _clean_env(plugin: plugins.AgentPlugin, binding: dict,
     return plugins.build_env(plugin, binding, workspace, session_id, prompt)
 
 
+def _safe_workspace(value: str) -> str:
+    """运行前兜底：旧会话里可能存着收敛之前写入的越界工作目录。
+
+    路由器在建会话/改会话时已用 `plugins.resolve_workspace` 拦过一次；这里
+    再校验一次，避免直接改库或进程重启后的历史会话绕过边界。
+    """
+    try:
+        return plugins.resolve_workspace(value)
+    except plugins.PluginError as exc:
+        raise AgentRunError(str(exc)) from exc
+
+
 def _pump(stream, output: "queue.Queue[tuple[str, str | None]]", kind: str) -> None:
     try:
         for line in iter(stream.readline, ""):
@@ -526,19 +538,23 @@ def _run_cli(state: RunState, ctx: RunContext) -> tuple[str, list, dict]:
     if not binding:
         raise AgentRunError("这个核心需要先选择模型，请点右上角的模型选择器")
 
-    workspace = Path(ctx.workspace)
+    workspace_str = _safe_workspace(ctx.workspace)
+    workspace = Path(workspace_str)
     if not workspace.is_dir():
         raise AgentRunError(f"工作目录不存在：{workspace}")
 
+    # 统一脱敏：密钥只经 env 模板注入，绝不进命令行；命令摘要、运行日志、
+    # 正文与错误信息共用同一份替换（P1-7）。
+    secrets = plugins.secret_values(binding)
     prompt = _build_cli_prompt(ctx)
-    args = plugins.substitute_args(plugin, binding, str(workspace), ctx.session_id, prompt)
+    args = plugins.substitute_args(plugin, binding, workspace_str, ctx.session_id, prompt)
     command = [detection["path"], *args]
-    env = _clean_env(plugin, binding, str(workspace), ctx.session_id, prompt)
+    env = _clean_env(plugin, binding, workspace_str, ctx.session_id, prompt)
     state.emit("status", text=f"正在启动 {plugin.name}…")
-    state.emit("log", text=f"$ {plugins.redacted_command(command, prompt)}")
+    state.emit("log", text=f"$ {plugins.redacted_command(command, prompt, secrets)}")
 
     kwargs: dict[str, Any] = dict(
-        cwd=str(workspace), env=env, stdin=subprocess.DEVNULL,
+        cwd=workspace_str, env=env, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace", bufsize=1,
     )
@@ -549,7 +565,9 @@ def _run_cli(state: RunState, ctx: RunContext) -> tuple[str, list, dict]:
     try:
         proc = subprocess.Popen(command, **kwargs)
     except OSError as exc:
-        raise AgentRunError(f"启动 {plugin.name} 失败：{exc}") from exc
+        raise AgentRunError(
+            f"启动 {plugin.name} 失败：{plugins.redact_text(str(exc), secrets=secrets)}"
+        ) from exc
 
     state.terminate = lambda: _terminate_process(proc)
     output: "queue.Queue[tuple[str, str | None]]" = queue.Queue()
@@ -582,7 +600,7 @@ def _run_cli(state: RunState, ctx: RunContext) -> tuple[str, list, dict]:
         if line is None:
             done_streams += 1
             continue
-        clean = _strip_ansi(line.rstrip("\r\n"))
+        clean = plugins.redact_text(_strip_ansi(line.rstrip("\r\n")), secrets=secrets)
         if not clean:
             continue
         if kind == "stderr":
@@ -629,7 +647,7 @@ def _run_cli(state: RunState, ctx: RunContext) -> tuple[str, list, dict]:
         "model": ctx.model_label,
         "protocol": binding["protocol"],
         "exit_code": code,
-        "command": plugins.redacted_command(command, prompt),
-        "workspace": str(workspace),
+        "command": plugins.redacted_command(command, prompt, secrets),
+        "workspace": workspace_str,
     }
     return content, [], meta

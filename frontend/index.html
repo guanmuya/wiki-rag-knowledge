@@ -2,6 +2,21 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <!--
+      P1-9 内容安全策略：渲染进程纵深防御。
+      - script-src 'self'：只执行本地打包的脚本，挡住 dangerouslySetInnerHTML
+        里被注入的 <script>（Markdown.tsx 仍先用 DOMPurify 净化，两道防线并存）；
+      - connect-src 只放行本机回环：桌面版后端 sidecar 是 http://127.0.0.1:<动态端口>，
+        开发模式另需 Vite HMR 的 ws://localhost:*；不放行任意外网，避免数据外带；
+      - img-src 允许 data:/blob: 与 https: 图片，保证 Markdown 里的图示与外链图片正常显示；
+      - style-src 'unsafe-inline'：DOMPurify 允许 style 属性、React 也用内联样式；
+      - object-src / frame-src 'none'、base-uri 'none'：堵住插件与 <base> 劫持。
+      打包版用 file:// 加载 dist/index.html，'self' 在 Electron 下匹配本地文件源。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; object-src 'none'; base-uri 'none'; frame-src 'none'"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f5f7fa" />
     <link

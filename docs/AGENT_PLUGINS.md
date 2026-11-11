@@ -82,14 +82,23 @@ Anthropic Messages 协议的供应商）。
 | `description` | 否 | 卡片上的一句话说明 |
 | `kind` | 是 | 外部插件只能是 `cli`；`kb` 是内置实现，不允许插件声明 |
 | `protocols` | 是 | `openai` / `openai-responses` / `anthropic` 的非空子集 |
-| `bins` | 是 | 按顺序探测的可执行文件名（也允许绝对路径） |
+| `bins` | 是 | 按顺序探测的**命令名**，只能写 PATH 中可查找的名字（如 `qwen`、`python`）；不接受绝对路径、相对路径、`..`、空格或 shell 元字符；解析结果若是 `.cmd/.bat` 等批处理脚本或命令解释器会被拒绝 |
 | `version_args` | 否 | 探测版本用的参数，默认 `["--version"]`；失败不影响可用性 |
-| `run_args` | 是 | 非交互执行参数，必须包含 `{prompt}` |
-| `env` | 否 | 注入子进程的环境变量模板，最多 32 项 |
+| `run_args` | 是 | 非交互执行参数，必须包含 `{prompt}`，不得包含 `{api_key}`，也不得把 `&`、`|`、`^`、`%VAR%` 这类 cmd 元字符/变量引用作为独立参数 |
+| `env` | 否 | 注入子进程的环境变量模板，最多 32 项；键必须在 `ALLOWED_ENV_KEYS` 白名单内，不能覆盖 `PATH`/`PYTHONPATH`/`NODE_OPTIONS` 等系统或代码加载变量 |
 | `output` | 否 | `text`（默认，逐行当正文）或 `jsonl`（逐行解析 JSON） |
 | `text_paths` | 否 | `output=jsonl` 时提取正文的点路径，如 `["item.text","message"]` |
 | `timeout_seconds` | 否 | 单轮硬超时，10..3600，默认 900；仍受全局 `WRK_AGENT_RUN_TIMEOUT` 限制 |
-| `requires_workspace` | 否 | 默认 `true`；CLI 在会话工作目录里启动 |
+| `requires_workspace` | 否 | 默认 `true`；CLI 在会话工作目录里启动（该目录必须落在 `AGENT_WORKSPACE_DIR` 内） |
+
+> **环境变量白名单（P1-7）**：清单 `env` 的键必须在这组允许键里，默认拒绝其余所有键：
+> `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_API_BASE`、`OPENAI_MODEL`、`OPENAI_ORG_ID`、
+> `OPENAI_ORGANIZATION`、`OPENAI_PROJECT_ID`、`ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、
+> `ANTHROPIC_BASE_URL`、`ANTHROPIC_MODEL`、`GOOSE_PROVIDER`、`GOOSE_MODEL`、
+> `NO_COLOR`、`FORCE_COLOR`、`TERM`、`LANG`、`LC_ALL`、`PYTHONIOENCODING`、`PYTHONUTF8`。
+> `PATH`、`PYTHONPATH`、`NODE_OPTIONS`、`LD_PRELOAD` 等能改变「加载哪段代码」的变量一律不接受；
+> 系统先保留自身的最小环境（PATH、TEMP、HOME 等），再叠加白名单模板，且系统变量不会被模板改写。
+> 需要新键时改 `backend/app/services/agent/plugins.py` 的 `ALLOWED_ENV_KEYS` 并补测试。
 
 ### 3.3 占位符
 
@@ -98,12 +107,15 @@ Anthropic Messages 协议的供应商）。
 | `{prompt}` | 拼好的提示词（系统说明 + 最近对话 + 本轮用户消息） |
 | `{model}` | 会话当前模型在供应商侧的 model id |
 | `{base_url}` | 按协议规范化后的供应商地址（OpenAI 补 `/v1`，Anthropic 去掉尾部 `/v1`） |
-| `{api_key}` | 供应商密钥；没有配置时是 `local` |
-| `{workspace}` | 会话工作目录的绝对路径 |
+| `{api_key}` | 供应商密钥；没有配置时是 `local`。**只允许出现在 `env` 模板里**，写进 `run_args` 的清单会被直接拒绝 |
+| `{workspace}` | 会话工作目录的绝对路径（一定在 `AGENT_WORKSPACE_DIR` 内） |
 | `{session_id}` | 会话 id |
 | `{app_name}` | 应用名 |
 
 参数和环境变量都会做占位符替换；不会经过 shell，`run_args` 是数组，不拼接字符串。
+应用不再为 `.cmd/.bat` 包一层 `cmd.exe /c`（那样参数会被二次解析，`& | ^ %VAR%` 可注入命令），
+`Popen(shell=False)` 由 Python 自己转义参数。命令行摘要、运行日志、正文与错误信息会统一
+把密钥替换成 `<密钥>`、把完整提示词替换成 `<提示词>`。
 
 ### 3.4 JSONL 输出
 
@@ -159,9 +171,10 @@ Anthropic Messages 协议的供应商）。
 2. 按供应商 `protocol` 生成 `base_url`：
    - `openai` / `openai-responses`：缺版本段时补 `/v1`（与 `services/llm._join` 一致）；
    - `anthropic`：去掉尾部 `/v1`（Claude Code 自己会拼 `/v1/messages`）；
-3. 解密供应商密钥，填入清单 `env` 模板；
+3. 解密供应商密钥，填入清单 `env` 模板（只允许白名单键）；
 4. 用最小环境变量集启动子进程（只保留 PATH、TEMP、HOME、APPDATA 等系统变量，
-   不继承调用进程里的其它密钥类变量）。
+   不继承调用进程里的其它密钥类变量，也不允许清单改写系统变量）；
+5. 命令行参数不含密钥，密钥只经 `env` 进入子进程；输出与日志统一脱敏。
 
 换模型不需要改插件；换供应商也不需要。只有协议不兼容时界面会提示换模型。
 
@@ -180,11 +193,17 @@ Anthropic Messages 协议的供应商）。
 - 入口、核心管理、插件启停都要求管理员；普通员工调用返回 403。
 - 插件是**声明式**的：应用不会 import 插件代码、不会执行 JS；只按清单启动
   你指定的可执行文件。
-- 子进程环境变量使用白名单，不把应用进程里的其它密钥带进去。
-- 密钥请放在 `env` 模板里，不要写进 `run_args`：命令行参数会出现在进程列表
-  和界面的「运行日志」命令摘要中。
-- CLI 能读写会话工作目录；默认目录是数据目录下的 `agent_workspace`，
-  可以在会话顶部改成别的项目目录。不要指到仓库根目录或系统目录。
+- **`bins` 只认 PATH 里的命令名**：清单写绝对路径、相对路径、`..` 或命令解释器会被拒绝；
+  解析结果若是 `.cmd/.bat` 等批处理脚本也会被拒绝（Windows 会把它们交给 `cmd.exe`
+  二次解析参数）。内置核心的探测命令由代码写死、参数固定，不受此限制。
+- 子进程环境变量使用**白名单**：只保留 PATH、TEMP、HOME 等系统变量，清单只能覆盖
+  `ALLOWED_ENV_KEYS` 里的键，`PATH`/`PYTHONPATH`/`NODE_OPTIONS` 等一律不接受。
+  版本探测子进程同样带这份最小环境，不继承后端全量环境。
+- **密钥不进命令行**：`run_args` 里出现 `{api_key}` 的清单会被直接拒绝；密钥只放进 `env`
+  模板。命令行摘要、运行日志、正文与错误信息统一脱敏成 `<密钥>` / `<提示词>`。
+- CLI 能读写会话工作目录；默认目录是数据目录下的 `agent_workspace`。**工作目录必须落在
+  `WRK_AGENT_WORKSPACE` 指向的目录内**（含其子目录），越界（含同前缀目录、`..`）返回 400；
+  运行器在启动前还会再校验一次，防止历史会话里存着收敛之前的越界路径。
 - 核心能执行什么，最终取决于你安装的 CLI 本身的权限模型；应用不会替它提权。
 
 ## 7. 接口
@@ -212,7 +231,7 @@ Anthropic Messages 协议的供应商）。
 | --- | --- | --- |
 | `WRK_AGENT_ENABLED` | `1` | 为 `0` 时不注册 Agent 路由 |
 | `WRK_AGENT_PLUGIN_DIR` | `<数据目录>/agent_plugins` | 插件 JSON 目录 |
-| `WRK_AGENT_WORKSPACE` | `<数据目录>/agent_workspace` | 默认工作目录 |
+| `WRK_AGENT_WORKSPACE` | `<数据目录>/agent_workspace` | 默认工作目录；会话工作目录必须落在它里面（含子目录） |
 | `WRK_AGENT_RUN_TIMEOUT` | `900` | 单轮执行硬超时（秒） |
 | `WRK_AGENT_HISTORY_MESSAGES` | `12` | 回放给 CLI 的历史消息条数 |
 | `WRK_AGENT_HISTORY_CHARS` | `1200` | 单条历史消息的最大字符数 |
@@ -226,3 +245,7 @@ Anthropic Messages 协议的供应商）。
 | 启动后立刻失败 | 看消息里的 stderr；常见是 CLI 版本参数不兼容、需要登录、或工作目录不存在 |
 | 输出乱码 | CLI 不是 UTF-8 输出；在清单 `env` 里加 `PYTHONIOENCODING` 或该 CLI 的编码开关 |
 | 插件没出现 | 看「核心与插件」顶部的清单错误；常见是 JSON 语法、id 重复、缺 `{prompt}` |
+| 清单里写了绝对路径，插件没出现 | `bins` 只能写 PATH 中的命令名；改成命令名，或把可执行文件所在目录加进 PATH |
+| 装了 CLI 仍显示「未安装」 | 若 PATH 解析到 `.cmd/.bat` 批处理脚本会被安全边界拒绝；改用该 CLI 的原生可执行文件（`.exe`），或安装提供原生二进制的版本 |
+| 提示「env.xxx 不在允许的白名单键内」 | 把该环境变量登记到 `ALLOWED_ENV_KEYS`，或改用白名单里已有的键 |
+| 提示「工作目录必须位于 Agent 工作区内」 | 把项目目录放到 `WRK_AGENT_WORKSPACE` 下，或把 `WRK_AGENT_WORKSPACE` 指到包含它的父目录后重启 |

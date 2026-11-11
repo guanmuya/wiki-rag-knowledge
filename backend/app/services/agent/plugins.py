@@ -14,6 +14,10 @@
    运行时按供应商配置注入，不落盘到插件清单里。
 
 清单格式与示例见 `docs/AGENT_PLUGINS.md`。
+
+P1-7 执行边界：清单是敌意输入。`bins` 只接受 PATH 中可查找的命令名并校验解析
+结果；`env` 只能覆盖白名单键；`{api_key}` 不得进入命令行；命令行摘要、运行日志、
+正文统一脱敏；会话 `workspace` 必须落在 `AGENT_WORKSPACE_DIR` 内。
 """
 from __future__ import annotations
 
@@ -50,6 +54,47 @@ _ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _VERSION_SUFFIX_RE = re.compile(r"/v\d+(?:beta/openai)?$", re.I)
 _MAX_MANIFEST_BYTES = 64 * 1024
+
+# ------------------------------------------------------------------ P1-7 边界常量
+# `bins` 只取 PATH 中的命令名：不接受绝对路径 / 相对路径 / `..` / 空格 / shell 元字符。
+_BIN_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+# 命令解释器（即便本身是 .exe）会把 run_args 当成命令串再次解析，必须拒绝。
+_FORBIDDEN_BIN_NAMES = frozenset({
+    "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe",
+    "wscript", "wscript.exe", "cscript", "cscript.exe",
+    "mshta", "mshta.exe", "rundll32", "rundll32.exe", "regsvr32", "regsvr32.exe",
+    "bash", "sh", "zsh", "fish", "wsl", "wsl.exe",
+})
+_FORBIDDEN_SHELL_STEMS = frozenset(
+    name.rsplit(".", 1)[0] for name in _FORBIDDEN_BIN_NAMES
+)
+# Windows 会把这些脚本宿主隐式交给 cmd.exe / WSH，参数被二次解析（`& | ^ %VAR%`）。
+_CMD_META_ONLY_RE = re.compile(r"^[&|^<>!()]+$")
+_CMD_VAR_REF_RE = re.compile(r"^%[A-Za-z_][A-Za-z0-9_]*%$")
+_REJECTED_BIN_SUFFIXES = frozenset({
+    ".cmd", ".bat", ".ps1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta",
+})
+# `build_env` 从系统继承的最小变量集；清单不得覆盖其中的系统路径类变量。
+_ENV_KEEP = (
+    "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP",
+    "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
+    "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "LANG", "LC_ALL",
+    "TERM", "NO_COLOR", "PYTHONIOENCODING",
+)
+# 清单 `env` 允许设置的键（默认拒绝）。刻意排除 PATH / PYTHONPATH / NODE_OPTIONS /
+# LD_PRELOAD 等能改变「加载哪段代码」的变量；新增第三方 CLI 需要的键须在此登记。
+ALLOWED_ENV_KEYS = frozenset({
+    # OpenAI 兼容
+    "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENAI_MODEL",
+    "OPENAI_ORG_ID", "OPENAI_ORGANIZATION", "OPENAI_PROJECT_ID",
+    # Anthropic
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL",
+    # Goose
+    "GOOSE_PROVIDER", "GOOSE_MODEL",
+    # 通用显示 / 编码（不改变代码加载）
+    "NO_COLOR", "FORCE_COLOR", "TERM", "LANG", "LC_ALL",
+    "PYTHONIOENCODING", "PYTHONUTF8",
+})
 
 
 class PluginError(ValueError):
@@ -233,12 +278,30 @@ def parse_manifest(data: Any, *, source: str = "plugin", manifest_path: str = ""
     bins = _str_tuple(data.get("bins"), "bins")
     if kind == "cli" and not bins:
         raise PluginError("cli 核心必须声明 bins（可执行文件名，按顺序探测）")
+    if kind == "cli":
+        for candidate in bins:
+            if not _BIN_NAME_RE.fullmatch(candidate) or ".." in candidate:
+                raise PluginError(
+                    f"bins 只能写 PATH 中可查找的命令名，不能是路径或含非法字符：{candidate!r}")
+            if Path(candidate).suffix.lower() in _REJECTED_BIN_SUFFIXES:
+                raise PluginError(f"bins 不能指向批处理/脚本宿主：{candidate!r}")
+            if candidate.lower() in _FORBIDDEN_BIN_NAMES:
+                raise PluginError(f"bins 不能指向命令解释器或系统外壳：{candidate!r}")
 
     run_args = _str_tuple(data.get("run_args"), "run_args")
     if kind == "cli" and not run_args:
         raise PluginError("cli 核心必须声明 run_args（非交互执行参数）")
     if "{prompt}" not in " ".join(run_args) and kind == "cli":
         raise PluginError("run_args 必须包含 {prompt} 占位符")
+    if any("{api_key}" in arg for arg in run_args):
+        raise PluginError(
+            "run_args 不能包含 {api_key}：密钥只能放进 env 模板，"
+            "避免出现在进程命令行与事件日志中")
+    for arg in run_args:
+        if _CMD_META_ONLY_RE.fullmatch(arg) or _CMD_VAR_REF_RE.fullmatch(arg):
+            raise PluginError(
+                f"run_args 不能包含 cmd 元字符/变量引用参数：{arg!r}"
+                "（旧实现经 cmd.exe /c 二次解析时可借它注入命令）")
 
     version_args = _str_tuple(data.get("version_args"), "version_args") or ("--version",)
 
@@ -251,6 +314,10 @@ def parse_manifest(data: Any, *, source: str = "plugin", manifest_path: str = ""
     for key, value in raw_env.items():
         if not isinstance(key, str) or not _ENV_KEY_RE.match(key):
             raise PluginError(f"env 变量名不合法：{key!r}")
+        if key not in ALLOWED_ENV_KEYS:
+            raise PluginError(
+                f"env.{key} 不在允许的白名单键内；"
+                "不允许覆盖 PATH / PYTHONPATH / NODE_OPTIONS 等系统或代码加载变量")
         if not isinstance(value, str):
             raise PluginError(f"env.{key} 必须是字符串")
         if len(value) > 1000:
@@ -314,10 +381,27 @@ def clear_detection_cache() -> None:
         _detect_cache.clear()
 
 
+def _minimal_env() -> dict[str, str]:
+    """子进程的最小环境变量集：不继承后端进程里的密钥类变量。
+
+    `build_env` 与版本探测共用同一份基线，避免探测子进程偷偷继承全量环境
+    （§5.1 记录过 `plugins.py` 版本探测未传 `env=` 的问题）。
+    """
+    env = {k: os.environ[k] for k in _ENV_KEEP if k in os.environ}
+    # Python 写的 CLI（Aider 等）在 Windows 默认用 cp936 输出；统一成 UTF-8。
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    return env
+
+
 def _command(path: str, args: tuple[str, ...] | list[str]) -> list[str]:
-    """Windows 上 .cmd/.bat 不能直接 CreateProcess，统一交给 cmd.exe。"""
-    if os.name == "nt" and path.lower().endswith((".cmd", ".bat")):
-        return ["cmd.exe", "/c", path, *args]
+    """构造探测命令，绝不显式拼 `cmd.exe /c`。
+
+    旧实现为 `.cmd/.bat` 包一层 `cmd.exe /c`：参数会被 cmd 二次解析，
+    `& | ^ %VAR%` 可注入命令。外部清单的 `.cmd/.bat` 等脚本宿主现在由
+    `_resolve_bin` 在解析阶段拒绝；这里直接把 `[path, *args]` 交给
+    `Popen(shell=False)`，由 Python 自己做参数转义，不再有 shell 二次解析。
+    """
     return [path, *args]
 
 
@@ -365,7 +449,7 @@ def _run_version(path: str, args: tuple[str, ...]) -> str:
     with tempfile.TemporaryFile() as sink:
         kwargs: dict[str, Any] = dict(
             stdin=subprocess.DEVNULL, stdout=sink, stderr=subprocess.STDOUT,
-            cwd=str(config.AGENT_WORKSPACE_DIR),
+            cwd=str(config.AGENT_WORKSPACE_DIR), env=_minimal_env(),
         )
         if os.name == "nt":
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -389,16 +473,37 @@ def _run_version(path: str, args: tuple[str, ...]) -> str:
     return ""
 
 
+def _resolve_bin(candidate: str, *, strict: bool) -> str:
+    """PATH 查找 + 校验解析结果：不再信任清单里的路径，也不接受脚本宿主 / 命令解释器。
+
+    `strict` 针对外部清单（敌意输入）：解析结果若是 `.cmd/.bat` 等脚本宿主，
+    或落在命令解释器上，一律拒绝——Windows 会隐式把它们交给 cmd.exe 二次解析参数。
+    内置核心的 bins 由代码写死、run_args 固定，仍按原方式探测，避免把 npm 安装的
+    `.cmd` CLI 在本机桌面版里直接判定成「未安装」。
+    """
+    resolved = shutil.which(candidate) or ""
+    if not resolved:
+        return ""
+    path = Path(resolved)
+    if strict and path.suffix.lower() in _REJECTED_BIN_SUFFIXES:
+        return ""
+    if strict and path.stem.lower() in _FORBIDDEN_SHELL_STEMS:
+        return ""
+    try:
+        real = str(path.resolve())
+    except (OSError, RuntimeError):
+        return ""
+    if not path.is_file():
+        return ""
+    return real
+
+
 def _detect_uncached(plugin: AgentPlugin) -> dict:
     if plugin.kind == "kb":
         return {"installed": True, "path": "", "version": "", "detect_error": ""}
+    strict = plugin.source != "builtin"
     for candidate in plugin.bins:
-        resolved = ""
-        if os.path.sep in candidate or (os.altsep and os.altsep in candidate):
-            if Path(candidate).is_file():
-                resolved = str(Path(candidate).resolve())
-        else:
-            resolved = shutil.which(candidate) or ""
+        resolved = _resolve_bin(candidate, strict=strict)
         if not resolved:
             continue
         version = _run_version(resolved, plugin.version_args)
@@ -611,19 +716,8 @@ def default_model_id(db: Session, plugin: AgentPlugin) -> int | None:
 
 def build_env(plugin: AgentPlugin, binding: dict, workspace: str,
               session_id: int, prompt: str = "") -> dict[str, str]:
-    """最小环境变量集 + 清单模板。不继承调用进程里的密钥类变量。"""
-    keep = (
-        "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP",
-        "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
-        "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "LANG", "LC_ALL",
-        "TERM", "NO_COLOR", "PYTHONIOENCODING",
-    )
-    env = {k: os.environ[k] for k in keep if k in os.environ}
-    # Python 写的 CLI（Aider 等）在 Windows 默认用 cp936 输出；统一成 UTF-8，
-    # 否则界面会收到替换字符。Node 写的 CLI 本来就输出 UTF-8，不受影响。
-    # 放在插件模板之前，清单仍可按需覆盖。
-    env["PYTHONIOENCODING"] = "utf-8"
-    env["PYTHONUTF8"] = "1"
+    """最小环境变量集 + 白名单内的清单模板。不继承调用进程里的密钥类变量。"""
+    env = _minimal_env()
     values = {
         "prompt": prompt,
         "model": binding["model"],
@@ -634,7 +728,16 @@ def build_env(plugin: AgentPlugin, binding: dict, workspace: str,
         "app_name": "企业知识库",
     }
     for key, template in plugin.env.items():
+        if key not in ALLOWED_ENV_KEYS:
+            # parse_manifest 已经拒绝外部清单；这里兜住绕过校验手工构造的插件。
+            log.warning("忽略 Agent 插件 %s 的非白名单环境变量 %s", plugin.id, key)
+            continue
         env[key] = _substitute(template, values)
+    # 系统白名单变量是权威值：即便清单绕过了 parse_manifest，也不允许把
+    # PATH / COMSPEC / TEMP 等改到别处（P1-7：白名单之后不再被任意覆盖）。
+    for key in _ENV_KEEP:
+        if key in os.environ and key not in ALLOWED_ENV_KEYS:
+            env[key] = os.environ[key]
     env.setdefault("NO_COLOR", "1")
     env.setdefault("TERM", "dumb")
     return env
@@ -652,11 +755,11 @@ def _substitute(template: str, values: dict[str, str]) -> str:
 
 def substitute_args(plugin: AgentPlugin, binding: dict, workspace: str,
                     session_id: int, prompt: str) -> list[str]:
+    """展开命令行参数。**不含 api_key**：密钥只应经 `env` 模板注入。"""
     values = {
         "prompt": prompt,
         "model": binding["model"],
         "base_url": binding["base_url"],
-        "api_key": binding["api_key"],
         "workspace": workspace,
         "session_id": str(session_id),
         "app_name": "企业知识库",
@@ -664,15 +767,71 @@ def substitute_args(plugin: AgentPlugin, binding: dict, workspace: str,
     return [_substitute(arg, values) for arg in plugin.run_args]
 
 
-def redacted_command(command: list[str], prompt: str) -> str:
+_REDACTED_PROMPT = "<提示词>"
+_REDACTED_SECRET = "<密钥>"
+
+
+def secret_values(binding: dict) -> tuple[str, ...]:
+    """需要从命令行摘要与事件日志里抹掉的密钥；无密钥时的哨兵 `local` 不算。"""
+    key = str(binding.get("api_key") or "")
+    if not key or key == "local":
+        return ()
+    return (key,)
+
+
+def redact_text(text: str, *, secrets: tuple[str, ...] = ()) -> str:
+    """统一脱敏：命令行摘要、运行日志、正文、错误信息共用同一套替换。"""
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, _REDACTED_SECRET)
+    return text
+
+
+def redacted_command(command: list[str], prompt: str,
+                     secrets: tuple[str, ...] = ()) -> str:
     """给界面看的命令摘要：不展开完整提示词，也不出现密钥。"""
     shown = []
     for part in command:
         if prompt and part == prompt:
-            shown.append("<提示词>")
+            shown.append(_REDACTED_PROMPT)
         else:
-            shown.append(part)
-    return " ".join(shown)[:500]
+            shown.append(redact_text(part, secrets=secrets))
+    return redact_text(" ".join(shown), secrets=secrets)[:500]
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    """共同路径前缀比较，避免 `workspace_evil` 这类字符串前缀绕过。"""
+    try:
+        return os.path.commonpath([
+            os.path.normcase(str(path)), os.path.normcase(str(root)),
+        ]) == os.path.normcase(str(root))
+    except ValueError:      # Windows 不同盘符
+        return False
+
+
+def resolve_workspace(value: str | None) -> str:
+    """把会话工作目录限制在 `AGENT_WORKSPACE_DIR` 内；越界抛 `PluginError`。
+
+    `resolve()` 会归一化 `..` 与符号链接，再用 `commonpath` 判定包含关系；
+    Windows 下用 `normcase` 消掉盘符大小写差异。路由器把 `PluginError`
+    翻译成 400，运行器也再做一次兜底校验。
+    """
+    root = Path(config.AGENT_WORKSPACE_DIR).resolve()
+    raw = (value or "").strip()
+    if not raw:
+        return str(root)
+    try:
+        path = Path(raw).expanduser().resolve()
+    except (OSError, RuntimeError) as exc:
+        raise PluginError(f"工作目录不合法：{raw}") from exc
+    if not path.is_dir():
+        raise PluginError(f"工作目录不存在或不是目录：{raw}")
+    if not _is_within(path, root):
+        raise PluginError(f"工作目录必须位于 Agent 工作区内：{root}")
+    resolved = str(path)
+    if len(resolved) > 500:
+        raise PluginError("工作目录路径过长")
+    return resolved
 
 
 def clone_with(plugin: AgentPlugin, **changes: Any) -> AgentPlugin:

@@ -282,3 +282,8 @@ E3 的后三组与 E5 的换挡都是**进程内打补丁**，不是产品配置
 「全仓文档事实口径统一」（版本号、表数、`WORKER_CONCURRENCY`、`busy_timeout`、
 测试基线、`文件:行` 锚点）留给第二波，本轮**一个字都没改**，避免两边改同一批文件。
 本轮也没有修改任何产品代码（`backend/app/**`）。
+
+> **第二波已完成（补记）**：上述统一工作落在 `docs/FACTS.md`（唯一事实口径）、
+> `docs/HANDOFF.md`（v1.0.17 当前状态首屏）、`docs/evidence/pytest-baseline.txt`
+> 与 `docs/archive/HANDOFF_HISTORY.md`。本目录 16 个结果文件、
+> `docs/EXPERIMENT.md` §8、`docs/THESIS.md` §4 以及所有「待实验」标注均原样保留。

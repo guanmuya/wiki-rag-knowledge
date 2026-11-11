@@ -32,6 +32,7 @@ files:
   - dist/**/*
   - electron/**/*
   - package.json
+  - '!electron/**/*.test.cjs'
   - '!**/*.map'
   - '!**/*.{ts,tsx}'
   - '!**/node_modules/**/{test,tests,__tests__,example,examples,docs,doc}/**'
@@ -62,10 +63,16 @@ asarUnpack:
 # 自动更新源。electron-builder 会据此生成 resources/app-update.yml 与 latest.yml。
 # 注意：GitHub 仓库必须公开，私有仓库的 Release 资产需要鉴权，终端用户下载不到；
 # 要放自建静态源就把 provider 改成 generic 并填 url。
+# P1-9：publish 保持 GitHub（源本身经 HTTPS）；若改 generic，url 必须是 HTTPS，
+# 否则打包版 updater.cjs 会拒绝该源并禁用更新（见 frontend/electron/update-url.cjs）。
 publish:
   provider: github
   owner: guanmuya
   repo: wiki-rag-knowledge
+# P1-9：本项目没有代码签名证书，不引入外部凭据，故维持 false。
+# 由此带来的「无发布者签名 + autoDownload/autoInstallOnAppQuit 全开」残余风险，
+# 以及后续补签名的步骤，书面记录在 docs/UPDATE.md §6；运行时防线是
+# 强制 HTTPS 更新源 + electron-updater 对 latest.yml 的 sha512 完整性校验。
 forceCodeSigning: false
 
 win:

@@ -1,10 +1,12 @@
-"""个人 Agent 运行时：知识库核心、CLI 核心、核心切换、停止与权限。"""
+"""个人 Agent 运行时：知识库核心、CLI 核心、核心切换、停止与权限、执行边界。"""
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import uuid
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
@@ -53,7 +55,8 @@ def _make_kb(db, name: str | None = None) -> int:
 
 
 def _write_fake_agent(directory, *, body: str, plugin_id: str = "fake-cli",
-                      protocols: list[str] | None = None) -> str:
+                      protocols: list[str] | None = None,
+                      env: dict | None = None) -> str:
     script = directory / f"{plugin_id}.py"
     script.write_text(body, encoding="utf-8")
     manifest = {
@@ -63,10 +66,13 @@ def _write_fake_agent(directory, *, body: str, plugin_id: str = "fake-cli",
         "description": "测试用 CLI 核心",
         "kind": "cli",
         "protocols": protocols or ["openai"],
-        "bins": [sys.executable],
+        "bins": ["python"],
         "version_args": ["-c", "print('fake-cli 1.0')"],
         "run_args": [str(script), "{prompt}"],
-        "env": {"TEST_BASE": "{base_url}", "TEST_MODEL": "{model}"},
+        "env": env if env is not None else {
+            "OPENAI_BASE_URL": "{base_url}",
+            "OPENAI_MODEL": "{model}",
+        },
         "output": "text",
     }
     (directory / f"{plugin_id}.json").write_text(
@@ -77,6 +83,11 @@ def _write_fake_agent(directory, *, body: str, plugin_id: str = "fake-cli",
 @pytest.fixture()
 def cli_plugin(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "AGENT_PLUGIN_DIR", tmp_path)
+    # 让 PATH 里的 python 一定指向当前解释器，避免命中 WindowsApps 桩。
+    monkeypatch.setenv(
+        "PATH",
+        str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", ""),
+    )
     plugins.clear_detection_cache()
     yield tmp_path
     plugins.clear_detection_cache()
@@ -118,8 +129,8 @@ def test_cli_core_streams_and_injects_model(app_client, admin_headers, db_sessio
     _write_fake_agent(cli_plugin, body=(
         "import os, sys\n"
         "prompt = sys.argv[1] if len(sys.argv) > 1 else ''\n"
-        "print('BASE=' + os.environ.get('TEST_BASE', ''))\n"
-        "print('MODEL=' + os.environ.get('TEST_MODEL', ''))\n"
+        "print('BASE=' + os.environ.get('OPENAI_BASE_URL', ''))\n"
+        "print('MODEL=' + os.environ.get('OPENAI_MODEL', ''))\n"
         "print('USER=' + ('yes' if '你好' in prompt else 'no'))\n"
     ))
     plugins.clear_detection_cache()
@@ -228,11 +239,22 @@ def test_employee_cannot_use_agent(app_client, db_session):
     assert app_client.get("/api/agent/sessions", headers=headers).status_code == 403
 
 
-def test_cli_core_rejects_incompatible_model(app_client, admin_headers, db_session):
+def test_cli_core_rejects_incompatible_model(app_client, admin_headers,
+                                             db_session, cli_plugin):
+    # 本用例验证「CLI 核心因模型协议不兼容而拒绝」，命中 _validate_model 里
+    # 带「不支持」的那条分支。不能用内置 codex 核心触发：create_session 会先经
+    # _core 检查可执行文件是否安装，没装 Codex CLI 的干净机器（CI runner）会先
+    # 返回「Codex CLI 未安装」，根本走不到协议校验。改用一份探测必然成功的假 CLI
+    # 核心（可执行文件就是当前 Python 解释器、只声明 openai 协议），把「CLI 是否
+    # 已安装」这一环境依赖从用例里隔离掉，断言保持原样。
+    _write_fake_agent(cli_plugin, body="print('unused')\n",
+                      plugin_id="openai-only-cli", protocols=["openai"])
+    plugins.clear_detection_cache()
+
     anthropic_model = _make_model(db_session, protocol="anthropic",
                                   base_url="https://api.anthropic.test")
     res = app_client.post("/api/agent/sessions", headers=admin_headers, json={
-        "core_id": "codex", "model_config_id": anthropic_model,
+        "core_id": "openai-only-cli", "model_config_id": anthropic_model,
     })
     assert res.status_code == 400, res.text
     assert "不支持" in res.json()["detail"]
@@ -324,3 +346,66 @@ def test_cannot_delete_running_session(app_client, admin_headers, db_session, cl
     assert res.status_code == 409
     app_client.post(f"/api/agent/runs/{run_id}/stop", headers=admin_headers)
     _wait_run(app_client, admin_headers, run_id)
+
+
+# ------------------------------------------------------------------ P1-7 执行边界
+def test_workspace_must_stay_inside_agent_workspace(app_client, admin_headers,
+                                                    db_session, tmp_path):
+    """会话工作目录越界（含同前缀目录）必须返回 400。"""
+    root = Path(config.AGENT_WORKSPACE_DIR).resolve()
+    inside = root / "nested-project"
+    inside.mkdir(exist_ok=True)
+    created = app_client.post("/api/agent/sessions", headers=admin_headers, json={
+        "core_id": "kb", "workspace": str(inside),
+    })
+    assert created.status_code == 201, created.text
+    assert Path(created.json()["workspace"]) == inside.resolve()
+
+    sibling = root.parent / (root.name + "_evil")
+    sibling.mkdir(exist_ok=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    for bad in [str(outside), str(sibling), str(root / ".." / "outside")]:
+        res = app_client.post("/api/agent/sessions", headers=admin_headers, json={
+            "core_id": "kb", "workspace": bad,
+        })
+        assert res.status_code == 400, (bad, res.text)
+    assert "工作区" in app_client.post(
+        "/api/agent/sessions", headers=admin_headers,
+        json={"core_id": "kb", "workspace": str(sibling)},
+    ).json()["detail"]
+
+    patched = app_client.patch(
+        f"/api/agent/sessions/{created.json()['id']}", headers=admin_headers,
+        json={"workspace": str(outside)},
+    )
+    assert patched.status_code == 400, patched.text
+
+
+def test_api_key_never_appears_in_command_line_or_events(
+        app_client, admin_headers, db_session, cli_plugin):
+    """密钥只经 env 注入；命令行摘要、事件日志、正文统一脱敏。"""
+    model_id = _make_model(db_session)          # 供应商密钥 = sk-test
+    _write_fake_agent(
+        cli_plugin,
+        body="import os\nprint('KEY=' + os.environ.get('OPENAI_API_KEY', ''))\n",
+        env={"OPENAI_API_KEY": "{api_key}"},
+    )
+    plugins.clear_detection_cache()
+
+    created = app_client.post("/api/agent/sessions", headers=admin_headers, json={
+        "core_id": "fake-cli", "model_config_id": model_id,
+    })
+    assert created.status_code == 201, created.text
+    sent = app_client.post(
+        f"/api/agent/sessions/{created.json()['id']}/messages",
+        headers=admin_headers, json={"content": "检查密钥脱敏"},
+    )
+    result = _wait_run(app_client, admin_headers, sent.json()["run_id"])
+    assert result["status"] == "ok", result
+
+    # 完整快照里含所有事件 + 最终消息 + meta.command，逐字检查密钥不出现。
+    blob = json.dumps(result, ensure_ascii=False)
+    assert "sk-test" not in blob
+    assert "<密钥>" in blob            # 证明确实注入了密钥、随后被脱敏
+    assert "sk-test" not in result["message"]["meta"]["command"]

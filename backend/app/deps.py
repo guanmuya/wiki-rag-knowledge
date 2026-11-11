@@ -26,6 +26,12 @@ def get_current_user(
     user = db.get(models.User, int(payload["uid"]))
     if not user or user.status != models.UserStatus.active.value:
         raise _unauthorized("账号不存在或已停用")
+    # 令牌可撤销（P1-6）：载荷里的版本必须等于用户当前版本。改密、管理员重置
+    # 密码、登出都会递增 token_version，使此前签发的全部令牌立即失效。
+    # 老库补列前签发的令牌没有 ver，按版本 0 处理；一旦发生过撤销（版本 > 0）
+    # 同样会被这里挡下。
+    if int(payload.get("ver", 0)) != int(user.token_version or 0):
+        raise _unauthorized()
     return user
 
 
