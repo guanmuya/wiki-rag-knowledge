@@ -6,6 +6,15 @@
 > 构建环境的实测数字（产物大小、`latest.yml` 原文、安装包 sha512、门禁输出）见
 > [`docs/evidence/release-v1.0.18-build.txt`](evidence/release-v1.0.18-build.txt)。
 
+> **发布状态：已完成（2026-11-11）** —— `v1.0.18` 已发布到
+> <https://github.com/guanmuya/wiki-rag-knowledge/releases/tag/v1.0.18>，
+> 三个资产齐备、匿名可下载、`latest.yml` 与安装包逐项一致，实测输出见
+> [`docs/evidence/release-v1.0.18-publish.txt`](evidence/release-v1.0.18-publish.txt)。
+> 两点差异请注意：① §2 的发布步骤已执行完毕，留作下次参照；
+> ② 发布时换工作区后没有 #21 那次构建的产物，**安装包按 §2.1 重建**，
+> 因此实际发布的安装包 sha512 / 体积与 `release-v1.0.18-build.txt` §5 记录的不同，
+> 以 `release-v1.0.18-publish.txt` §3 为准；下方 §3「本版没做的事」是**构建轮当时**的状态。
+
 - 版本：`1.0.18`（`backend/app/main.py` 的 `VERSION` 与 `frontend/package.json` 的 `version` 同步递增）
 - 更新源：GitHub Releases（`guanmuya/wiki-rag-knowledge`，仓库公开）
 - 资产三件套：`latest.yml`、`wiki-rag-knowledge-1.0.18-x64-setup.exe`、`wiki-rag-knowledge-1.0.18-x64-setup.exe.blockmap`
@@ -120,7 +129,8 @@ gh release upload v1.0.18 --clobber `
 
 3. **`latest.yml` 与资产对得上**：`latest.yml` 里的 `version` 必须是 `1.0.18`，
    `files[].url` / `path` 必须与上传的安装包**文件名完全一致**，`sha512` 与本地构建出的
-   安装包一致（本地值见 `docs/evidence/release-v1.0.18-build.txt`）：
+   安装包一致（**实际发布那次**的值见 `docs/evidence/release-v1.0.18-publish.txt` §3；
+   `release-v1.0.18-build.txt` 里的 sha512 属另一次构建，已不适用）：
 
    ```powershell
    curl.exe -sL https://github.com/guanmuya/wiki-rag-knowledge/releases/download/v1.0.18/latest.yml
