@@ -95,7 +95,7 @@ def wiki_case(app_client, admin_headers, db_session, tmp_path):
     for level in ("read", "manage"):
         user = models.User(
             username=f"{level}-{suffix}", display_name=level, password_hash="unused",
-            role="employee", status="active",
+            role="employee", status="active", must_change_password=False,
         )
         db.add(user)
         db.flush()

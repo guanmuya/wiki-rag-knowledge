@@ -52,8 +52,10 @@ def isolated_api(tmp_path, monkeypatch):
     models.Base.metadata.create_all(engine)
     make_session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     db = make_session()
-    admin = models.User(username="usage-admin", password_hash="unused", role="admin", status="active")
-    employee = models.User(username="usage-employee", password_hash="unused", role="employee", status="active")
+    admin = models.User(username="usage-admin", password_hash="unused", role="admin",
+                        status="active", must_change_password=False)
+    employee = models.User(username="usage-employee", password_hash="unused", role="employee",
+                           status="active", must_change_password=False)
     db.add_all([admin, employee])
     db.commit()
     headers = {

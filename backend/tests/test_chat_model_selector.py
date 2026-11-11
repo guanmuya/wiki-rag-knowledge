@@ -20,6 +20,7 @@ from app import models
 from app.db import SessionLocal
 from app.routers import chat as chat_router
 from app.services import answering, llm, qa_pipeline
+from conftest import mark_user_ready
 
 PASSWORD = "ChatModel#2026"
 
@@ -109,6 +110,7 @@ def test_chat_models_open_to_employee(app_client, admin_headers, model_set):
         "password": PASSWORD, "role": "employee", "grants": [],
     })
     assert created.status_code == 201, created.text
+    mark_user_ready(username)       # P1-8：先完成初始改密，再测业务接口
     login = app_client.post("/api/auth/login", json={"username": username, "password": PASSWORD})
     assert login.status_code == 200, login.text
     headers = {"Authorization": f"Bearer {login.json()['token']}"}
@@ -251,6 +253,7 @@ def employee_chat(app_client, admin_headers):
         "grants": [{"kb_id": kb["id"], "level": "read"}],
     })
     assert user.status_code == 201, user.text
+    mark_user_ready(username)       # P1-8：先完成初始改密，再测业务接口
     token = app_client.post("/api/auth/login", json={"username": username, "password": PASSWORD}).json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
     cid = app_client.post("/api/conversations", headers=headers, json={"kb_ids": [kb["id"]]}).json()["id"]
@@ -354,6 +357,7 @@ def test_embedding_error_does_not_expose_provider_credentials(
         "grants": [{"kb_id": kb["id"], "level": "read"}],
     })
     assert user.status_code == 201, user.text
+    mark_user_ready(username)       # P1-8：先完成初始改密，再测业务接口
     token = app_client.post("/api/auth/login", json={"username": username, "password": PASSWORD}).json()["token"]
     headers = {"Authorization": f"Bearer {token}"}
     cid = app_client.post("/api/conversations", headers=headers, json={"kb_ids": [kb["id"]]}).json()["id"]

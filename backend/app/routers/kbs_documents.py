@@ -79,6 +79,13 @@ async def upload_documents(
         if len(data) > config.MAX_UPLOAD_MB * 1024 * 1024:
             errors.append({"filename": filename, "error": f"超过 {config.MAX_UPLOAD_MB}MB 上限"})
             continue
+        # 内容与扩展名不符就不进库（P1-8）：扩展名是用户可以随手改的，
+        # 只按它收文件等于让任意二进制进索引。拒绝理由直接回给前端。
+        magic_msg = parser.magic_error(data, suffix)
+        if magic_msg:
+            log.warning("拒绝上传 %s：%s", filename, magic_msg)
+            errors.append({"filename": filename, "error": magic_msg})
+            continue
         try:
             # 每个文件独立提交，并放到线程池里执行，两个原因都是真实故障：
             # 1) 旧实现一个事务横跨整批文件：第 5 个文件的落盘和 sha256 也算在
@@ -326,6 +333,11 @@ async def upload_new_version(doc_id: int, file: UploadFile = File(...),
         raise HTTPException(status_code=400, detail="文件为空")
     if len(data) > config.MAX_UPLOAD_MB * 1024 * 1024:
         raise HTTPException(status_code=400, detail=f"超过 {config.MAX_UPLOAD_MB}MB 上限")
+    # 与上传入口同一条规则：内容与扩展名不符就地拒绝（P1-8）。
+    magic_msg = parser.magic_error(data, suffix)
+    if magic_msg:
+        log.warning("拒绝上传新版本 %s：%s", filename, magic_msg)
+        raise HTTPException(status_code=400, detail=magic_msg)
     if suffix != doc.suffix:
         doc.suffix = suffix
 

@@ -15,6 +15,7 @@ from app import models, security
 from app.db import DB_BUSY_DETAIL
 from app.routers import chat as chat_router
 from app.services import llm
+from conftest import mark_user_ready
 
 
 PASSWORD = "Redaction-test-password-2026!"
@@ -59,6 +60,7 @@ def employee_conversation(app_client, admin_headers, db_session):
         "role": "employee", "grants": [{"kb_id": kb_id, "level": "read"}],
     })
     assert user_response.status_code == 201, user_response.text
+    mark_user_ready(username)       # P1-8：先完成初始改密，再测业务接口
     login = app_client.post("/api/auth/login", json={"username": username, "password": PASSWORD})
     assert login.status_code == 200, login.text
     headers = {"Authorization": f"Bearer {login.json()['token']}"}
