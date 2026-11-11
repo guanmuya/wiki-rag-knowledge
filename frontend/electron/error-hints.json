@@ -1,0 +1,117 @@
+{
+  "schema": 1,
+  "about": "用户可见失败文案的单一来源（体检清单 P2-6）。主进程 main.cjs 读 startup、更新器 updater.cjs 读 update、渲染进程（src/shared/userFacingErrors.ts → BackendGate）读 probe。改一处，三个进程同时生效；任何地方都不要再抄一份文案。规则按数组顺序匹配，先命中先返回，具体原因在前、通用兜底在后。flags 为 RegExp flags，不需要就写空串。",
+  "startup": {
+    "about": "后端 sidecar 起不来时给用户看的话（main.cjs 的启动失败翻译，也会经 wrk:failure 送到渲染进程）。",
+    "hints": [
+      {
+        "id": "no-permission",
+        "title": "数据目录没有写入权限",
+        "action": "请确认当前 Windows 账号对数据目录有写权限；公司电脑可请管理员放开该目录权限后重试。",
+        "pattern": "permission|eacces|eperm|拒绝访问|read-only",
+        "flags": "i"
+      },
+      {
+        "id": "port-in-use",
+        "title": "端口被其他程序占用了",
+        "action": "关掉占用端口的程序后点重试。桌面版通常会自己换端口，重试一般就能起来。",
+        "pattern": "eaddrinuse|address already in use|10048|端口",
+        "flags": "i"
+      },
+      {
+        "id": "missing-runtime",
+        "title": "缺少运行库，后端无法启动",
+        "action": "通常是缺少 Microsoft Visual C++ 2015-2022 x64 运行库，安装后重启应用。",
+        "pattern": "vcruntime|msvcp|0xc000007b|dll|could not be loaded",
+        "flags": "i"
+      },
+      {
+        "id": "missing-file",
+        "title": "后端程序文件缺失或被安全软件拦截",
+        "action": "安装可能不完整，或安全软件隔离了后端程序。请重新安装；装了杀毒软件的话把安装目录加白名单。",
+        "pattern": "enoent|no such file|not found|找不到|拦截|quarantin",
+        "flags": "i"
+      },
+      {
+        "id": "timeout",
+        "title": "后端启动超时",
+        "action": "首次启动要初始化数据库，可能较慢。请点重试；连续失败请打开日志看卡在哪一步。",
+        "pattern": "60 秒内未就绪|超时|timeout|timed out",
+        "flags": "i"
+      },
+      {
+        "id": "exited",
+        "title": "后端启动后立即退出",
+        "action": "数据库可能损坏或上次异常退出留了锁。先点重启后端；仍失败请打开日志发给技术支持。",
+        "pattern": "退出码|exit code|signal|信号",
+        "flags": "i"
+      }
+    ],
+    "fallback": {
+      "id": "unknown",
+      "title": "后端服务没能启动",
+      "action": "请先点重试。如果一直失败，点「查看详情」复制日志发给技术支持。"
+    }
+  },
+  "probe": {
+    "about": "主进程没给出失败原因时（浏览器模式、探活失败等），渲染进程按错误串兜底的说法（BackendGate）。",
+    "hints": [
+      {
+        "id": "unreachable",
+        "title": "连不上后端服务",
+        "action": "桌面版请点「重启后端」；浏览器模式请确认 uvicorn 已在 8000 端口启动，然后点「重试连接」。",
+        "pattern": "无法连接|failed to fetch|networkerror|econnrefused",
+        "flags": "i"
+      },
+      {
+        "id": "slow",
+        "title": "后端响应太慢",
+        "action": "可能正在初始化数据库或处理大批文档。稍等几秒后点「重试连接」。",
+        "pattern": "超时|timeout|abort",
+        "flags": "i"
+      },
+      {
+        "id": "http-error",
+        "title": "后端返回了错误",
+        "action": "后端进程在，但接口报错。点「查看详情」看具体状态码，并把日志发给技术支持。",
+        "pattern": "HTTP \\d{3}",
+        "flags": "i"
+      }
+    ],
+    "fallback": {
+      "id": "not-ready",
+      "title": "后端服务未就绪",
+      "action": "请先点「重试连接」。如果一直失败，点「查看详情」复制日志发给技术支持。"
+    }
+  },
+  "update": {
+    "about": "自动更新失败时给用户看的一句话（updater.cjs）。匹配不到时回落到 raw 原始串，raw 也为空才用 fallback。",
+    "hints": [
+      {
+        "id": "not-found",
+        "message": "更新源不可访问：GitHub 仓库需要公开，或改用 generic 静态源",
+        "pattern": "404|not found|cannot find",
+        "flags": "i"
+      },
+      {
+        "id": "network",
+        "message": "连不上更新服务器，请检查网络或代理设置",
+        "pattern": "ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|network|getaddrinfo",
+        "flags": "i"
+      },
+      {
+        "id": "checksum",
+        "message": "更新包校验失败（可能下载不完整），请稍后重试",
+        "pattern": "sha512|checksum|integrity",
+        "flags": "i"
+      },
+      {
+        "id": "dev-mode",
+        "message": "开发模式不检查更新（可设 WRK_UPDATE_URL 联调）",
+        "pattern": "dev|development",
+        "flags": "i"
+      }
+    ],
+    "fallback": "更新检查失败"
+  }
+}

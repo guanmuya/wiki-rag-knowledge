@@ -2,125 +2,24 @@ import { useCallback, useEffect, useState } from 'react'
 import { useToast } from '../auth'
 import { kbApi, settingsApi } from '../api'
 import type {
-  AuditEntry,
-  DiscoveredModel,
   EmbeddingStatus,
   KnowledgeBase,
   ModelConfig,
-  ModelPayload,
   ModelPurpose,
   ModelTestResult,
   Provider,
-  ProviderProtocol,
 } from '../types'
-import { AUDIT_ACTION_LABEL, PROTOCOL_OPTIONS } from '../types'
-import { errorText, formatMs, formatTime } from '../utils'
-import {
-  IconAlert,
-  IconCheck,
-  IconChevronDown,
-  IconChevronRight,
-  IconClose,
-  IconEye,
-  IconLayers,
-  IconMessage,
-  IconPlus,
-} from '../components/icons'
-import {
-  Badge,
-  Button,
-  ConfirmDialog,
-  EmptyState,
-  ErrorState,
-  Field,
-  Modal,
-  Select,
-  SkeletonLines,
-  Spinner,
-  TextInput,
-} from '../components/ui'
-
-const PURPOSE_LABEL: Record<ModelPurpose, string> = {
-  llm: '对话模型',
-  embedding: '向量模型',
-  vision: '视觉模型',
-}
-
-/** 三个用途各配一枚线性图标，颜色跟随文本角色，不靠彩色徽标区分。 */
-const PURPOSE_ICON: Record<ModelPurpose, typeof IconMessage> = {
-  llm: IconMessage,
-  embedding: IconLayers,
-  vision: IconEye,
-}
-
-const PURPOSE_ORDER: ModelPurpose[] = ['llm', 'embedding', 'vision']
-
-/** 折叠状态只影响本地展示，存 localStorage，刷新或再次进入页面后保持。 */
-const COLLAPSED_GROUPS_KEY = 'wrk_model_groups_collapsed'
-
-function readCollapsedGroups(): Record<ModelPurpose, boolean> {
-  const collapsed: Record<ModelPurpose, boolean> = { llm: false, embedding: false, vision: false }
-  try {
-    const raw = localStorage.getItem(COLLAPSED_GROUPS_KEY)
-    if (!raw) return collapsed
-    const saved: unknown = JSON.parse(raw)
-    if (Array.isArray(saved)) {
-      for (const purpose of PURPOSE_ORDER) {
-        if (saved.some((item) => item === purpose)) collapsed[purpose] = true
-      }
-    }
-  } catch {
-    /* 隐私模式或本地数据损坏：按全部展开处理 */
-  }
-  return collapsed
-}
-
-/** 供应商协议中文短名，表格里用。 */
-const PROTOCOL_SHORT: Record<ProviderProtocol, string> = {
-  openai: 'OpenAI 兼容',
-  'openai-responses': 'Responses',
-  anthropic: 'Anthropic',
-}
-
-const PROTOCOL_HINT: Record<ProviderProtocol, string> = {
-  openai: '适用于 OpenAI 和兼容协议的直连 API；支持的接口因供应商而异。',
-  'openai-responses': '适用于支持 /responses 的直连 API；不支持 Embedding。',
-  anthropic: 'Anthropic 直连 API 使用 /v1/messages；不支持 Embedding。',
-}
-
-const PROVIDER_PRESETS: Array<{ name: string; baseUrl: string; protocol: ProviderProtocol }> = [
-  { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', protocol: 'openai' },
-  { name: 'Anthropic', baseUrl: 'https://api.anthropic.com', protocol: 'anthropic' },
-  { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', protocol: 'openai' },
-  { name: 'Kimi（中国区）', baseUrl: 'https://api.moonshot.cn/v1', protocol: 'openai' },
-  { name: 'Kimi（国际区）', baseUrl: 'https://api.moonshot.ai/v1', protocol: 'openai' },
-  { name: 'Qwen（中国区）', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', protocol: 'openai' },
-  { name: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', protocol: 'openai' },
-]
-
-function normalizedProviderBase(value: string): string {
-  const trimmed = value.trim()
-  try {
-    const url = new URL(trimmed)
-    url.pathname = url.pathname.replace(/\/+$/, '') || '/'
-    return url.href
-  } catch {
-    return trimmed.replace(/\/+$/, '')
-  }
-}
-
-function protocolOf(p: Provider): ProviderProtocol {
-  // 老库回填/异常值统一按 openai 处理，与后端 provider_protocol() 一致
-  const value = p.protocol
-  if (value === 'openai-responses' || value === 'anthropic' || value === 'openai') return value
-  return 'openai'
-}
-
-/** 探测结果 + 用户勾选状态，导入弹窗用。 */
-interface DiscoverRow extends DiscoveredModel {
-  checked: boolean
-  purpose: ModelPurpose
-}
+import { errorText, formatMs } from '../utils'
+import { IconAlert } from '../components/icons'
+import { Button, ConfirmDialog, ErrorState, Modal, SkeletonLines } from '../components/ui'
+import { COLLAPSED_GROUPS_KEY, PURPOSE_ORDER, readCollapsedGroups } from './models/constants'
+import { AUDIT_PAGE_SIZE, AuditPanel, useAudit } from './models/AuditPanel'
+import { ProviderTable } from './models/ProviderTable'
+import { ModelGroups } from './models/ModelGroups'
+import { EmbeddingCard, type EmbedKbView } from './models/EmbeddingCard'
+import { ProviderFormModal, useProviderForm } from './models/ProviderFormModal'
+import { ModelFormModal, useModelForm } from './models/ModelFormModal'
+import { DiscoverModal, useDiscover } from './models/DiscoverModal'
 
 export default function ModelsPage() {
   const { push } = useToast()
@@ -139,40 +38,6 @@ export default function ModelsPage() {
   const [embedError, setEmbedError] = useState<unknown>(null)
   const [kbs, setKbs] = useState<KnowledgeBase[]>([])
 
-  const [providerModal, setProviderModal] = useState<'create' | Provider | null>(null)
-  const [pPreset, setPPreset] = useState('')
-  const [pName, setPName] = useState('')
-  const [pBase, setPBase] = useState('')
-  const [pKey, setPKey] = useState('')
-  const [pKeyNotice, setPKeyNotice] = useState('')
-  const [pEnabled, setPEnabled] = useState(true)
-  const [pProtocol, setPProtocol] = useState<ProviderProtocol>('openai')
-  const [pBusy, setPBusy] = useState(false)
-  const [pError, setPError] = useState('')
-  const [clearKeyOpen, setClearKeyOpen] = useState(false)
-
-  // ---- 探测模型
-  const [discoverTarget, setDiscoverTarget] = useState<Provider | null>(null)
-  const [discoverRows, setDiscoverRows] = useState<DiscoverRow[]>([])
-  const [discoverSource, setDiscoverSource] = useState<'api' | 'builtin'>('api')
-  const [discoverError, setDiscoverError] = useState('')
-  const [discoverBusy, setDiscoverBusy] = useState(false)
-  const [importBusy, setImportBusy] = useState(false)
-
-  const [modelModal, setModelModal] = useState<'create' | ModelConfig | null>(null)
-  const [mProvider, setMProvider] = useState<number>(0)
-  const [mPurpose, setMPurpose] = useState<ModelPurpose>('llm')
-  const [mModel, setMModel] = useState('')
-  const [mLabel, setMLabel] = useState('')
-  const [mDim, setMDim] = useState('')
-  const [mDefault, setMDefault] = useState(false)
-  const [mEnabled, setMEnabled] = useState(true)
-  const [mBusy, setMBusy] = useState(false)
-  const [mError, setMError] = useState('')
-  const [mParamsOpen, setMParamsOpen] = useState(false)
-  const [mParams, setMParams] = useState('{}')
-  const [mParamsError, setMParamsError] = useState('')
-
   const [deleteProvider, setDeleteProvider] = useState<Provider | null>(null)
   const [deleteModel, setDeleteModel] = useState<ModelConfig | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
@@ -183,15 +48,6 @@ export default function ModelsPage() {
   const [switchTarget, setSwitchTarget] = useState<ModelConfig | null>(null)
   const [switchConfirm, setSwitchConfirm] = useState(false)
   const [switchBusy, setSwitchBusy] = useState(false)
-
-  // ---- 审计日志
-  const [auditItems, setAuditItems] = useState<AuditEntry[]>([])
-  const [auditTotal, setAuditTotal] = useState(0)
-  const [auditPage, setAuditPage] = useState(1)
-  const [auditLoading, setAuditLoading] = useState(false)
-  const [auditError, setAuditError] = useState<unknown>(null)
-  const [auditLoaded, setAuditLoaded] = useState(false)
-  const AUDIT_PAGE_SIZE = 20
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -230,130 +86,18 @@ export default function ModelsPage() {
     void loadEmbed()
   }, [load, loadEmbed])
 
-  const loadAudit = useCallback(
-    async (page: number) => {
-      setAuditLoading(true)
-      setAuditError(null)
-      try {
-        const data = await settingsApi.audit(page, AUDIT_PAGE_SIZE)
-        setAuditItems(data.items ?? [])
-        setAuditTotal(data.total ?? 0)
-        setAuditPage(data.page ?? page)
-      } catch (err) {
-        setAuditError(err)
-        setAuditItems([])
-      } finally {
-        setAuditLoading(false)
-        setAuditLoaded(true)
-      }
-    },
-    [],
-  )
-
-  useEffect(() => {
-    if (tab === 'audit' && !auditLoaded) void loadAudit(1)
-  }, [tab, auditLoaded, loadAudit])
-
-  const openProvider = (target: 'create' | Provider) => {
-    setProviderModal(target)
-    setPError('')
-    setPPreset('')
-    setPKeyNotice('')
-    if (target === 'create') {
-      setPName('')
-      setPBase('')
-      setPKey('')
-      setPEnabled(true)
-      setPProtocol('openai')
-    } else {
-      setPName(target.name)
-      setPBase(target.base_url)
-      setPKey('')
-      setPEnabled(target.enabled)
-      setPProtocol(protocolOf(target))
-    }
-  }
-
-  const submitProvider = async () => {
-    setPError('')
-    if (!pName.trim() || !pBase.trim()) {
-      setPError('名称与 Base URL 均为必填')
-      return
-    }
-    setPBusy(true)
-    try {
-      if (providerModal === 'create') {
-        await settingsApi.createProvider({
-          name: pName.trim(),
-          base_url: pBase.trim(),
-          api_key: pKey,
-          enabled: pEnabled,
-          protocol: pProtocol,
-        })
-        push('供应商已创建', 'success')
-      } else if (providerModal) {
-        await settingsApi.updateProvider(providerModal.id, {
-          name: pName.trim(),
-          base_url: pBase.trim(),
-          api_key: pKey,
-          enabled: pEnabled,
-          protocol: pProtocol,
-        })
-        push('供应商已更新', 'success')
-      }
-      setProviderModal(null)
-      await load()
-      await loadEmbed()
-    } catch (err) {
-      setPError(errorText(err))
-    } finally {
-      setPBusy(false)
-    }
-  }
-
-  /** 清空供应商 API Key：后端约定传 "__clear__"。 */
-  const doClearKey = async () => {
-    if (providerModal === 'create' || !providerModal) return
-    setPBusy(true)
-    try {
-      await settingsApi.updateProvider(providerModal.id, { api_key: '__clear__' })
-      push('API Key 已清空', 'success')
-      setClearKeyOpen(false)
-      setProviderModal(null)
-      await load()
-    } catch (err) {
-      push(errorText(err), 'error')
-    } finally {
-      setPBusy(false)
-    }
-  }
-
-  const openModel = (target: 'create' | ModelConfig, purpose?: ModelPurpose) => {
-    setModelModal(target)
-    setMError('')
-    setMParamsError('')
-    if (target === 'create') {
-      setMProvider(providers[0]?.id ?? 0)
-      setMPurpose(purpose ?? 'llm')
-      setMModel('')
-      setMLabel('')
-      setMDim('')
-      setMDefault(false)
-      setMEnabled(true)
-      setMParams('{}')
-      setMParamsOpen(false)
-    } else {
-      setMProvider(target.provider_id)
-      setMPurpose(target.purpose)
-      setMModel(target.model)
-      setMLabel(target.label)
-      setMDim(target.embed_dim ? String(target.embed_dim) : '')
-      setMDefault(target.is_default)
-      setMEnabled(target.enabled)
-      setMParams(JSON.stringify(target.params ?? {}, null, 2))
-      setMParamsOpen(false)
-    }
-  }
+  const {
+    auditItems,
+    auditTotal,
+    auditPage,
+    auditLoading,
+    auditError,
+    auditLoaded,
+    loadAudit,
+  } = useAudit(tab)
+  const providerForm = useProviderForm({ load, loadEmbed })
+  const modelForm = useModelForm({ providers, load, loadEmbed })
+  const discover = useDiscover({ load, loadEmbed })
 
   /** 折叠/展开某个用途的模型表；状态写 localStorage，刷新后保持。 */
   const toggleGroup = (purpose: ModelPurpose) => {
@@ -369,64 +113,6 @@ export default function ModelsPage() {
       }
       return next
     })
-  }
-
-  const submitModel = async () => {
-    setMError('')
-    setMParamsError('')
-    if (!mProvider) {
-      setMError('请先选择供应商')
-      return
-    }
-    if (!mModel.trim()) {
-      setMError('模型名不能为空')
-      return
-    }
-    // 高级参数必须是 JSON 对象
-    let params: Record<string, unknown> = {}
-    const rawParams = mParams.trim()
-    if (rawParams) {
-      try {
-        const parsed: unknown = JSON.parse(rawParams)
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          setMParamsError('高级参数必须是 JSON 对象，例如 {"temperature": 0.2}')
-          setMParamsOpen(true)
-          return
-        }
-        params = parsed as Record<string, unknown>
-      } catch (err) {
-        setMParamsError(`JSON 解析失败：${err instanceof Error ? err.message : '格式不正确'}`)
-        setMParamsOpen(true)
-        return
-      }
-    }
-    setMBusy(true)
-    const payload: ModelPayload = {
-      provider_id: mProvider,
-      purpose: mPurpose,
-      model: mModel.trim(),
-      label: mLabel.trim(),
-      params,
-      is_default: mDefault,
-      enabled: mEnabled,
-      embed_dim: mPurpose === 'embedding' ? Number(mDim) || 0 : 0,
-    }
-    try {
-      if (modelModal === 'create') {
-        await settingsApi.createModel(payload)
-        push('模型已添加', 'success')
-      } else if (modelModal) {
-        await settingsApi.updateModel(modelModal.id, payload)
-        push('模型已更新', 'success')
-      }
-      setModelModal(null)
-      await load()
-      await loadEmbed()
-    } catch (err) {
-      setMError(errorText(err))
-    } finally {
-      setMBusy(false)
-    }
   }
 
   const toggleModel = async (m: ModelConfig) => {
@@ -461,85 +147,6 @@ export default function ModelsPage() {
       push(errorText(err), 'error')
     } finally {
       setTesting(null)
-    }
-  }
-
-  /** 打开探测弹窗并立即发起一次探测。 */
-  const openDiscover = async (p: Provider) => {
-    setDiscoverTarget(p)
-    setDiscoverRows([])
-    setDiscoverError('')
-    setDiscoverSource('api')
-    setDiscoverBusy(true)
-    try {
-      const res = await settingsApi.discoverModels(p.id)
-      setDiscoverSource(res.source)
-      setDiscoverError(res.error || '')
-      // 模型列表可能包括语音、审核等无法用于问答的模型；让用户确认用途后再导入。
-      setDiscoverRows(
-        (res.items ?? []).map((item) => ({
-          ...item,
-          checked: false,
-          purpose: item.purpose_hint,
-        })),
-      )
-    } catch (err) {
-      // 后端承诺不 500，这里兜的是网络层（断网/401 等）
-      setDiscoverError(errorText(err))
-    } finally {
-      setDiscoverBusy(false)
-    }
-  }
-
-  const closeDiscover = () => {
-    setDiscoverTarget(null)
-    setDiscoverRows([])
-    setDiscoverError('')
-  }
-
-  const toggleDiscoverRow = (model: string) => {
-    setDiscoverRows((prev) =>
-      prev.map((r) => (r.model === model ? { ...r, checked: !r.checked } : r)),
-    )
-  }
-
-  const setDiscoverPurpose = (model: string, purpose: ModelPurpose) => {
-    setDiscoverRows((prev) => prev.map((r) => (r.model === model ? { ...r, purpose } : r)))
-  }
-
-  const toggleDiscoverAll = (checked: boolean) => {
-    setDiscoverRows((prev) => prev.map((r) => ({ ...r, checked })))
-  }
-
-  const doImport = async () => {
-    if (!discoverTarget) return
-    const picked = discoverRows.filter((r) => r.checked)
-    if (picked.length === 0) {
-      setDiscoverError('请至少勾选一个模型')
-      return
-    }
-    setImportBusy(true)
-    setDiscoverError('')
-    try {
-      const res = await settingsApi.importModels(
-        discoverTarget.id,
-        picked.map((r) => ({ model: r.model, purpose: r.purpose, label: r.label })),
-      )
-      const created = res.created_count ?? res.created?.length ?? 0
-      const skipped = res.skipped_count ?? res.skipped?.length ?? 0
-      push(
-        skipped
-          ? `已导入 ${created} 个模型，跳过 ${skipped} 个（已存在）`
-          : `已导入 ${created} 个模型`,
-        created > 0 ? 'success' : 'info',
-      )
-      closeDiscover()
-      await load()
-      await loadEmbed()
-    } catch (err) {
-      setDiscoverError(errorText(err))
-    } finally {
-      setImportBusy(false)
     }
   }
 
@@ -600,7 +207,7 @@ export default function ModelsPage() {
     embedStatus?.current_label || currentEmbed?.label || embedStatus?.current_model || currentEmbed?.model ||
     (currentEmbedId !== null ? `模型 #${currentEmbedId}` : '')
   const embeddingModels = models.filter((m) => m.purpose === 'embedding' && m.enabled)
-  const embedKbs = (embedStatus?.kbs?.length ? embedStatus.kbs : kbs.map((kb) => ({
+  const embedKbs: EmbedKbView[] = (embedStatus?.kbs?.length ? embedStatus.kbs : kbs.map((kb) => ({
     kb_id: kb.id,
     kb_name: kb.name,
     embed_signature: kb.embed_signature,
@@ -632,12 +239,12 @@ export default function ModelsPage() {
           </Button>
           {tab === 'models' ? (
             <>
-              <Button onClick={() => openProvider('create')} disabled={loading}>
+              <Button onClick={() => providerForm.openProvider('create')} disabled={loading}>
                 + 供应商
               </Button>
               <Button
                 variant="primary"
-                onClick={() => openModel('create')}
+                onClick={() => modelForm.openModel('create')}
                 disabled={loading || providers.length === 0}
                 title={providers.length === 0 ? '请先创建供应商' : undefined}
               >
@@ -692,787 +299,53 @@ export default function ModelsPage() {
         </div>
       ) : (
         <div className="col" style={{ gap: 18 }}>
-          <div className="card">
-            <div className="card-head">
-              <h3>供应商</h3>
-              <span className="tiny muted">{providers.length} 个</span>
-            </div>
-            <div className="card-body card-body-flush">
-              {providers.length === 0 ? (
-                <EmptyState
-                  title="还没有配置供应商"
-                  hint="先添加供应商的 API 地址和 Key，再添加具体模型。"
-                  action={
-                    <Button size="sm" variant="primary" onClick={() => openProvider('create')}>
-                      添加供应商
-                    </Button>
-                  }
-                />
-              ) : (
-                <div className="table-wrap">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>名称</th>
-                        <th>协议</th>
-                        <th>Base URL</th>
-                        <th>API Key</th>
-                        <th>状态</th>
-                        <th>创建时间</th>
-                        <th />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {providers.map((p) => (
-                        <tr key={p.id}>
-                          <td className="strong">{p.name}</td>
-                          <td>
-                            <span title={PROTOCOL_HINT[protocolOf(p)]}>
-                              <Badge tone={protocolOf(p) === 'openai' ? 'muted' : 'info'}>
-                                {PROTOCOL_SHORT[protocolOf(p)]}
-                              </Badge>
-                            </span>
-                          </td>
-                          <td className="mono small">{p.base_url}</td>
-                          <td>
-                            {p.has_key ? (
-                              <span className="mono small">{p.api_key_masked || '****'}</span>
-                            ) : (
-                              <span className="small muted">未配置</span>
-                            )}
-                          </td>
-                          <td>
-                            <Badge tone={p.enabled ? 'success' : 'muted'}>
-                              {p.enabled ? '启用' : '停用'}
-                            </Badge>
-                          </td>
-                          <td className="small muted nowrap">{formatTime(p.created_at)}</td>
-                          <td className="actions">
-                            <div className="table-actions">
-                              <button
-                                type="button"
-                                className="btn-link"
-                                onClick={() => void openDiscover(p)}
-                              >
-                                探测模型
-                              </button>
-                              <button
-                                type="button"
-                                className="btn-link"
-                                onClick={() => openProvider(p)}
-                              >
-                                编辑
-                              </button>
-                              <button
-                                type="button"
-                                className="btn-link danger"
-                                onClick={() => setDeleteProvider(p)}
-                              >
-                                删除
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
+          <ProviderTable
+            providers={providers}
+            onCreate={() => providerForm.openProvider('create')}
+            onDiscover={(p) => void discover.openDiscover(p)}
+            onEdit={providerForm.openProvider}
+            onDelete={(p) => setDeleteProvider(p)}
+          />
 
-          <div className="card">
-            <div className="card-head">
-              <h3>模型</h3>
-              <span className="tiny muted">{models.length} 个</span>
-            </div>
-            <div className="card-body">
-              {models.length === 0 ? (
-                <EmptyState
-                  title="还没有配置模型"
-                  hint="按用途添加：对话模型（llm）、向量模型（embedding）、视觉模型（vision）。"
-                />
-              ) : (
-                PURPOSE_ORDER.map((purpose) => {
-                  const group = models.filter((m) => m.purpose === purpose)
-                  if (group.length === 0) return null
-                  const PurposeIcon = PURPOSE_ICON[purpose]
-                  const collapsed = collapsedGroups[purpose]
-                  return (
-                    <div className={`model-group${collapsed ? ' is-collapsed' : ''}`} key={purpose}>
-                      <div className="model-group-title">
-                        <button
-                          type="button"
-                          className="model-group-toggle"
-                          onClick={() => toggleGroup(purpose)}
-                          aria-expanded={!collapsed}
-                          title={collapsed ? '展开该用途的模型' : '折叠该用途的模型'}
-                        >
-                          <span className="model-group-chevron">
-                            {collapsed ? <IconChevronRight size={16} /> : <IconChevronDown size={16} />}
-                          </span>
-                          <span className="model-group-icon">
-                            <PurposeIcon size={16} />
-                          </span>
-                          <span className="model-group-name">{PURPOSE_LABEL[purpose]}</span>
-                          <span className="model-group-count">{group.length} 个</span>
-                        </button>
-                        <button
-                          type="button"
-                          className="model-group-add"
-                          onClick={() => openModel('create', purpose)}
-                        >
-                          <IconPlus size={14} />
-                          添加模型
-                        </button>
-                      </div>
-                      <div className="table-wrap" hidden={collapsed}>
-                        {/* 三个用途的表共用同一套列宽（.model-table 固定布局）：
-                            维度列在非向量表里显示「—」，这样跨表的列头才对得齐。 */}
-                        <table className="table model-table">
-                          <colgroup>
-                            <col />
-                            <col className="model-col-provider" />
-                            <col className="model-col-dim" />
-                            <col className="model-col-default" />
-                            <col className="model-col-enabled" />
-                            <col className="model-col-tested" />
-                            <col className="model-col-actions" />
-                          </colgroup>
-                          <thead>
-                            <tr>
-                              <th>模型</th>
-                              <th>供应商</th>
-                              <th>维度</th>
-                              <th>默认</th>
-                              <th>启用</th>
-                              <th>最近测试</th>
-                              <th />
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {group.map((m) => {
-                              const res = testResults[m.id]
-                              return (
-                                <tr key={m.id}>
-                                  <td>
-                                    <div className="strong">{m.label || m.model}</div>
-                                    <div className="mono tiny muted">{m.model}</div>
-                                  </td>
-                                  <td className="small">{m.provider_name}</td>
-                                  <td className="small">{m.embed_dim || '—'}</td>
-                                  <td>
-                                    {m.is_default ? (
-                                      <Badge tone="info">默认</Badge>
-                                    ) : (
-                                      <button
-                                        type="button"
-                                        className="btn-link"
-                                        onClick={() => void setDefaultModel(m)}
-                                      >
-                                        设为默认
-                                      </button>
-                                    )}
-                                  </td>
-                                  <td>
-                                    <label className={`switch${m.enabled ? ' on' : ''}`}>
-                                      <input
-                                        type="checkbox"
-                                        checked={m.enabled}
-                                        aria-label={`启用 ${m.label || m.model}`}
-                                        onChange={() => void toggleModel(m)}
-                                      />
-                                    </label>
-                                  </td>
-                                  <td>
-                                    <div className="row" style={{ gap: 8 }}>
-                                      <Button
-                                        size="sm"
-                                        variant="ghost"
-                                        loading={testing === m.id}
-                                        onClick={() => void runTest(m)}
-                                      >
-                                        连接测试
-                                      </Button>
-                                      {res ? (
-                                        <span
-                                          className={`test-result ${
-                                            res.ok ? 'test-ok' : 'test-fail'
-                                          }`}
-                                        >
-                                          {res.ok ? <IconCheck size={12} /> : <IconClose size={12} />} {res.message}
-                                          {res.ok ? ` · ${formatMs(res.latency_ms)}` : ''}
-                                        </span>
-                                      ) : m.last_test_at ? (
-                                        <span
-                                          className={`test-result ${
-                                            m.last_test_ok ? 'test-ok' : 'test-fail'
-                                          }`}
-                                          title={m.last_test_message}
-                                        >
-                                          {m.last_test_ok ? <IconCheck size={12} /> : <IconClose size={12} />} {formatTime(m.last_test_at)}
-                                        </span>
-                                      ) : (
-                                        <span className="tiny muted">未测试</span>
-                                      )}
-                                    </div>
-                                  </td>
-                                  <td className="actions">
-                                    <div className="table-actions">
-                                      <button
-                                        type="button"
-                                        className="btn-link"
-                                        onClick={() => openModel(m)}
-                                      >
-                                        编辑
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="btn-link danger"
-                                        onClick={() => setDeleteModel(m)}
-                                      >
-                                        删除
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              )
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )
-                })
-              )}
-            </div>
-          </div>
+          <ModelGroups
+            models={models}
+            collapsedGroups={collapsedGroups}
+            onToggleGroup={toggleGroup}
+            onCreate={(purpose) => modelForm.openModel('create', purpose)}
+            onEdit={modelForm.openModel}
+            onDelete={(m) => setDeleteModel(m)}
+            onSetDefault={(m) => void setDefaultModel(m)}
+            onToggle={(m) => void toggleModel(m)}
+            onTest={(m) => void runTest(m)}
+            testing={testing}
+            testResults={testResults}
+          />
 
-          <div className="card">
-            <div className="card-head">
-              <h3>Embedding 切换</h3>
-              <div className="spacer" />
-              <Button size="sm" variant="ghost" onClick={() => void loadEmbed()}>
-                刷新
-              </Button>
-            </div>
-            <div className="card-body">
-              {embedLoading ? (
-                <div className="state-block inline">
-                  <Spinner size={14} /> 状态加载中…
-                </div>
-              ) : embedError ? (
-                <ErrorState error={embedError} onRetry={() => void loadEmbed()} />
-              ) : (
-                <>
-                  <dl className="info-list">
-                    <dt>当前 Embedding</dt>
-                    <dd>
-                      {currentEmbedName || <span className="muted">未配置</span>}
-                      {embedStatus?.current_provider ? (
-                        <span className="tiny muted"> · {embedStatus.current_provider}</span>
-                      ) : null}
-                      {embedStatus?.active?.offline ? <span className="tiny muted"> · 离线</span> : null}
-                    </dd>
-                    <dt>当前签名</dt>
-                    <dd>
-                      {embedStatus?.current_signature ? (
-                        <span className="sig-box">{embedStatus.current_signature}</span>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </dd>
-                    <dt>各库一致性</dt>
-                    <dd>
-                      {inconsistent ? (
-                        <Badge tone="warn">存在签名不一致的知识库</Badge>
-                      ) : unknownConsistency ? (
-                        <Badge tone="muted">无法判断</Badge>
-                      ) : hasIndexedKb ? (
-                        <Badge tone="success">一致</Badge>
-                      ) : (
-                        <Badge tone="muted">暂无索引</Badge>
-                      )}
-                    </dd>
-                    <dt>重建状态</dt>
-                    <dd>
-                      {embedStatus?.rebuilding ? (
-                        <Badge tone="warn">全量重建进行中</Badge>
-                      ) : (
-                        <span className="muted">无进行中的重建任务</span>
-                      )}
-                    </dd>
-                  </dl>
-
-                  {embedKbs.length > 0 ? (
-                    <div className="embed-status-grid">
-                      {embedKbs.map((kb) => (
-                        <div className={`embed-kb ${kb.state === 'mismatch' ? 'bad' : ''}`} key={kb.kb_id}>
-                          <div className="row" style={{ gap: 6 }}>
-                            <span className="truncate strong" style={{ fontSize: 12.5 }}>
-                              {kb.kb_name}
-                            </span>
-                            <span className="spacer" />
-                            <Badge tone={kb.state === 'consistent' ? 'success' : kb.state === 'mismatch' ? 'warn' : 'muted'}>
-                              {kb.state === 'unindexed' ? '无索引' : kb.state === 'unknown' ? '无法判断' : kb.state === 'consistent' ? '一致' : '需重建'}
-                            </Badge>
-                          </div>
-                          <div className="mono tiny muted" style={{ marginTop: 4 }}>
-                            {kb.state === 'unindexed' ? '未建立索引' : kb.embed_signature || '签名未知'} · {kb.embed_dim || 0} 维
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  <div className="divider" />
-                  <Field
-                    label="切换 Embedding 模型"
-                    hint="切换后已有索引的向量维度不兼容，需要全量重建所有知识库的分块索引。"
-                  >
-                    <div className="row row-wrap">
-                      <Select
-                        value={String(currentEmbedId ?? '')}
-                        onChange={(e) => {
-                          const target = embeddingModels.find((m) => String(m.id) === e.target.value)
-                          if (target) {
-                            setSwitchTarget(target)
-                            setSwitchConfirm(false)
-                          }
-                        }}
-                        style={{ maxWidth: 320 }}
-                      >
-                        <option value={String(currentEmbedId ?? '')}>
-                          {currentEmbedName
-                            ? `${currentEmbedName}（当前${embedStatus?.active?.offline ? ' · 离线' : ''}）`
-                            : '选择向量模型'}
-                        </option>
-                        {embeddingModels
-                          .filter((m) => m.id !== currentEmbedId)
-                          .map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.label || m.model} · {m.provider_name} · {m.embed_dim || '?'} 维
-                            </option>
-                          ))}
-                      </Select>
-                    </div>
-                  </Field>
-
-                  {inconsistent ? (
-                    <div className="insufficient-banner">
-                      <span className="banner-icon"><IconAlert size={15} /></span>
-                      <div style={{ flex: 1 }}>
-                        检测到部分知识库的向量签名与当前 Embedding 不一致，这些库的向量检索可能失效。
-                        建议切换到目标模型时执行全量重建。
-                      </div>
-                    </div>
-                  ) : null}
-                </>
-              )}
-            </div>
-          </div>
+          <EmbeddingCard
+            embedLoading={embedLoading}
+            embedError={embedError}
+            embedStatus={embedStatus}
+            currentEmbedId={currentEmbedId}
+            currentEmbedName={currentEmbedName}
+            embedKbs={embedKbs}
+            inconsistent={inconsistent}
+            unknownConsistency={unknownConsistency}
+            hasIndexedKb={hasIndexedKb}
+            embeddingModels={embeddingModels}
+            onRefresh={() => void loadEmbed()}
+            onPickTarget={(target) => {
+              setSwitchTarget(target)
+              setSwitchConfirm(false)
+            }}
+          />
         </div>
       )}
 
-      <Modal
-        open={providerModal !== null}
-        title={providerModal === 'create' ? '添加供应商' : '编辑供应商'}
-        onClose={() => setProviderModal(null)}
-        width={520}
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setProviderModal(null)} disabled={pBusy}>
-              取消
-            </Button>
-            <Button variant="primary" loading={pBusy} onClick={() => void submitProvider()}>
-              保存
-            </Button>
-          </>
-        }
-      >
-        {pError ? <div className="login-error">{pError}</div> : null}
-        {providerModal === 'create' ? (
-          <Field label="供应商预设" hint="直连供应商 API，填入后仍可修改；模型列表取决于供应商。">
-            <Select
-              value={pPreset}
-              onChange={(e) => {
-                const preset = PROVIDER_PRESETS.find((item) => item.name === e.target.value)
-                setPPreset(e.target.value)
-                if (preset) {
-                  const oldBase = normalizedProviderBase(pBase)
-                  const newBase = normalizedProviderBase(preset.baseUrl)
-                  if (oldBase && oldBase !== newBase && pKey) {
-                    setPKey('')
-                    setPKeyNotice('供应商地址已更换，请重新填写 API Key。')
-                  }
-                  setPName(preset.name)
-                  setPBase(preset.baseUrl)
-                  setPProtocol(preset.protocol)
-                }
-              }}
-            >
-              <option value="">自定义</option>
-              {PROVIDER_PRESETS.map((preset) => (
-                <option key={preset.name} value={preset.name}>
-                  {preset.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-        ) : null}
-        <Field label="名称" required>
-          <TextInput
-            value={pName}
-            onChange={(e) => {
-              setPName(e.target.value)
-              setPPreset('')
-            }}
-            placeholder="例如：OpenAI"
-            autoFocus
-          />
-        </Field>
-        <Field label="Base URL" required hint="接口根地址，例如 https://api.openai.com/v1">
-          <TextInput
-            value={pBase}
-            onChange={(e) => {
-              setPBase(e.target.value)
-              setPPreset('')
-            }}
-            placeholder="https://api.openai.com/v1"
-            className="mono"
-          />
-        </Field>
-        <Field label="API 协议" required hint={PROTOCOL_HINT[pProtocol]}>
-          <Select
-            value={pProtocol}
-            onChange={(e) => {
-              setPProtocol(e.target.value as ProviderProtocol)
-              setPPreset('')
-            }}
-          >
-            {PROTOCOL_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field
-          label="API Key"
-          hint={
-            pKeyNotice || (providerModal !== 'create' && providerModal?.has_key
-              ? `当前：${providerModal.api_key_masked || '已配置'}，留空表示不修改`
-              : '留空表示不设置')
-          }
-        >
-          <TextInput
-            type="password"
-            value={pKey}
-            onChange={(e) => {
-              setPKey(e.target.value)
-              setPKeyNotice('')
-            }}
-            placeholder={providerModal !== 'create' ? '留空不修改' : 'sk-...'}
-            autoComplete="new-password"
-          />
-        </Field>
-        <label className="checkbox">
-          <input type="checkbox" checked={pEnabled} onChange={(e) => setPEnabled(e.target.checked)} />
-          启用该供应商
-        </label>
-        {providerModal !== 'create' && providerModal?.has_key ? (
-          <div style={{ marginTop: 12 }}>
-            <button type="button" className="btn-link danger" onClick={() => setClearKeyOpen(true)}>
-              清空已保存的 API Key
-            </button>
-            <div className="tiny muted" style={{ marginTop: 4 }}>
-              清空后该供应商下的模型将无法调用，需要重新填写 Key。
-            </div>
-          </div>
-        ) : null}
-      </Modal>
+      <ProviderFormModal form={providerForm} />
 
-      <Modal
-        open={Boolean(discoverTarget)}
-        title={`探测模型 · ${discoverTarget?.name ?? ''}`}
-        onClose={closeDiscover}
-        width={640}
-        footer={
-          <>
-            <Button variant="ghost" onClick={closeDiscover} disabled={importBusy}>
-              取消
-            </Button>
-            <Button
-              variant="primary"
-              loading={importBusy}
-              disabled={discoverBusy || discoverRows.every((r) => !r.checked)}
-              onClick={() => void doImport()}
-            >
-              导入所选（{discoverRows.filter((r) => r.checked).length}）
-            </Button>
-          </>
-        }
-      >
-        {discoverBusy ? (
-          <div className="state-block inline">
-            <Spinner size={14} /> 正在向供应商请求模型列表…
-          </div>
-        ) : (
-          <>
-            {discoverError ? (
-              <div className="insufficient-banner" style={{ marginBottom: 12 }}>
-                <span className="banner-icon"><IconAlert size={15} /></span>
-                <div style={{ flex: 1 }}>
-                  探测失败：{discoverError}
-                  <div className="tiny muted" style={{ marginTop: 4 }}>
-                    可改用「+ 模型」手动填写模型名；接口不支持的供应商不会影响已有配置。
-                  </div>
-                </div>
-              </div>
-            ) : null}
-            {discoverSource === 'builtin' ? (
-              <div className="insufficient-banner" style={{ marginBottom: 12 }}>
-                <span>ℹ</span>
-                <div style={{ flex: 1 }}>
-                  该供应商没有可用的模型列表接口，下面显示的是内置常用清单，请核对后导入。
-                </div>
-              </div>
-            ) : null}
+      <DiscoverModal discover={discover} />
 
-            {discoverRows.length === 0 ? (
-              <EmptyState
-                title="没有探测到可用模型"
-                hint="确认 Base URL、API Key 与协议是否匹配；也可以直接手动添加模型。"
-              />
-            ) : (
-              <>
-                <p className="small muted" style={{ marginBottom: 10 }}>
-                  供应商列表可能包含不支持问答或向量的模型，请核对用途后勾选。若当前用途未设置默认模型，导入的新模型可能自动用于后续请求；可先关闭此窗口并设置默认模型。
-                </p>
-                <div className="row" style={{ gap: 10, marginBottom: 8 }}>
-                  <button
-                    type="button"
-                    className="btn-link"
-                    onClick={() => toggleDiscoverAll(true)}
-                  >
-                    全选
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-link"
-                    onClick={() => toggleDiscoverAll(false)}
-                  >
-                    全不选
-                  </button>
-                  <span className="spacer" />
-                  <span className="tiny muted">共 {discoverRows.length} 个</span>
-                </div>
-                <div className="table-wrap table-wrap--scroll" style={{ maxHeight: 380 }}>
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th style={{ width: 40 }} />
-                        <th>模型</th>
-                        <th style={{ width: 150 }}>用途</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {discoverRows.map((r) => (
-                        <tr key={r.model}>
-                          <td>
-                            <input
-                              type="checkbox"
-                              checked={r.checked}
-                              onChange={() => toggleDiscoverRow(r.model)}
-                              aria-label={`选择 ${r.model}`}
-                            />
-                          </td>
-                          <td>
-                            <div className="mono small">{r.model}</div>
-                            {r.label && r.label !== r.model ? (
-                              <div className="tiny muted">{r.label}</div>
-                            ) : null}
-                            {r.already_imported ? (
-                              <div className="tiny muted">已存在同用途配置</div>
-                            ) : null}
-                          </td>
-                          <td>
-                            <Select
-                              value={r.purpose}
-                              onChange={(e) =>
-                                setDiscoverPurpose(r.model, e.target.value as ModelPurpose)
-                              }
-                              aria-label={`${r.model} 的用途`}
-                              style={{ minWidth: 120 }}
-                            >
-                              <option value="llm">对话 llm</option>
-                              <option value="embedding">向量 embedding</option>
-                              <option value="vision">视觉 vision</option>
-                            </Select>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-          </>
-        )}
-      </Modal>
-
-      <ConfirmDialog
-        open={clearKeyOpen}
-        title="清空 API Key"
-        message={`确认清空供应商「${
-          providerModal !== 'create' ? providerModal?.name ?? '' : ''
-        }」的 API Key？清空后其下所有模型将无法调用，需重新填写。`}
-        confirmText="确认清空"
-        danger
-        busy={pBusy}
-        onConfirm={() => void doClearKey()}
-        onCancel={() => setClearKeyOpen(false)}
-      />
-
-      <Modal
-        open={modelModal !== null}
-        title={modelModal === 'create' ? '添加模型' : '编辑模型'}
-        onClose={() => setModelModal(null)}
-        width={520}
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setModelModal(null)} disabled={mBusy}>
-              取消
-            </Button>
-            <Button variant="primary" loading={mBusy} onClick={() => void submitModel()}>
-              保存
-            </Button>
-          </>
-        }
-      >
-        {mError ? <div className="login-error">{mError}</div> : null}
-        <Field label="供应商" required>
-          <Select
-            value={String(mProvider)}
-            onChange={(e) => setMProvider(Number(e.target.value))}
-            disabled={modelModal !== 'create'}
-          >
-            {providers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="用途" required>
-          <Select
-            value={mPurpose}
-            onChange={(e) => setMPurpose(e.target.value as ModelPurpose)}
-            disabled={modelModal !== 'create'}
-          >
-            <option value="llm">对话模型 llm</option>
-            <option value="embedding">向量模型 embedding</option>
-            <option value="vision">视觉模型 vision</option>
-          </Select>
-        </Field>
-        <Field label="模型名" required hint="供应商侧的真实模型标识，例如 gpt-4o-mini">
-          <TextInput
-            value={mModel}
-            onChange={(e) => setMModel(e.target.value)}
-            placeholder="gpt-4o-mini"
-            className="mono"
-          />
-        </Field>
-        <Field label="显示名" hint="用于界面展示，留空则显示模型名">
-          <TextInput value={mLabel} onChange={(e) => setMLabel(e.target.value)} placeholder="例如：主对话模型" />
-        </Field>
-        {mPurpose === 'embedding' ? (
-          <Field label="向量维度" hint="与模型输出维度一致，例如 text-embedding-3-small 为 1536">
-            <TextInput
-              value={mDim}
-              onChange={(e) => setMDim(e.target.value.replace(/[^0-9]/g, ''))}
-              placeholder="1536"
-              className="mono"
-            />
-          </Field>
-        ) : null}
-
-        <div className="params-section">
-          <button
-            type="button"
-            className="params-toggle"
-            onClick={() => setMParamsOpen((v) => !v)}
-            aria-expanded={mParamsOpen}
-          >
-            <span className="params-caret">
-              {mParamsOpen ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />}
-            </span>
-            高级参数（JSON）
-            {!mParamsOpen && mParams.trim() && mParams.trim() !== '{}' ? (
-              <span className="tiny muted">已设置</span>
-            ) : null}
-          </button>
-          {mParamsOpen ? (
-            <div className="params-body">
-              <div className="tiny muted" style={{ marginBottom: 6 }}>
-                透传给供应商的额外参数，例如 temperature、max_tokens、top_p、dimensions。
-                留空或 {'{}'} 表示不设置。
-              </div>
-              <textarea
-                className="input textarea code params-textarea"
-                aria-label="模型参数 JSON"
-                value={mParams}
-                onChange={(e) => {
-                  setMParams(e.target.value)
-                  setMParamsError('')
-                }}
-                spellCheck={false}
-                placeholder={'{\n  "temperature": 0.2,\n  "max_tokens": 1500\n}'}
-              />
-              {mParamsError ? <div className="field-error">{mParamsError}</div> : null}
-              <div className="row" style={{ gap: 8, marginTop: 6 }}>
-                <button
-                  type="button"
-                  className="btn-link"
-                  onClick={() => {
-                    setMParams('{}')
-                    setMParamsError('')
-                  }}
-                >
-                  清空
-                </button>
-                <button
-                  type="button"
-                  className="btn-link"
-                  onClick={() => {
-                    try {
-                      const parsed: unknown = JSON.parse(mParams || '{}')
-                      setMParams(JSON.stringify(parsed, null, 2))
-                      setMParamsError('')
-                    } catch (err) {
-                      setMParamsError(
-                        `JSON 解析失败：${err instanceof Error ? err.message : '格式不正确'}`,
-                      )
-                    }
-                  }}
-                >
-                  格式化
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </div>
-        <div className="row" style={{ gap: 18, marginTop: 4 }}>
-          <label className="checkbox">
-            <input type="checkbox" checked={mDefault} onChange={(e) => setMDefault(e.target.checked)} />
-            设为该用途默认模型
-          </label>
-          <label className="checkbox">
-            <input type="checkbox" checked={mEnabled} onChange={(e) => setMEnabled(e.target.checked)} />
-            启用
-          </label>
-        </div>
-      </Modal>
+      <ModelFormModal form={modelForm} providers={providers} />
 
       <ConfirmDialog
         open={Boolean(deleteProvider)}
@@ -1545,97 +418,5 @@ export default function ModelsPage() {
         ) : null}
       </Modal>
     </>
-  )
-}
-
-function AuditPanel({
-  items,
-  total,
-  page,
-  pageSize,
-  loading,
-  error,
-  onPage,
-}: {
-  items: AuditEntry[]
-  total: number
-  page: number
-  pageSize: number
-  loading: boolean
-  error: unknown
-  onPage: (page: number) => void
-}) {
-  const pages = Math.max(1, Math.ceil(total / pageSize))
-
-  return (
-    <div className="card">
-      <div className="card-head">
-        <h3>审计日志</h3>
-        <span className="tiny muted">共 {total} 条</span>
-      </div>
-      <div className="card-body card-body-flush">
-        {loading ? (
-          <div style={{ padding: 16 }}>
-            <SkeletonLines rows={8} />
-          </div>
-        ) : error ? (
-          <ErrorState error={error} onRetry={() => onPage(page)} />
-        ) : items.length === 0 ? (
-          <EmptyState
-            title="暂无审计记录"
-            hint="登录、上传文档、调整授权、修改模型等操作都会记录在这里。"
-          />
-        ) : (
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th style={{ width: 150 }}>时间</th>
-                  <th style={{ width: 140 }}>用户</th>
-                  <th style={{ width: 120 }}>操作</th>
-                  <th style={{ width: 200 }}>对象</th>
-                  <th>详情</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((row) => (
-                  <tr key={row.id}>
-                    <td className="small muted nowrap">{formatTime(row.created_at)}</td>
-                    <td className="small">{row.username || '—'}</td>
-                    <td>
-                      <Badge tone="muted">{AUDIT_ACTION_LABEL[row.action] ?? row.action}</Badge>
-                    </td>
-                    <td className="small truncate" style={{ maxWidth: 200 }} title={row.target}>
-                      {row.target || '—'}
-                    </td>
-                    <td className="small muted" style={{ wordBreak: 'break-word' }}>
-                      {row.detail || '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-      <div className="pager">
-        <span className="tiny muted">
-          第 {page} / {pages} 页 · 每页 {pageSize} 条
-        </span>
-        <div className="spacer" />
-        <Button size="sm" disabled={page <= 1 || loading} onClick={() => onPage(1)}>
-          首页
-        </Button>
-        <Button size="sm" disabled={page <= 1 || loading} onClick={() => onPage(page - 1)}>
-          上一页
-        </Button>
-        <Button size="sm" disabled={page >= pages || loading} onClick={() => onPage(page + 1)}>
-          下一页
-        </Button>
-        <Button size="sm" disabled={page >= pages || loading} onClick={() => onPage(pages)}>
-          末页
-        </Button>
-      </div>
-    </div>
   )
 }

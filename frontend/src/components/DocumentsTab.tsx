@@ -22,6 +22,7 @@ import {
   Spinner,
 } from '../components/ui'
 import TaskList from '../components/TaskList'
+import { STOP_REQUESTED } from '../shared/messages'
 import { IconAlert } from './icons'
 
 const ACCEPTED_FILE_TYPES = ['pdf', 'docx', 'xlsx', 'pptx', 'md', 'markdown', 'txt', 'log']
@@ -301,7 +302,7 @@ export default function DocumentsTab({
   const stopWiki = async (task: Task) => {
     try {
       await taskApi.stopWiki(task.id, task.run_token)
-      onToast('已发送停止请求', 'info')
+      onToast(STOP_REQUESTED, 'info')
     } finally {
       await loadTasks()
       onChanged()
