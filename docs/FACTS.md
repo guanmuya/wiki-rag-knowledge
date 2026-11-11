@@ -28,26 +28,31 @@
 | 项 | 当前值 | 代码依据（文件 + 符号名） | 体检前被写成 |
 | --- | --- | --- | --- |
 | 应用版本 | `1.0.18` | `backend/app/main.py` 的 `VERSION`；`frontend/package.json` 的 `version` | THESIS.md `1.0.0`、HANDOFF.md 首屏 `v1.0.10` |
-| 数据表数量 | **23 张**：`models.py` 声明 22 张 + `schema_migrations` 1 张 | `backend/app/models.py` 的 22 个 `__tablename__`；`backend/app/migrations.py` 的 `_CREATE_TABLE`（原始 SQL 建表，**不进** `Base.metadata`，所以 `create_all()` 不建它） | THESIS.md 19 张；本表旧口径 21 张（`models.py` 实际是 22 张，漏算 1 张，见下方注） |
+| 数据表数量 | **24 张**：`models.py` 声明 23 张 + `schema_migrations` 1 张 | `backend/app/models.py` 的 23 个 `__tablename__`；`backend/app/migrations.py` 的 `_CREATE_TABLE`（原始 SQL 建表，**不进** `Base.metadata`，所以 `create_all()` 不建它）。数法与输出见 `docs/evidence/table-count-2026-11-11.txt` | THESIS.md 19 张；本表旧口径 21 张（`models.py` 实际是 22 张，漏算 1 张，见下方注） |
 | Worker 并发 | **1** | `backend/app/config.py` 的 `WORKER_CONCURRENCY`（`WRK_WORKER_CONCURRENCY` 默认 `"1"`） | `2`（5 份文档） |
 | SQLite 写锁等待 | **三档 3s / 30s / 1s**（见 §1.1） | `backend/app/config.py` 的 `BUSY_TIMEOUT_INTERACTIVE` / `BUSY_TIMEOUT_WORKER` / `BUSY_TIMEOUT_PROGRESS` | 一刀切 `busy_timeout=15000`；DESIGN.md §4.5 又写 `3s` |
 | 拿不到锁的重试次数 | `5`（`WRK_LOCK_RETRY_ATTEMPTS`，兼容别名 `WRK_LOCK_RETRY`） | `backend/app/config.py` 的 `LOCK_RETRY_ATTEMPTS` | 未进文档 |
 | 可调项 | `config.py` 中 **43 个 `WRK_*`** 环境变量（另有若干由 `desktop_entry.py` / `security.py` / `answering.py` 读取） | `backend/app/config.py`；数法与复现命令见 §1.3 | 本表旧口径 38 个；批次三（P1-8）把它写成 41（算式给的是 38 + 5 = 43，属笔误，见下方注）；README §5 漏列 11 个（见 §1.2） |
-| 后端测试基线 | **707 passed, 1 skipped**（见 §2） | 合并 `origin/master` 后本机实跑，原始输出 `docs/evidence/pytest-baseline.txt`；CI 状态见 §2.1 | 六份文档 8 个互不相同的数字 |
+| 后端测试基线 | **754 passed, 1 skipped**（见 §2） | 本机实跑，原始输出 `docs/evidence/pytest-baseline.txt`；CI 状态见 §2.1 | 六份文档 8 个互不相同的数字 |
 
 > 表里「当前值」一列在批次三（P1-8）逐条回查代码确认，批次五（文档口径收尾）又按代码重数了
 > 可调项条数；D1–D7 的结论在代码里**仍然成立**（`backend/app/config.py` 的
 > `WORKER_CONCURRENCY` 仍是 `1`、`BUSY_TIMEOUT_*` 仍是三档，`backend/app/main.py` 的
 > `VERSION` 已随发版递增到 `1.0.18`，与 §1 表内「应用版本」一致）。
 > 两处旧口径按代码订正：`models.py` 实际是 **22** 个 `__tablename__`（旧写 21，少算 1 张），
-> 加上 P1-8 新增的 `schema_migrations` 共 **23** 张；`config.py` 实际是 **43** 个 `WRK_*`
+> 加上 P1-8 新增的 `schema_migrations` 共 **23** 张；P1-11 又新增 `model_prices` 1 张，
+> 现为 **24 张**（§1 表内已更新，重数命令与输出见
+> `docs/evidence/table-count-2026-11-11.txt`）；`config.py` 实际是 **43** 个 `WRK_*`
 > （旧写 38；P1-8 新增 4 个 `WRK_LOGIN_*` 与 `WRK_HARDEN_SECRETS`，38 + 5 = 43，清单见 §1.2）。
 > **批次三写的 41 是算式笔误、不是后来又漏了两项**：它在同一段里写的是「38 + 5」，
 > 结果却落成 41，与 §1.2 的清单和代码都对不上；批次五用 §1.3 的命令重数得到 **43**，
 > 命令与输出记在 `docs/evidence/wrk-count-2026-11-11.txt`。其余文档从此不再复述这个条数。
 > `README.md` 目录树注释与 `docs/THESIS.md` §2.1 / §2.2 原本写着「21 张表」，已在批次四
 > （P2 仓库治理）按本节订正为 **23 张表**（`models.py` 的 22 个 + `migrations.py` 的
-> `schema_migrations`）；`THESIS.md` §4 是实验结果，按仓库约定不动。
+> `schema_migrations`）；P1-11 新增 `model_prices` 后这三处同步改成 **24 张表**
+> （`models.py` 的 23 个 + `schema_migrations`），`THESIS.md` §2.2 的分组表也补上了
+> `model_prices` 与原本漏列的 `agent_sessions` / `agent_messages` /
+> `wiki_generation_sources`；`THESIS.md` §4 是实验结果，按仓库约定不动。
 
 ### 1.1 SQLite 写锁三档（替代旧的一刀切 `15000ms`）
 
@@ -143,20 +148,18 @@ python -c "import re,pathlib;print(len(set(re.findall(r'\bWRK_[A-Z0-9_]+\b', pat
 | 权威环境（CI） | `windows-latest`、Python 3.13.x、依赖来自 `backend/requirements-dev.txt` + `backend/constraints.txt` |
 | 本次实测环境 | Windows 11（10.0.26200）、Python 3.13.11、pytest 9.2.0、全局解释器（当前 checkout 无 `.venv`） |
 | 数据隔离 | `backend/tests/conftest.py` 用独立临时目录并关闭 Worker 与预热，不污染 `data/` |
-| 当前基线 | **`707 passed, 1 skipped`** |
-| 本次实测 | 合并 `origin/master`（带入 P1-5 / P1-10）后的本分支工作区，`707 passed, 1 skipped in 243.49s (0:04:03)` |
-| 独立佐证 | 上一版 `673` 有 `docs/PR42_FIX_REPORT.md` §验收表的独立记录；本轮在它之上新增 34 条用例（`462 → 496` 个 `def test_`、`47 → 53` 个测试文件），`673 + 34 = 707` 与 §2.3 的分解数字自洽，可用该节的三条命令复核 |
-| CI 状态 | **CI 已通过、artifact 未取**：产出本基线的那棵树随 PR #58 并入 `master` 后，`master@26503ec` 的 push 运行是 **CI #33（run `42947552959`）completed/success**，作业「后端测试 + 前端类型检查、构建与自动化测试」completed/success，五个检查步骤（全量后端测试、契约一致性、前端类型检查、前端 Web 构建、前端自动化测试）逐项 success。本机取不到该 run 的 `pytest-baseline` artifact，所以**本行不引用 CI 里的计数**，§2.2 的转录仍是本机实跑；能取到 artifact 时按 §2.4 第 3 条覆盖本行与 §2.2 |
+| 当前基线 | **`754 passed, 1 skipped`** |
+| 本次实测 | 合并 `origin/master`（带入个人 Agent 页面改造与 `test_agent_runtime` 的断网夹具）后的本分支工作区，`754 passed, 1 skipped in 212.82s (0:03:32)` |
+| 独立佐证 | 上一版 `707` 的分解可用 §2.3 的三条命令复核；本轮在它之上新增 25 个 `def test_`（`496 → 521`）、2 个测试文件（`53 → 55`）、3 个 `parametrize`（`80 → 83`），展开后 `707 + 47 = 754`，与 §2.3 的分解数字自洽；分组实跑记录见 `docs/evidence/pricing-gates-2026-11-11.txt` |
+| CI 状态 | **待验（本轮分支尚未跑 CI）**：上一版基线（`707`）那棵树随 PR #58 并入 `master` 后曾是 CI #33（run `42947552959`）全绿，五个检查步骤逐项 success——那是**上一棵树**的记录。本轮 P1-11 改动了 `backend/**`、`frontend/src/**`、`docs/**`，按 §2.4 第 3 条的例外处理：先记本机实跑，CI artifact 出来后覆盖本行与 §2.2。本机的五项门禁（后端全量 + 契约 + 类型检查 + Web 构建 + 前端自动化测试）均已通过，输出见 `docs/evidence/pricing-gates-2026-11-11.txt` |
 
 > **为什么这里记的是本机数字，而不是 CI artifact**：§2.4 第 3 条要求从 CI artifact 取数，
-> 但这次落盘的本机实跑是**合并 `origin/master` 之后**的树（master 带进来 P1-5 / P1-10 的前端
-> 与契约校验改动），当时这棵树还没有任何 CI 运行、也就没有对应的 artifact。按「拿不到远端结果
-> 就写待验、并给出本机等价证据」的口径，先落本机实跑并把 CI 标为待验。
-> **2026-11-11 更新**：这棵树已随 PR #58 并入 `master`，`master@26503ec` 的 CI #33 全绿
-> （见上表「CI 状态」）；但本机取不到它的 artifact，所以 §2.2 仍以本机实跑为准，等能取到 artifact
-> 时再按第 3 条覆盖。
+> 但本轮改动还没有任何 CI 运行（分支刚成形，push 后才会触发）。按「拿不到远端结果
+> 就写待验、并给出本机等价证据」的口径，先落本机实跑并把 CI 标为待验；
+> **2026-11-11 更新**：上一版基线（`707`）的树已随 PR #58 并入 `master` 并在 CI #33 全绿，
+> 但本机取不到它的 artifact，所以 §2.2 仍以本机实跑为准。
 >
-> 本机与 CI 在同一提交上的历史一致性可以支撑「本机等价证据」这个说法：上一版基线（`638`）时，
+> 本机与 CI 在同一提交上的历史一致性可以支撑「本机等价证据」这个说法：更早的基线（`638`）时，
 > CI #14（run `42860672282`，job `129985607428`）的 artifact 与本机在同一提交 `350009c` 上的复跑
 > **进度条逐行相同、计数完全相同**，只差耗时与 CI 环境特有的 warning 行。但它不是同一份 artifact，
 > 所以本节的来源标注不写成「CI 实测」。
@@ -164,32 +167,43 @@ python -c "import re,pathlib;print(len(set(re.findall(r'\bWRK_[A-Z0-9_]+\b', pat
 ### 2.2 一次真实运行输出（原文，完整内容见证据文件）
 
 ```
-........................................................................ [ 10%]
-........................................................................ [ 20%]
-........................................................................ [ 30%]
-........................................................................ [ 40%]
-........................................................................ [ 50%]
-........................................................................ [ 61%]
-..................................s..................................... [ 71%]
-........................................................................ [ 81%]
-........................................................................ [ 91%]
-............................................................             [100%]
-707 passed, 1 skipped in 243.49s (0:04:03)
+........................................................................ [  9%]
+........................................................................ [ 19%]
+........................................................................ [ 28%]
+........................................................................ [ 38%]
+........................................................................ [ 47%]
+........................................................................ [ 57%]
+........................................................................ [ 66%]
+......s................................................................. [ 76%]
+........................................................................ [ 85%]
+........................................................................ [ 95%]
+...................................                                      [100%]
+754 passed, 1 skipped in 231.24s (0:03:51)
 ```
 
 > 上面是本次实跑的 stdout 原样转录（`pytest -q`，`Tee-Object` 落盘后转存为 UTF-8），
-> `docs/evidence/pytest-baseline.txt` 是同一份内容，共 11 行。**以证据文件为准。**
+> `docs/evidence/pytest-baseline.txt` 是同一份内容，共 12 行。**以证据文件为准。**
 > 本机最后一行没有 `N warning`，因为旧版 CI 里那 1 个 warning 来自 CI 环境的
 > starlette/httpx 版本组合（见 §2.3），不是项目代码。
 
 ### 2.3 数字的来龙去脉
 
-- **707 passed, 1 skipped**：`backend/tests/` 有 **53 个 `test_*.py` + 1 个 `conftest.py`**
-  （共 54 个 `.py`），文件内 **496 个 `def test_`**、**80 个 `@pytest.mark.parametrize`**；
-  参数化展开后正好得到 707 项。三条分解数字可用同一条命令复核：
+- **754 passed, 1 skipped**：`backend/tests/` 有 **55 个 `test_*.py` + 1 个 `conftest.py`**
+  （共 56 个 `.py`），文件内 **521 个 `def test_`**、**83 个 `@pytest.mark.parametrize`**；
+  参数化展开后正好得到 755 项（754 passed + 1 skipped）。三条分解数字可用同一条命令复核：
   `Get-ChildItem backend/tests -Filter 'test_*.py' -Recurse`、
   `Select-String -Pattern '^\s*def test_'`、`Select-String -Pattern '@pytest\.mark\.parametrize'`。
-- **比上一版（673）多 34 项的原因**：批次三 P1-8 新增 6 个测试文件，**全是新增用例，没有删改既有用例**：
+- **比上一版（707）多 47 项的原因**：P1-11（个人 Agent 用量入统计 + 模型参考价）新增
+  2 个测试文件（`test_model_prices.py`、`test_pricing_api.py`）并在 4 个既有文件里补用例：
+  新增 **25 个 `def test_`**（`496 → 521`）、**3 个 `parametrize`**（`80 → 83`）。
+  展开后正好 `+47`：`test_model_prices` 9 个函数（含 1 个 7 行参数化）→ 15 项；
+  `test_pricing_api` 7 个函数（含 1 个 4 行参数化）→ 10 项；
+  `test_agent_runtime.py` +3 个函数（`test_jsonl_usage_parser` 参数化 11 行）→ +13 项；
+  `test_agent_plugins.py` +2 个函数、既有参数化表 +3 行 → +5 项；
+  `test_usage.py` +3 项；`test_login_rate_limit.py` +1 项。合计 15+10+13+5+3+1 = 47。
+  **没有删改既有用例的断言口径**（`test_usage.py` 的既有断言只是跟随响应新增了
+  `unmetered_records` / `cost` / `currency` / `price_unit` / `by_core` 字段）。
+- **707 的来历（上一版，保留作追溯）**：批次三 P1-8 新增 6 个测试文件，**全是新增用例，没有删改既有用例**：
   `test_must_change_password.py`（4）、`test_login_rate_limit.py`（6）、`test_upload_magic.py`（5）、
   `test_secret_permissions.py`（7）、`test_watchdog_logging.py`（5）、`test_schema_migrations.py`（7），
   合计 34。对应 `47 → 53` 个测试文件、`462 → 496` 个 `def test_`；`parametrize` 仍为 **80**
@@ -203,14 +217,17 @@ python -c "import re,pathlib;print(len(set(re.findall(r'\bWRK_[A-Z0-9_]+\b', pat
   `pytest.importorskip("reportlab", reason="需要 reportlab 生成 PDF 夹具")`；本机与 CI 都未安装
   可选的 `reportlab`，该用例被跳过。用 `python -m pytest backend/tests -q -rs` 复核可见
   `SKIPPED [1] backend/tests/test_tables.py:319`。**它是可选依赖缺失，不是漏测，也不是新增 skip。**
-- **耗时不是验收指标**：本机两次绿跑分别是 `243.49 s`（本树）与 `306.01 s`（同一后端树、合并前），
-  随机器负载变化；**passed / skipped 计数稳定为 707 / 1**。负载高时另出现过 2 次与 P1-8 无关的
-  偶发（`test_agent_runtime` / `test_freeze_during_task`，单独复跑均通过），见 §2.5。
+- **耗时不是验收指标**：本机绿跑的耗时随机器负载变化（本轮全量 `212.82 s`，合并 `origin/master`
+  之前是 `231.24 s`）；**passed / skipped 计数稳定为 754 / 1**。负载高时另出现过与本次改动无关的偶发
+  （`test_agent_runtime` / `test_freeze_during_task`，单独复跑均通过）；其中
+  `test_agent_runtime` 那次的根因（用例向 `example.test` 发真实模型请求、被 DNS 拖满 15 秒）
+  已随合并 `origin/master` 的 `offline_llm` 夹具修掉，见 §2.5。
 - **warning 行与代码无关**：旧版 CI 曾出现 1 个
   `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.`，
   出自第三方 `starlette` 的 `testclient.py`，由 CI 环境的版本组合触发；本机实跑没有该行。
 - 更早的三个口径（`583`、`638`、`673`）都已过时：`583` 是批次一体检时的快照，`638` 是
-  `master@350009c` 的基线，`673` 是本轮合入 `origin/master` 之前的基线；本节按当前测试树统一重算。
+  `master@350009c` 的基线，`673` 是 P1-8 合入 `origin/master` 之前的基线，`707` 是 P1-8 定稿
+  基线；本节按当前测试树统一重算。
 
 ### 2.4 维护约定（避免再次散落）
 
@@ -236,22 +253,31 @@ python -c "import re,pathlib;print(len(set(re.findall(r'\bWRK_[A-Z0-9_]+\b', pat
 6. **改基线时分解数字必须一起重算**：文件数 / `def test_` / `parametrize` 三项与 passed 数
    是同一套事实的四张脸，只改标题数字会立刻自相矛盾。
 
-### 2.5 本轮已知残留（如实记录，未在本任务范围内修改）
+### 2.5 本轮已知残留（如实记录）
 
 - ~~`backend/requirements.txt` 第 5 行的注释仍写 `583 passed, 1 skipped`~~ **本轮（P1-8）已修**：
   该行已改成指向本节、不再手写数字（P1-8 是第一批改动 `backend/**` 的任务）。
 - `docs/HEALTH_CHECK.md` §3.1 的 `583` 是体检当时的实测快照，属于历史记录，**不回改**。
 - `docs/PR42_FIX_REPORT.md` 的验收表里另有一份 `673 passed, 1 skipped`，并仍写着「四项检查」
-  ——那是该任务交付当时的点对点报告（当时 CI 还是四项，本轮才加到五项）。它属于历史报告，
-  本轮未回改；§2.1 已把它当作上一版基线的独立佐证引用。
-- ~~**与 P1-8 无关的已知偶发**：`backend/tests/test_agent_runtime.py` 的 `_wait_run()` 只等
-  15 秒，全量跑在负载高时会偶发超时~~ **已修（2026-11-11，独立任务「让 test_agent_runtime
+  ——那是该任务交付当时的点对点报告（当时 CI 还是四项，P1-5 才加到五项）。它属于历史报告，
+  本节不回改。
+- ~~**与 P1-8 / P1-11 无关的已知偶发**：`backend/tests/test_agent_runtime.py` 的 `_wait_run()`
+  只等 15 秒，全量跑在负载高时会偶发超时~~ **已修（2026-11-11，独立任务「让 test_agent_runtime
   的两条用例不再依赖真实 DNS」）**：根因不是「等得不够久」，而是这两条用例会拿假域名
   `https://example.test` 发一次真实模型请求——本机解析该域名要 11 秒，一次出网就吃掉 15 秒预算。
   改法是在测试侧断掉出网（`offline_llm` 夹具：`llm._client` 就地失败 + 非回环域名解析直接报错），
   **`_wait_run()` 的超时没有放宽**；改后 `707 passed, 1 skipped` 不变，`.test` 不可解析 / 解析拖成
   11 秒 / 断网三种条件下各连续 5 次全绿。根因、对照与逐次输出见
   `docs/evidence/agent-runtime-offline.txt`。
+  P1-11 的全量跑在该修复进入本分支**之前**也命中过一次同根因的偶发
+  （`test_kb_session_flow`，知识库核心同样会向 `example.test` 发模型请求）：单文件复跑
+  `26 passed`、全量复跑 `754 passed`；合并本修复后不再依赖真实 DNS。
+- ~~`Retry-After` 偶发多报 1 秒~~ **P1-11 已修**：`backend/app/services/login_guard.py` 的
+  `now + lock_seconds - now` 会带 1e-10 级浮点尾巴，`ceil` 后 `Retry-After` 变成 `901`
+  （本机 20 万次 `time.monotonic()` 采样中约 25% 命中），使
+  `test_login_rate_limit.py` 的全量跑时好时坏。已改为 `_retry_after()`（先减 1 微秒 epsilon
+  再 `ceil`）并补 `test_retry_after_rounds_up_without_float_noise` 锁定行为；
+  输出见 `docs/evidence/pricing-gates-2026-11-11.txt` §四。
 
 
 
@@ -350,3 +376,21 @@ python -c "import re,pathlib;print(len(set(re.findall(r'\bWRK_[A-Z0-9_]+\b', pat
   `docs/API.md` 六份文档对版本、表数、并发、锁超时、测试基线一律只放链接，未复述数字；
   `CHANGELOG.md` 与 `CONTRIBUTING.md` 同样只写指向（两者已复核为真）。
 - 本轮**只改文档**：`backend/**`、`frontend/**`、`.github/**` 零改动，`docs/archive/**` 零改动。
+
+### 6.4 P1-11 追加订正（2026-11-11，个人 Agent 用量入统计 + 模型参考价）
+
+P1-11 改动 `backend/**`，同时让两个口径发生变化：数据表 `23 → 24`（新增 `model_prices`）、
+测试基线 `707 → 754`（新增用例）。按「当前事实必须与本节一致、历史语境保持原样」的判据，
+本轮扫到并订正了下面几处**复述数字的位置**：
+
+| 位置 | 旧值 | 现值 | 说明 |
+| --- | --- | --- | --- |
+| 本文件 §1「数据表数量」、§1 表后注、§6 各段引用 | `23 张`（`models.py` 22 张） | **24 张**（`models.py` 23 张） | 重数命令与输出见 `docs/evidence/table-count-2026-11-11.txt` |
+| `README.md` 目录树的 `models.py` 注释 | `23 张表（22 个 __tablename__…）` | `24 张表（23 个 __tablename__…）` | 该行一直在写具体条数，属于要跟着本节同步的位置 |
+| `docs/THESIS.md` §2.1 架构图、§2.2 数据模型首段 | `23 张表` / `22 个 __tablename__` | `24 张表` / `23 个 __tablename__` | 同时补上 §2.2 分组表漏列的 `agent_sessions`、`agent_messages`、`wiki_generation_sources` 与新表 `model_prices`（补完 5 组共 23 张，先加 `schema_migrations` = 24） |
+| `docs/API.md` §5（schema_migrations 一节） | `「23 张表」= models.py 的 22 张 + 本表` | `「24 张表」= models.py 的 23 张 + 本表` | 同一口径 |
+| 本文件 §2.1 / §2.2 / §2.3 | `707 passed, 1 skipped` | **`754 passed, 1 skipped`** | 分解数字按 §2.4 第 6 条一起重算 |
+
+**历史语境仍未回改**：`docs/HEALTH_CHECK.md`（`21 张表` / `583`）、`docs/PR42_FIX_REPORT.md`
+（`673` / 「四项检查」）、`docs/archive/**`，以及本文件里明确标为「上一版 / 更早口径」的
+追溯段落。`docs/RELEASE_NOTES_v1.0.18.md` 记的是 v1.0.18 发版当时的内容，不复改。

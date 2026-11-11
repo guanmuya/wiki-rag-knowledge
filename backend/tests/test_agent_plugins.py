@@ -67,12 +67,33 @@ def test_parse_manifest_accepts_minimal_cli():
         ({"env": {"1BAD": "x"}}, "env"),
         ({"kind": "kb"}, "kb"),
         ({"id": "kb"}, "保留"),
+        # 纯文本输出没有可解析的事件：写了 usage_event 也必须拒绝，不能静默忽略。
+        ({"usage_event": "turn.completed"}, "usage_event"),
+        ({"output": "jsonl", "usage_event": 123}, "usage_event"),
+        ({"output": "jsonl", "usage_event": "x" * 65}, "usage_event"),
     ],
 )
 def test_parse_manifest_rejects_bad_fields(overrides, expected):
     with pytest.raises(plugins.PluginError) as exc:
         plugins.parse_manifest(_fake_manifest(**overrides))
     assert expected in str(exc.value)
+
+
+def test_parse_manifest_accepts_usage_event_for_jsonl():
+    plugin = plugins.parse_manifest(_fake_manifest(
+        output="jsonl", text_paths=["item.text"], usage_event="turn.completed"))
+    assert plugin.usage_event == "turn.completed"
+    assert plugins._plugin_out(plugin, enabled=True)["usage_event"] == "turn.completed"
+
+
+def test_builtin_cores_declare_usage_events_only_for_jsonl():
+    codex = plugins.BUILTIN_BY_ID["codex"]
+    assert codex.output == "jsonl"
+    assert codex.usage_event == "turn.completed"
+    # 纯文本核心拿不到逐次用量，不能假装有。
+    for core_id, core in plugins.BUILTIN_BY_ID.items():
+        if core.output != "jsonl":
+            assert core.usage_event == "", core_id
 
 
 def test_parse_manifest_rejects_bad_schema():

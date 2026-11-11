@@ -109,6 +109,16 @@ class EmbeddingSwitchIn(BaseModel):
     confirm: bool = False
 
 
+class ModelPriceIn(BaseModel):
+    """管理员为一个模型配置填写的单价（每 100 万 token）。
+
+    上限 100000 只是拦截明显的输入错误（例如把「每 1K token」的数填进
+    「每 1M token」的字段）；0 是合法价格，用于「这个渠道不额外计费」。
+    """
+    input_per_1m: float = Field(ge=0, le=100000)
+    output_per_1m: float = Field(ge=0, le=100000)
+
+
 class ConversationIn(BaseModel):
     title: str = "新会话"
     kb_ids: list[int] = []

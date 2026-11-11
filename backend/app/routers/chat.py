@@ -249,8 +249,12 @@ def _prepare_turn(db: Session, conv: models.Conversation, user: models.User,
 
 
 def _persist_result(db: Session, answer_id: int, result: dict, denied: list[dict],
-                    started: float) -> dict:
-    """把链路结果写回 pending 消息；流式与非流式共用，保证历史可还原。"""
+                    started: float, model_config_id: int | None) -> dict:
+    """把链路结果写回 pending 消息；流式与非流式共用，保证历史可还原。
+
+    `model_config_id` 是**本轮实际使用的对话模型**：用量统计靠它按模型单价
+    估算金额，此前这一列从未被写入，所以问答永远算不出费用。
+    """
     if denied:
         result["route"]["denied"] = denied
 
@@ -272,6 +276,8 @@ def _persist_result(db: Session, answer_id: int, result: dict, denied: list[dict
     answer_msg.evidence = json.dumps(result["evidence"], ensure_ascii=False)
     answer_msg.route = json.dumps(persisted_route, ensure_ascii=False)
     answer_msg.latency_ms = int((time.time() - started) * 1000)
+    if model_config_id is not None:
+        answer_msg.model_config_id = model_config_id
     answer_msg.status = "ok"
     conv = db.get(models.Conversation, answer_msg.conversation_id)
     if conv is not None:
@@ -311,6 +317,19 @@ def _ask_model(db: Session, model_config_id: int | None) -> models.ModelConfig |
     if provider is None or not provider.enabled:
         raise HTTPException(status_code=400, detail="所选对话模型的供应商已停用")
     return cfg
+
+
+def _effective_model_id(db: Session, cfg: models.ModelConfig | None) -> int | None:
+    """本轮实际使用的对话模型 id：选了就用选的，没选就按默认模型解析。
+
+    未指定模型时链路内部用 `llm.resolve_model` 解析默认模型；这里用同一个
+    解析器再取一次，保证「记下来的模型」就是「真正调用的模型」。解析不到就
+    留空——宁可让这条问答未计价，也不记一个猜的模型。
+    """
+    if cfg is not None:
+        return cfg.id
+    resolved = llm.resolve_model(db, models.ModelPurpose.llm.value)
+    return resolved[0].id if resolved else None
 
 
 @router.get("/chat/models")
@@ -364,7 +383,8 @@ def ask(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
         # 没选模型时保持原来的调用形状（不传 override），既有调用方不受影响。
         extra = {"cfg_override": cfg} if cfg is not None else {}
         result = answering.answer(db, body.question, allowed, top_k=body.top_k, **extra)
-        return _persist_result(db, answer_id, result, denied, started)
+        return _persist_result(db, answer_id, result, denied, started,
+                               _effective_model_id(db, cfg))
     except BaseException as exc:      # 含客户端断开导致的取消：都要把占位收尾
         _mark_answer_failed(db, answer_id, started)
         if isinstance(exc, Exception):
@@ -424,7 +444,8 @@ def ask_stream(cid: int, body: schemas.AskIn, db: Session = Depends(get_db),
                         break
                     yield _sse(event)
 
-                result = _persist_result(sdb, answer_id, result, denied, started)
+                result = _persist_result(sdb, answer_id, result, denied, started,
+                                         _effective_model_id(sdb, cfg))
                 completed = True
                 yield _sse({"type": "done", **result})
             except GeneratorExit:

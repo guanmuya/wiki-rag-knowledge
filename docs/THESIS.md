@@ -43,7 +43,7 @@
 
 ```
 Electron 33（外壳）  →  Python 3.13 + FastAPI（sidecar）  →  SQLite + 本地文件
-   窗口/菜单/日志          路由·检索·生成·任务队列              23 张表 + 原文副本
+   窗口/菜单/日志          路由·检索·生成·任务队列              24 张表 + 原文副本
 ```
 
 | 层 | 关键实现 | 职责边界 |
@@ -61,15 +61,16 @@ Electron 33（外壳）  →  Python 3.13 + FastAPI（sidecar）  →  SQLite + 
 
 ### 2.2 数据模型
 
-23 张表（`backend/app/models.py` 的 22 个 `__tablename__` + `backend/app/migrations.py` 用原始 SQL 建的
-`schema_migrations` 账本），四组：
+24 张表（`backend/app/models.py` 的 23 个 `__tablename__` + `backend/app/migrations.py` 用原始 SQL 建的
+`schema_migrations` 账本），五组：
 
 | 组 | 表 | 关键字段 |
 | --- | --- | --- |
 | 身份与授权 | `users` `kb_grants` `audit_logs` `app_settings` | `role∈{admin,employee}`；`level∈{read,manage}` |
 | 知识库与文档 | `knowledge_bases` `documents` `document_versions` `chunks` | `Chunk(text, heading, locator, keywords, vector_blob, embed_signature, kind, meta)` |
-| Wiki | `wiki_pages` `wiki_page_versions` `wiki_sections` `wiki_evidence` | `human_locked`、`current_version_id`、`heading_path` |
-| 运行与成本 | `tasks` `index_versions` `cost_records` `providers` `model_configs` `conversations` `messages` | `Task(kind,status,stage,progress,dedupe_key)`；`CostRecord` 分通道计数 |
+| Wiki | `wiki_pages` `wiki_page_versions` `wiki_sections` `wiki_evidence` `wiki_generation_sources` | `human_locked`、`current_version_id`、`heading_path`、生成用的原文来源快照 |
+| 运行与成本 | `tasks` `index_versions` `cost_records` `providers` `model_configs` `model_prices` `conversations` `messages` | `Task(kind,status,stage,progress,dedupe_key)`；`CostRecord` 分通道计数；`ModelPrice` 按模型配置存参考单价 |
+| 个人 Agent | `agent_sessions` `agent_messages` | 会话绑定核心与模型配置；助手消息的 `meta.usage` 是用量来源 |
 
 三处刻意的设计（论文里可作为「数据模型取舍」小节）：
 

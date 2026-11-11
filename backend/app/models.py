@@ -400,6 +400,33 @@ class ModelConfig(Base):
     provider: Mapped[Provider] = relationship(back_populates="models")
 
 
+class ModelPrice(Base):
+    """管理员为一个模型配置填写的单价（每 100 万 token，默认 USD）。
+
+    为什么单独建表，而不是给 `model_configs` 加两列：
+    1. **「没填价」必须能和「填了 0」区分**。老库升级靠
+       `db.ensure_sqlite_columns()` 自动补列，而它给 Float 新列补的是
+       `DEFAULT 0`——加列方案会把「还没定价」变成「免费」，用量页的金额直接算错。
+       独立表由 `create_all()` 在老库上直接建出（与 `cost_records` 的既有路径一致），
+       「行存在」才代表填过价，0 也是合法价格。
+    2. 价格有币种、维护人和维护时间，挂在模型配置行上会把「配置」和「计价」
+       两件事混在一张表里。
+
+    内置参考价不放这里：那是随代码发布的常量（`services/price_catalog.py`），
+    本表只存用户覆盖价。删除模型配置时价格随之级联删除。
+    """
+
+    __tablename__ = "model_prices"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    model_config_id: Mapped[int] = mapped_column(
+        ForeignKey("model_configs.id", ondelete="CASCADE"), unique=True, index=True)
+    currency: Mapped[str] = mapped_column(String(8), default="USD")
+    input_per_1m: Mapped[float] = mapped_column(Float, default=0.0)
+    output_per_1m: Mapped[float] = mapped_column(Float, default=0.0)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
     id: Mapped[int] = mapped_column(primary_key=True)

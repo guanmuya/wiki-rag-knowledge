@@ -528,8 +528,62 @@ def _jsonl_error(obj: Any) -> str:
     return ""
 
 
+# 供应商/CLI 对同一个概念有两种写法：OpenAI Responses 用 input_tokens /
+# output_tokens，OpenAI 兼容 chat 用 prompt_tokens / completion_tokens。
+_USAGE_INPUT_KEYS = ("input_tokens", "prompt_tokens")
+_USAGE_OUTPUT_KEYS = ("output_tokens", "completion_tokens")
+
+
+def _first_int(usage: dict, keys: tuple[str, ...]) -> int | None:
+    """取第一个非负整数；`type(value) is int` 顺带挡掉 bool 与浮点。"""
+    for key in keys:
+        value = usage.get(key)
+        if type(value) is int and value >= 0:
+            return value
+    return None
+
+
+def _jsonl_usage(obj: Any, event: str) -> tuple[int, int] | None:
+    """从一条 JSONL 事件里读本次调用的 token 用量；不是用量事件时返回 None。
+
+    只认清单里声明的那一类事件（Codex 是 `turn.completed`）与其中的 `usage`
+    对象；结构不符就返回 None，由调用方按「未计量」处理，绝不猜数字。
+    """
+    if not event or not isinstance(obj, dict) or obj.get("type") != event:
+        return None
+    usage = obj.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    prompt = _first_int(usage, _USAGE_INPUT_KEYS)
+    completion = _first_int(usage, _USAGE_OUTPUT_KEYS)
+    if prompt is None and completion is None:
+        return None
+    return prompt or 0, completion or 0
+
+
+def _usage_meta(prompt_tokens: int, completion_tokens: int, latency_ms: int) -> dict:
+    """个人 Agent 一次执行的用量快照，键名与 `llm.CallStats.as_dict()` 对齐。
+
+    为什么调用数固定记 1：这是「一次执行」而不是「一次模型请求」——CLI 内部
+    可能调了十几次模型，但应用只知道这一轮跑完了。token 能用就照实记，
+    用不上就记 0，并由调用方在 meta 上加 `usage_unmetered` 让用量页计入
+    「未计量」，不猜数字。
+    """
+    return {
+        "calls": 1,
+        "chat_calls": 1,
+        "live_calls": 1,
+        "offline_calls": 0,
+        "prompt_tokens": max(int(prompt_tokens), 0),
+        "completion_tokens": max(int(completion_tokens), 0),
+        "embed_tokens": 0,
+        "latency_ms": max(int(latency_ms), 0),
+    }
+
+
 def _run_cli(state: RunState, ctx: RunContext) -> tuple[str, list, dict]:
     plugin = ctx.plugin
+    started = time.time()
     detection = plugins.detect(plugin)
     if not detection["installed"]:
         raise AgentRunError(
@@ -584,6 +638,10 @@ def _run_cli(state: RunState, ctx: RunContext) -> tuple[str, list, dict]:
     stderr_tail: deque[str] = deque(maxlen=40)
     seen: set[str] = set()
     done_streams = 0
+    # 一轮执行里 usage 事件可能出现多次（每个 turn 一条），token 累加、调用仍记 1 次。
+    usage_events = 0
+    prompt_tokens = 0
+    completion_tokens = 0
     state.emit("status", text="已启动，等待输出…")
 
     while done_streams < 2:
@@ -619,6 +677,11 @@ def _run_cli(state: RunState, ctx: RunContext) -> tuple[str, list, dict]:
                 stderr_tail.append(error)
                 state.emit("log", text=error)
                 continue
+            usage = _jsonl_usage(obj, plugin.usage_event)
+            if usage is not None:
+                usage_events += 1
+                prompt_tokens += usage[0]
+                completion_tokens += usage[1]
             text = _extract_jsonl_text(obj, plugin.text_paths)
             if text and text not in seen:
                 seen.add(text)
@@ -649,5 +712,12 @@ def _run_cli(state: RunState, ctx: RunContext) -> tuple[str, list, dict]:
         "exit_code": code,
         "command": plugins.redacted_command(command, prompt, secrets),
         "workspace": workspace_str,
+        # 用量快照：知识库核心由 answering 直接给出，CLI 核心在这里落库。
+        # 解析不到任何用量事件时写零 token 并标注 usage_unmetered，用量页据此
+        # 计入「未计量」——不能把「不知道」悄悄算成「没消耗」。
+        "usage": _usage_meta(prompt_tokens, completion_tokens,
+                             int((time.time() - started) * 1000)),
     }
+    if usage_events == 0:
+        meta["usage_unmetered"] = True
     return content, [], meta
