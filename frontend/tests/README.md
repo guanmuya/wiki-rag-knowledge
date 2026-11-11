@@ -15,13 +15,14 @@ cd frontend
 pnpm test
 ```
 
-`pnpm test` 即 `node --test tests/e2e.test.mjs tests/error-hints.test.mjs`，
-把两个测试文件都跑一遍（新增测试文件记得同步写进这个脚本）：
+`pnpm test` 即 `node --test tests/e2e.test.mjs tests/error-hints.test.mjs tests/agent-no-kb.test.mjs`，
+把三个测试文件都跑一遍（新增测试文件记得同步写进这个脚本）：
 
 | 文件 | 内容 | 用例数 |
 | --- | --- | --- |
 | `tests/e2e.test.mjs` | 真实 Chromium + Vite 的主链路 E2E（后端换成确定性 mock） | 5 |
 | `tests/error-hints.test.mjs` | 纯 Node，不需要浏览器：失败文案单一来源的回归（体检清单 P2-6） | 5 |
+| `tests/agent-no-kb.test.mjs` | 纯 Node 静态扫描：个人 Agent 不再接知识库的回归 | 5 |
 
 CI（`.github/workflows/ci.yml`）在 `windows-latest` 上跑同一条命令，失败即阻断合并。
 

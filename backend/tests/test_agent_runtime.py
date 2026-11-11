@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import time
 import uuid
@@ -12,6 +13,7 @@ import pytest
 from sqlalchemy import select
 
 from app import config, models, security
+from app.services import llm
 from app.services.agent import plugins, runtime
 
 
@@ -93,8 +95,41 @@ def cli_plugin(tmp_path, monkeypatch):
     plugins.clear_detection_cache()
 
 
+@pytest.fixture()
+def offline_llm(monkeypatch):
+    """让这些用例完全离线：一次出网调用都不发，也不解析真实域名。
+
+    由来：曾经的知识库核心会拿会话上的默认模型做意图分析、路由与生成，而测试库里
+    供应商地址是假域名（`_make_model()` 用 `https://example.test`）。本机实测解析
+    该域名要 11 秒、请求 10.6 秒，一次出网就把 `_wait_run()` 的 15 秒预算吃光——
+    同一条用例于是「本机必挂、CI 全绿」（CI 对 `.test` 直接 NXDOMAIN）。实测与判定见
+    `docs/evidence/release-v1.0.18-build.txt` §3.1。
+
+    知识库核心已经下线（个人 Agent 不再与知识库交互），但这条守卫仍然值钱：它拦的是
+    「用例悄悄长出出网路径」这件事本身，而不是某一条链路。两个手段都不改业务代码，
+    也不放宽 `_wait_run()` 的超时：
+    1. 在 HTTP 客户端这一层就地失败（`llm._client` 是仓库约定的测试接缝）：
+       模型调用立刻拿到「不可用」，链路按设计降级为规则判断 + 抽取式回答；
+    2. 把非回环域名的解析拦成异常：万一以后又长出绕过 `llm._client` 的出网路径，
+       用例会当场在断言上暴露，而不是慢慢等到 15 秒超时——那才是把网络抖动藏起来。
+    """
+    def no_http_client(*args, **kwargs):
+        raise llm.ModelUnavailable("测试强制离线：不发起任何真实模型调用")
+
+    monkeypatch.setattr(llm, "_client", no_http_client)
+
+    real_getaddrinfo = socket.getaddrinfo
+
+    def guarded_getaddrinfo(host, *args, **kwargs):
+        if host not in (None, "127.0.0.1", "localhost", "::1"):
+            raise AssertionError(f"用例不应解析真实域名：{host}")
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
+
+
 def test_create_session_ignores_legacy_kb_ids(app_client, admin_headers,
-                                              db_session, cli_plugin):
+                                              db_session, cli_plugin, offline_llm):
     """个人 Agent 不再和知识库交互：核心列表里没有 kb，请求里的 kb_ids 被忽略。
 
     旧前端（或旧脚本）仍可能带着 `kb_ids`，这里保证它不会 422，也不会被写进会话。
@@ -133,7 +168,8 @@ def test_create_session_with_kb_core_explains_where_to_ask(app_client, admin_hea
 
 
 def test_legacy_kb_session_stays_readable_but_cannot_run(app_client, admin_headers,
-                                                        db_session, cli_plugin):
+                                                        db_session, cli_plugin,
+                                                        offline_llm):
     """历史 kb 会话：历史消息可读、改标题可用、换核心后可继续，但不能直接再执行。"""
     admin = db_session.execute(
         select(models.User).where(models.User.username == "admin")).scalar_one()
@@ -228,7 +264,8 @@ def test_cli_core_streams_and_injects_model(app_client, admin_headers, db_sessio
     assert result["message"]["meta"]["protocol"] == "openai"
 
 
-def test_switch_core_mid_session(app_client, admin_headers, db_session, cli_plugin):
+def test_switch_core_mid_session(app_client, admin_headers, db_session, cli_plugin,
+                                 offline_llm):
     model_id = _make_model(db_session)
     _write_fake_agent(cli_plugin, body="import sys\nprint('first:' + sys.argv[1][-20:])\n",
                       plugin_id="fake-cli")

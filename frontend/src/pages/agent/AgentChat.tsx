@@ -4,7 +4,6 @@ import type {
   AgentMessage,
   AgentModelOption,
   AgentSessionDetail,
-  KnowledgeBase,
   UsageInfo,
 } from '../../types'
 import { Button, Select, Spinner } from '../../components/ui'
@@ -19,7 +18,7 @@ export function AgentChat({
   activeCore,
   cores,
   compatibleModels,
-  kbs,
+  coreUnavailable,
   isBusy,
   live,
   draft,
@@ -29,7 +28,6 @@ export function AgentChat({
   onRename,
   onChangeCore,
   onChangeModel,
-  onToggleKb,
   onOpenWorkspace,
   onStop,
   onOpenPlugins,
@@ -40,7 +38,8 @@ export function AgentChat({
   activeCore: AgentCore | null
   cores: AgentCore[]
   compatibleModels: AgentModelOption[]
-  kbs: KnowledgeBase[]
+  /** 会话用的核心不在可用清单里（旧版内置检索核心、或插件被移除） */
+  coreUnavailable: boolean
   isBusy: boolean
   live: LiveRun | null
   draft: string
@@ -50,7 +49,6 @@ export function AgentChat({
   onRename: () => void
   onChangeCore: (coreId: string) => void
   onChangeModel: (value: string) => void
-  onToggleKb: (kbId: number) => void
   onOpenWorkspace: () => void
   onStop: () => void
   onOpenPlugins: () => void
@@ -60,8 +58,6 @@ export function AgentChat({
   const visibleMessages = (active?.messages ?? []).filter(
     (m) => !(live && m.role === 'assistant' && m.status === 'pending'),
   )
-  const kbNames = active ? active.kb_ids
-    .map((id) => kbs.find((k) => k.id === id)?.name ?? `#${id}`) : []
 
   return (
     <>
@@ -83,6 +79,11 @@ export function AgentChat({
             disabled={isBusy}
             aria-label="切换 Agent 核心"
           >
+            {coreUnavailable ? (
+              <option value={active.core_id} disabled>
+                {activeCore?.name ?? '当前核心'}（不可用，请切换）
+              </option>
+            ) : null}
             {cores.map((core) => (
               <option
                 key={core.id}
@@ -102,7 +103,6 @@ export function AgentChat({
             disabled={isBusy || compatibleModels.length === 0}
             aria-label="选择模型"
           >
-            {activeCore?.kind === 'kb' ? <option value="">跟随应用默认</option> : null}
             {compatibleModels.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.display}{m.compatible ? '' : '（协议不兼容）'}
@@ -111,26 +111,6 @@ export function AgentChat({
             {compatibleModels.length === 0 ? <option value="">没有兼容模型</option> : null}
           </Select>
         </label>
-        {activeCore?.kind === 'kb' ? (
-          <details className="agent-kb-picker">
-            <summary className="btn btn-ghost btn-sm">
-              知识库 {active.kb_ids.length} 个
-            </summary>
-            <div className="agent-kb-pop">
-              {kbs.length === 0 ? <div className="tiny muted">还没有知识库</div> : kbs.map((kb) => (
-                <label key={kb.id} className="agent-kb-option">
-                  <input
-                    type="checkbox"
-                    checked={active.kb_ids.includes(kb.id)}
-                    disabled={isBusy}
-                    onChange={() => onToggleKb(kb.id)}
-                  />
-                  <span className="truncate">{kb.name}</span>
-                </label>
-              ))}
-            </div>
-          </details>
-        ) : null}
         {activeCore?.kind === 'cli' ? (
           <button
             type="button"
@@ -160,8 +140,8 @@ export function AgentChat({
               <div className="chat-empty-icon"><IconAgent size={22} /></div>
               <div className="chat-empty-title">开始和 {activeCore?.name ?? 'Agent'} 对话</div>
               <div className="chat-empty-hint">
-                {activeCore?.kind === 'kb'
-                  ? `会检索 ${kbNames.length} 个知识库并给出引用；资料不足时会说明缺什么。`
+                {coreUnavailable
+                  ? '这个会话用的核心已经不可用，在上方换一个 CLI 核心后就能继续。'
                   : '这条消息会交给本机 CLI 执行，模型与密钥由本应用注入，不会写进你的 CLI 配置文件。'}
               </div>
             </div>
@@ -182,8 +162,12 @@ export function AgentChat({
             className="composer-input"
             rows={1}
             value={draft}
-            placeholder={isBusy ? '正在执行，可以点上方「停止」…' : '问点什么，或让 Agent 动手做一件事…'}
-            disabled={isBusy}
+            placeholder={
+              coreUnavailable
+                ? '先在上方选一个可用的核心…'
+                : isBusy ? '正在执行，可以点上方「停止」…' : '问点什么，或让 Agent 动手做一件事…'
+            }
+            disabled={isBusy || coreUnavailable}
             onChange={(e) => onDraftChange(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -195,7 +179,7 @@ export function AgentChat({
           <Button
             variant="primary"
             onClick={onSend}
-            disabled={!draft.trim() || sending || isBusy}
+            disabled={!draft.trim() || sending || isBusy || coreUnavailable}
             loading={sending}
           >
             发送
@@ -205,7 +189,6 @@ export function AgentChat({
           <span>Enter 发送 · Shift+Enter 换行</span>
           <span>核心：{activeCore?.name ?? '—'}</span>
           <span>模型：{active.model_label || '应用默认'}</span>
-          {activeCore?.kind === 'kb' ? <span>知识库：{kbNames.length} 个</span> : null}
         </div>
       </div>
     </>
