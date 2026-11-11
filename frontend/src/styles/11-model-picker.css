@@ -1,0 +1,57 @@
+/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
+
+/* ---------------------------------------------------------------- 智能问答：模型选择器 */
+.chat-model-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+.chat-model-picker > .tiny { white-space: nowrap; }
+.chat-model-picker .select {
+  height: 28px;
+  padding: 2px 30px 2px 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  max-width: 340px;
+  border-radius: 999px;
+  border-color: #c9dcf5;
+  background-color: var(--c-primary-soft);
+  color: var(--c-primary);
+  cursor: pointer;
+}
+.chat-model-picker .select:disabled { cursor: not-allowed; }
+
+@media (max-width: 720px) {
+  .chat-model-picker .select { max-width: 160px; }
+}
+
+@media (max-width: 1024px) {
+  /* Agent 页的侧栏不能像问答页那样收成抽屉：这里没有额外的汉堡按钮。
+     窄屏改为「上方一条会话带 + 下方对话区」，会话仍可切换。 */
+  .agent-shell { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  .agent-rail {
+    position: static;
+    width: auto;
+    max-height: 214px;
+    transform: none;
+    visibility: visible;
+    border-right: none;
+    border-bottom: 1px solid var(--c-border);
+    box-shadow: none;
+  }
+  .agent-rail .conv-list { max-height: 96px; }
+  .agent-rail-status { padding: 8px 12px; }
+  .agent-rail-foot { display: none; }
+  .agent-toolbar { gap: 6px; }
+  .agent-workspace { max-width: 180px; }
+}
+
+@media (max-width: 720px) {
+  .agent-onboarding { padding: 24px 12px 40px; }
+  .agent-core-grid { grid-template-columns: 1fr; }
+  .agent-title-btn { max-width: 160px; }
+  .agent-inline-select .select { max-width: 150px; }
+  .agent-workspace { display: none; }
+}
