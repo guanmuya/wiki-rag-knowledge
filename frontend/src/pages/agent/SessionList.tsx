@@ -6,6 +6,7 @@ export function SessionList({
   sessions,
   activeSessionId,
   activeCore,
+  cores,
   modelLabel,
   canCreate,
   onNew,
@@ -16,6 +17,7 @@ export function SessionList({
   sessions: AgentSession[]
   activeSessionId: number | null
   activeCore: AgentCore | null
+  cores: AgentCore[]
   modelLabel: string
   canCreate: boolean
   onNew: () => void
@@ -23,6 +25,11 @@ export function SessionList({
   onOpenSession: (id: number) => void
   onDelete: (session: AgentSession) => void
 }) {
+  // 会话用的核心可能已经不在清单里（旧版内置检索核心、或插件被删掉）：
+  // 显示「核心不可用」而不是照搬服务端的旧名字，避免历史会话再把旧入口带回页面上。
+  const coreLabel = (session: AgentSession): string =>
+    cores.find((core) => core.id === session.core_id)?.name ?? '核心不可用'
+
   return (
     <aside className="chat-sidebar agent-rail">
       <div className="chat-sidebar-head">
@@ -54,9 +61,7 @@ export function SessionList({
               <span className="agent-core-dot" data-kind={activeCore.kind} />
               <strong className="truncate">{activeCore.name}</strong>
               <span className="spacer" />
-              {activeCore.kind === 'cli'
-                ? <Badge tone="info">{activeCore.version || '已安装'}</Badge>
-                : <Badge tone="success">内置</Badge>}
+              <Badge tone="info">{activeCore.version || '已安装'}</Badge>
             </div>
             <div className="tiny muted truncate">
               {modelLabel || '跟随应用默认模型'}
@@ -76,10 +81,10 @@ export function SessionList({
               type="button"
               className="conv-title agent-session-title"
               onClick={() => onOpenSession(s.id)}
-              title={`${s.core_name} · ${s.model_label || '默认模型'}`}
+              title={`${coreLabel(s)} · ${s.model_label || '默认模型'}`}
             >
               <span className="truncate">{s.title}</span>
-              <span className="agent-session-sub">{s.core_name}</span>
+              <span className="agent-session-sub">{coreLabel(s)}</span>
             </button>
             <span className="conv-actions">
               <button

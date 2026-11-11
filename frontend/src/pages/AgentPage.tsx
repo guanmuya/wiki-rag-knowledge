@@ -42,7 +42,6 @@ export default function AgentPage() {
     sessions,
     active,
     models,
-    kbs,
     boot,
     loadError,
     draft,
@@ -69,16 +68,21 @@ export default function AgentPage() {
     stopRun,
     changeCore,
     changeModel,
-    toggleKb,
     saveTitle,
     saveWorkspace,
     removeSession,
   } = useAgentSessions({ cores, applyCoreList, notify: setNotice, setPluginsOpen })
 
-  const activeCore = useMemo(
-    () => cores.find((c) => c.id === active?.core_id) ?? active?.core ?? null,
-    [cores, active],
-  )
+  const activeCore = useMemo(() => {
+    const found = cores.find((c) => c.id === active?.core_id)
+    if (found) return found
+    // 清单里没有这个核心时沿用服务端返回的描述（插件被删掉的 CLI 核心），
+    // 但旧版内置检索核心不再当作本页的核心。
+    return active?.core && active.core.kind !== 'kb' ? active.core : null
+  }, [cores, active])
+  // 会话用的核心已不在清单里：旧版的内置检索核心、或插件清单被删掉的核心。
+  // 这类会话不报错，但也不再执行，提示用户先换个核心。
+  const coreUnavailable = Boolean(active && !cores.some((c) => c.id === active.core_id))
   const compatibleModels = useMemo(
     () => models.filter((m) => m.compatible || m.id === active?.model_config_id),
     [models, active],
@@ -101,6 +105,7 @@ export default function AgentPage() {
         sessions={sessions}
         activeSessionId={active?.id ?? null}
         activeCore={activeCore}
+        cores={cores}
         modelLabel={active?.model_label ?? ''}
         canCreate={Boolean(preferredCore)}
         onNew={() => void createSession()}
@@ -125,8 +130,8 @@ export default function AgentPage() {
                 <div className="agent-hero-icon"><IconAgent size={26} /></div>
                 <h1>本地个人 Agent</h1>
                 <p>
-                  选一个核心开始：内置知识库助手直接检索本应用的资料；
-                  Claude Code、Codex 等开源 CLI 复用你已经配置好的模型，随时换核心。
+                  选一个本机 CLI 核心开始：Claude Code、Codex 等以本机命令运行，
+                  模型与密钥由本应用注入，随时可以换核心。
                 </p>
                 <div className="row row-wrap" style={{ justifyContent: 'center' }}>
                   <Button variant="primary" onClick={() => void createSession()} disabled={!preferredCore}>
@@ -150,7 +155,7 @@ export default function AgentPage() {
                   >
                     <div className="row">
                       <span className="agent-core-icon" data-kind={core.kind}>
-                        {core.kind === 'kb' ? <IconAgent size={16} /> : <IconTerminal size={16} />}
+                        <IconTerminal size={16} />
                       </span>
                       <strong>{core.name}</strong>
                       <span className="spacer" />
@@ -158,15 +163,13 @@ export default function AgentPage() {
                     </div>
                     <div className="agent-core-desc">{core.description}</div>
                     <div className="agent-core-meta">
-                      {core.kind === 'cli'
-                        ? (core.installed
-                          ? <span className="ok">{core.version || '已安装'}</span>
-                          : <span className="muted">未安装 · {core.bins.join(' / ')}</span>)
-                        : <span className="ok">开箱即用</span>}
+                      {core.installed
+                        ? <span className="ok">{core.version || '已安装'}</span>
+                        : <span className="muted">未安装 · {core.bins.join(' / ')}</span>}
                       <span className="spacer" />
-                      {core.kind === 'cli' && core.installed && !coreUsable(core)
+                      {core.installed && !coreUsable(core)
                         ? <span className="warn-text">无兼容模型</span>
-                        : <span className="muted">{core.protocol_labels.join(' / ') || '应用内检索'}</span>}
+                        : <span className="muted">{core.protocol_labels.join(' / ') || '未声明协议'}</span>}
                     </div>
                   </button>
                 ))}
@@ -186,7 +189,7 @@ export default function AgentPage() {
             activeCore={activeCore}
             cores={cores}
             compatibleModels={compatibleModels}
-            kbs={kbs}
+            coreUnavailable={coreUnavailable}
             isBusy={isBusy}
             live={live}
             draft={draft}
@@ -199,7 +202,6 @@ export default function AgentPage() {
             }}
             onChangeCore={(coreId) => void changeCore(coreId)}
             onChangeModel={(value) => void changeModel(value)}
-            onToggleKb={(kbId) => void toggleKb(kbId)}
             onOpenWorkspace={() => setWorkspaceOpen(true)}
             onStop={() => void stopRun()}
             onOpenPlugins={() => setPluginsOpen(true)}
