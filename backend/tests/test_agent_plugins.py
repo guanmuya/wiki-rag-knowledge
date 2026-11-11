@@ -72,6 +72,9 @@ def test_parse_manifest_accepts_minimal_cli():
         ({"usage_event": "turn.completed"}, "usage_event"),
         ({"output": "jsonl", "usage_event": 123}, "usage_event"),
         ({"output": "jsonl", "usage_event": "x" * 65}, "usage_event"),
+        # 同理：纯文本输出没有 item 类型可判，写成字符串也不行（要的是数组）。
+        ({"answer_item_types": ["agent_message"]}, "answer_item_types"),
+        ({"output": "jsonl", "answer_item_types": "agent_message"}, "answer_item_types"),
     ],
 )
 def test_parse_manifest_rejects_bad_fields(overrides, expected):
@@ -95,6 +98,30 @@ def test_builtin_cores_declare_usage_events_only_for_jsonl():
     for core_id, core in plugins.BUILTIN_BY_ID.items():
         if core.output != "jsonl":
             assert core.usage_event == "", core_id
+
+
+def test_parse_manifest_accepts_answer_item_types_for_jsonl():
+    """JSONL 核心可以声明「哪些 item 类型的文字算最终回答」。"""
+    plugin = plugins.parse_manifest(_fake_manifest(
+        output="jsonl", text_paths=["item.text"],
+        answer_item_types=["agent_message", "agent_message", "  "]))
+    # 去重、去空白，顺序保留（谁在名单里谁算回答）。
+    assert plugin.answer_item_types == ("agent_message",)
+    assert plugins._plugin_out(plugin, enabled=True)["answer_item_types"] == ["agent_message"]
+
+
+def test_builtin_codex_declares_which_items_are_the_answer():
+    """内置 Codex：只有 agent_message 是回答，reasoning 等一律进思考区。
+
+    这是用户那条「整段内心推理铺在回答位置」的根治点：推理与回答都是
+    `item.completed`，只能靠 item 类型区分（docs/AGENT_PLUGINS.md §3.4）。
+    """
+    codex = plugins.BUILTIN_BY_ID["codex"]
+    assert codex.answer_item_types == ("agent_message",)
+    for core_id, core in plugins.BUILTIN_BY_ID.items():
+        if core.output != "jsonl":
+            # 纯文本核心没有 item 类型，不该声明（清单校验同样会拒绝）。
+            assert core.answer_item_types == (), core_id
 
 
 def test_parse_manifest_rejects_bad_schema():

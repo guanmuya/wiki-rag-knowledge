@@ -262,6 +262,23 @@
   white-space: pre-wrap;
 }
 .agent-live { min-height: 24px; }
+
+/* 「思考过程」折叠区：推理与回答分区显示。头部的讨论/折叠样式复用 07-chat.css
+   的 .thinking-card（与「智能问答」页同一套语言），这里只补正文与空回答提示。 */
+.agent-thinking { margin-bottom: 7px; }
+.agent-thinking-body {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--c-border);
+  max-height: 320px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--c-text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.agent-answer-empty { color: var(--c-text-muted); font-size: 12.5px; line-height: 1.7; }
 .agent-live-wait {
   display: inline-flex;
   align-items: center;

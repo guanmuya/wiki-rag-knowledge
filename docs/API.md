@@ -444,7 +444,7 @@ v1 全部要求管理员令牌；CLI 核心以应用进程身份执行本机命�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/agent/cores` | `{items, errors, plugin_dir, schema, supported_protocols}`；每项含 `installed/version/enabled/available/unavailable_reason/protocols/compatible_model_count/output/usage_event/isolated_home`（`isolated_home=codex` 表示该核心用应用自己的配置目录） |
+| GET | `/api/agent/cores` | `{items, errors, plugin_dir, schema, supported_protocols}`；每项含 `installed/version/enabled/available/unavailable_reason/protocols/compatible_model_count/output/usage_event/answer_item_types/isolated_home`（`isolated_home=codex` 表示该核心用应用自己的配置目录；`answer_item_types` 是 JSONL 核心里算「回答」的 item 类型，空数组表示不区分类型） |
 | GET | `/api/agent/models?core_id=` | `{items, core_id}`；每项含 `protocol/compatible/display`，`compatible=false` 表示协议不匹配 |
 | POST | `/api/agent/plugins/rescan` | 清探测缓存并重新扫描插件目录，返回同 cores |
 | PATCH | `/api/agent/plugins/{id}` | `{enabled}`，返回单个核心 |
@@ -457,7 +457,10 @@ v1 全部要求管理员令牌；CLI 核心以应用进程身份执行本机命�
 | GET | `/api/agent/runs/{id}/events?after=` | `{events,next,status,error,message?,run_id,session_id}`；`status` 为 `running/ok/failed/stopped`；`run_id` 就是 pending assistant 消息 id |
 | POST | `/api/agent/runs/{id}/stop` | 终止子进程树；已结束 409 |
 
-事件 `type`：`status`（阶段文案）、`text`（正文增量）、`log`（CLI stderr/命令摘要）、`evidence`（历史数据里可能有，个人 Agent 不再产生）、`done`、`error`、`stopped`。
+事件 `type`：`status`（阶段文案）、`text`（**回答正文**增量）、`thinking`（**思考过程**增量：模型推理/工具尝试，只进折叠区，不进回答气泡）、`log`（CLI stderr/命令摘要）、`evidence`（历史数据里可能有，个人 Agent 不再产生）、`done`、`error`、`stopped`。
+`text` 与 `thinking` 是两条独立通道，前端分别累计；分流依据见 `docs/AGENT_PLUGINS.md` §3.4。
+
+助手消息的 `content` 永远只放最终回答；这一轮的思考过程另存 `meta.thinking`（超长截断时还有 `meta.thinking_truncated: true`），界面据此渲染默认折叠的「思考过程」卡片。**已落库的旧消息不重解析**，照原样显示。只有推理、没有最终回答的一次执行会收尾成 `failed`，`content` 写明「只产出了思考过程，没有给出最终回答」，推理仍留在 `meta.thinking` 里供展开核对。思考过程不进下一轮 CLI 提示词（历史回放只读 `content`）。
 
 每次执行结束时，助手消息的 `meta` 里带一份用量快照 `meta.usage`（键名与 `CallStats.as_dict()` 一致：`calls/chat_calls/live_calls/offline_calls/prompt_tokens/completion_tokens/embed_tokens/latency_ms`），它同时是 `/api/usage` 里「个人 Agent」来源的唯一数据源（§7.2）。CLI 核心的用量来自插件清单声明的 `usage_event`（仅 `output=jsonl`，例如 Codex 的 `turn.completed`）；一个都没解析到时会额外写 `meta.usage_unmetered = true`，Token 记 0——宁可显示「未计量」，也不填推测值。字段口径见 `docs/AGENT_PLUGINS.md` §3.4。
 
