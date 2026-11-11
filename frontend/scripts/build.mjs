@@ -134,7 +134,8 @@ const FAILURE_HINTS = [
     title: '依赖未安装或已损坏',
     fix: [
       '处理：在 frontend/ 下重装依赖：',
-      '  node "C:/Users/Administrator/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/pnpm/bin/pnpm.mjs" install',
+      '  pnpm install --frozen-lockfile',
+      '（没有全局 pnpm 时用 corepack enable 或 npx --yes pnpm@9 install）',
       '若仍失败，删掉 node_modules 后重装。',
     ],
   },
@@ -180,7 +181,7 @@ const FAILURE_HINTS = [
     title: 'Python 虚拟环境不可用',
     fix: [
       '后端打包需要项目 .venv（内含 PyInstaller 与全部依赖）。',
-      '处理：确认 F:\\GItHub_Code\\Wiki-Rag-Knowledge\\.venv\\Scripts\\python.exe 存在；',
+      '处理：确认仓库根目录下的 .venv\\Scripts\\python.exe 存在（未建时见 CONTRIBUTING「环境准备」）；',
       '或设 WRK_PYTHON 指向可用解释器。',
     ],
   },
@@ -226,7 +227,7 @@ function builderCli() {
   if (!existsSync(p)) {
     console.error('[build] ✗ 找不到 electron-builder（node_modules 不完整）')
     console.error('        处理：在 frontend/ 下执行')
-    console.error('          node "C:/Users/Administrator/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/pnpm/bin/pnpm.mjs" install')
+    console.error('          pnpm install --frozen-lockfile')
     process.exit(1)
   }
   return p

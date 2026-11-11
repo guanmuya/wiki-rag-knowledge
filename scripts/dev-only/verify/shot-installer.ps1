@@ -1,5 +1,5 @@
 # Capture the NSIS installer window to verify its UI language.
-# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File .tmp-verify/shot-installer.ps1 <installer.exe> <out.png>
+# Usage: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/dev-only/verify/shot-installer.ps1 <installer.exe> <out.png>
 # Keep this file ASCII-only: Windows PowerShell 5.1 reads .ps1 as ANSI and CJK text breaks parsing.
 param(
   [Parameter(Mandatory = $true)][string]$Installer,

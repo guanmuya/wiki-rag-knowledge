@@ -15,7 +15,7 @@ import { _electron as electron } from 'playwright'
 import { existsSync, mkdirSync, rmSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
-const ROOT = resolve(import.meta.dirname, '../..')
+const ROOT = resolve(import.meta.dirname, '../../..')   // scripts/dev-only/verify → 仓库根
 const EXE = process.argv[2] || join(ROOT, 'frontend', 'release', 'win-unpacked', '企业知识库.exe')
 const UD = join(ROOT, '.tmp-verify', 'e2e-userdata')
 

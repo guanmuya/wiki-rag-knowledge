@@ -33,9 +33,13 @@
 也**没有接入 CI、不参与 `pnpm test`、不作为合并门禁**。
 
 因此它们的定位是「**人工验收时的辅助工具**」，不是测试套件。
-仓库根目录 `scripts/verify/` 下的 5 个专项脚本
+仓库根目录 `scripts/dev-only/verify/` 下的 5 个专项脚本
 （`e2e-setup.mjs`、`freeze_check.py`、`no-orphan.ps1`、`shot-installer.ps1`、
-`smoke_backend_exe.py`）同理，属于打包 / 安装包的一次性排障与验收辅助。
+`smoke_backend_exe.py`）同理，属于打包 / 安装包的一次性排障与验收辅助；
+完整清单与状态见 `scripts/dev-only/README.md`。
+
+（原先误放在 `frontend/` 根目录的 `ui_check.mjs` 已一并收进 `scripts/dev-only/`，
+需要拍当前界面图请用 `scripts/dev-only/capture-ui.mjs`，它输出到 `docs/screenshots/current/`。）
 
 真正可重复运行、纳入 CI 的自动化测试在 **`frontend/tests/`**，运行命令是：
 

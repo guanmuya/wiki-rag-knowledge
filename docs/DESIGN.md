@@ -605,3 +605,47 @@ Message.content          回答正文，结论后带 [编号]
 | 1000 块库能生成 Wiki 且覆盖字段出现在 notes | `tests/test_wiki_scale.py::test_wiki_builds_on_thousand_chunk_library` |
 
 检索耗时是**离线哈希向量 + 内存遍历**的端到端时间，不含网络往返。接入真实 embedding 后必须重测。
+
+---
+
+## 附：界面图（与本文各章的对应关系）
+
+下面这些图是 **v1.0.17 当前离线配置下的实拍**（拍摄时间、环境、复现命令见
+[`docs/screenshots/README.md`](screenshots/README.md)）。它们只用来支撑「界面确实这样工作」，
+图里的数字是拍摄时的读数，不作为长期数值口径。
+
+### 检索与路由（§6）
+
+检索调试页把「候选数 / 入选数 / 返回证据 / 平均覆盖率 / RRF k / 每库候选上限」和
+**逐库的路由决策原因**摊开：人事制度库走 Wiki 章节（已就绪 → 不回退），两个基础库走
+关键词 + 语义 RRF 融合。这一屏就是 §6.1 / §6.2 两层的可视化。
+
+![图：检索调试页的检索概览与逐库路由决策](screenshots/current/09-search.png)
+
+### 证据链与拒答（§8）
+
+一轮问答结束后，回答里带引用编号，下面挂「思考过程」「证据 N 条」「路由 K 个库」。
+证据条数与编号范围是同一条链路上算出来的，因此编号既能对上证据、也能在越界时被判无效。
+
+![图：问答结束后展示引用编号和证据条数](screenshots/current/08-chat-answer.png)
+
+### Wiki 生成与版本一致性（§3）
+
+Wiki 页面不止是正文：每页底部有「来源依据」（回挂到具体文档版本的片段）与「关联页面」，
+这也是 §10.2 人工校对保护生效的位置。
+
+![图：Wiki 页面正文与来源依据](screenshots/current/05-kb-wiki-page.png)
+
+### 其余页面
+
+| 章节 | 图 |
+| --- | --- |
+| §1.1 三层形态 / §13 首次使用 | `screenshots/current/01-login.png`、`02-kb-list.png` |
+| §2 数据模型 / §4 流水线 | `screenshots/current/03-kb-documents.png`、`06-kb-settings.png` |
+| §3.5 单页生成与证据回挂 | `screenshots/current/04-kb-wiki.png` |
+| §4.5 写事务边界 / 任务失败语义 | `screenshots/current/10-tasks.png` |
+| §9 权限模型 | `screenshots/current/11-users.png` |
+| §11 成本统计 | `screenshots/current/13-usage.png` |
+| §12 模型协议与供应商配置 | `screenshots/current/12-models.png` |
+| 交付与运维（版本、诊断、更新） | `screenshots/current/14-about.png` |
+| 个人 Agent（`docs/AGENT_PLUGINS.md`） | `screenshots/current/15-agent.png` |

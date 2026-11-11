@@ -41,9 +41,9 @@
 > 两处旧口径本轮按代码订正：`models.py` 实际是 **22** 个 `__tablename__`（旧写 21，少算 1 张），
 > 加上 P1-8 新增的 `schema_migrations` 共 **23** 张；`config.py` 实际是 **41** 个 `WRK_*`
 > （旧写 38；本轮新增 4 个 `WRK_LOGIN_*` 与 `WRK_HARDEN_SECRETS`，见 §1.2）。
-> `README.md` 目录树注释与 `docs/THESIS.md` §1 里仍写着「21 张表」——两处都在 P1-8 的
-> 文件所有权之外，**未改**，留给下一个碰这两份文档的任务按本节订正（`THESIS.md` §4 是实验结果，
-> 按仓库约定不动）。
+> `README.md` 目录树注释与 `docs/THESIS.md` §2.1 / §2.2 原本写着「21 张表」，已在批次四
+> （P2 仓库治理）按本节订正为 **23 张表**（`models.py` 的 22 个 + `migrations.py` 的
+> `schema_migrations`）；`THESIS.md` §4 是实验结果，按仓库约定不动。
 
 ### 1.1 SQLite 写锁三档（替代旧的一刀切 `15000ms`）
 

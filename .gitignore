@@ -44,7 +44,15 @@ frontend/dist/
 
 # 本地临时验证产物
 .tmp-verify/
-# 诊断脚本 scripts/diag/lock_probe.py 默认的只读库副本目录
+# 诊断脚本 scripts/dev-only/diag/lock_probe.py 默认的只读库副本目录
 .tmp-diag/
 # PyInstaller 归档临时解包（排查安装包内代码用）
 .tmp-pyz.pyz
+
+# 通用临时文件与日志（体检清单 P2-3：一次性日志不应误入 git status）
+*.log
+.tmp-*
+
+# 私钥与证书（绝不应入库；见 CONTRIBUTING §8）
+*.key
+*.pem

@@ -4,25 +4,28 @@
 no_answer 题只记录检索是否返回结果，不做命中判定。
 
 用法（仓库根目录，后端需已启动）：
-    PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/check_questions.py
-    PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/check_questions.py --limit 5
+    PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/dev-only/check_questions.py
+    PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe scripts/dev-only/check_questions.py --limit 5
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 import httpx
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]   # scripts/dev-only/… → 仓库根
 BASE = "http://127.0.0.1:8000"
 QUESTIONS = ROOT / "demo_data" / "questions.json"
 
 
 def login(client: httpx.Client) -> str:
-    pwd = "Admin@2026"
+    pwd = os.environ.get("WRK_ADMIN_PASSWORD", "")
+    if not pwd:
+        raise SystemExit("请先设 WRK_ADMIN_PASSWORD（管理员口令）；脚本不再内置默认口令")
     r = client.post(f"{BASE}/api/auth/login", json={"username": "admin", "password": pwd})
     r.raise_for_status()
     return r.json()["token"]

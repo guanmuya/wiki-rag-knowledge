@@ -4,7 +4,7 @@
 行内 **加粗** 与 `代码`。这样正文只有一份源（.md），排版脚本可重复执行。
 
 用法：
-  python scripts/build_opening_report.py
+  python scripts/dev-only/build_opening_report.py
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]   # scripts/dev-only/… → 仓库根
 SRC = ROOT / "docs" / "开题报告.md"
 OUT = ROOT / "docs" / "开题报告.docx"
 

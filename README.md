@@ -177,7 +177,8 @@ Wiki-Rag-Knowledge/
 │   │   ├── config.py             # 全部可调参数（环境变量覆盖）
 │   │   ├── main.py               # FastAPI 入口、引导管理员、/api/meta
 │   │   ├── desktop_entry.py      # sidecar 入口：动态端口 + WRK_READY
-│   │   ├── models.py             # 21 张表
+│   │   ├── models.py             # 23 张表（22 个 __tablename__ + migrations 的 schema_migrations）
+│   │   ├── migrations.py         # 老库自愈迁移（schema_migrations 账本，P1-8）
 │   │   ├── db.py                 # 引擎、WAL、老库补列自愈
 │   │   ├── deps.py               # 鉴权、库级授权、审计
 │   │   ├── routers/              # auth setup kbs wiki chat settings agent
@@ -195,7 +196,7 @@ Wiki-Rag-Knowledge/
 │   │   │   └── cost.py           # 成本流水与聚合
 │   │   └── ...
 │   ├── scripts/                  # seed_demo seed_expanded inspect_chunks collect_metrics run_experiments
-│   ├── tests/                    # 42 个 test_*.py + 1 个 conftest.py；基线见 docs/FACTS.md §2
+│   ├── tests/                    # 53 个 test_*.py + 1 个 conftest.py；基线见 docs/FACTS.md §2
 │   └── requirements.txt
 ├── frontend/
 │   ├── electron/main.cjs         # sidecar 生命周期、失败原因翻译、日志
@@ -205,7 +206,11 @@ Wiki-Rag-Knowledge/
 │   └── electron-builder.yml      # NSIS 配置
 ├── demo_data/                    # 3 篇演示文档 + fixtures（表格压力样本）
 ├── docs/                         # DESIGN.md API.md EXPERIMENT.md HANDOFF.md
-├── scripts/                      # dev.sh start_backend.sh start_frontend.sh 等
+│   ├── screenshots/current/      # 「当前版本」界面图，供论文/设计说明引用（见 screenshots/README.md）
+│   └── archive/                  # 历史档案：旧看板、历史交接快照、历史 before/after 截图（见 archive/README.md）
+├── scripts/                      # 长期维护的入口脚本：dev.sh start_backend.sh start_frontend.sh make_fixtures.py …
+│   └── dev-only/                 # 一次性排障与人工验收脚本（不进 CI、不属于交付物，见 dev-only/README.md）
+├── LICENSE  CHANGELOG.md  CONTRIBUTING.md  .editorconfig
 └── data/                         # 运行时生成（git 忽略）
 ```
 
@@ -213,7 +218,8 @@ Wiki-Rag-Knowledge/
 
 ## 5. 配置项
 
-主要可调项集中在 `backend/app/config.py`（38 个 `WRK_*` 环境变量），均可用环境变量覆盖，
+主要可调项集中在 `backend/app/config.py`（`WRK_*` 环境变量，**当前条数以
+[`docs/FACTS.md`](docs/FACTS.md) §1 为准**——本文件不复述具体数字，避免再次漂移），均可用环境变量覆盖，
 默认值即下表「默认」列。另有少数几项由 `backend/app/desktop_entry.py`（`WRK_HOST` / `WRK_PORT` /
 `WRK_WATCH_STDIN` / `WRK_LOG_LEVEL`）、`backend/app/security.py`（`WRK_PBKDF2_ITER`）、
 `backend/app/services/answering.py`（`WRK_SUGGESTION_LIMIT` / `WRK_SUGGESTION_RESOURCE_LIMIT`）
@@ -471,4 +477,10 @@ git 里是删除状态。
 | [docs/THESIS.md](docs/THESIS.md) | 论文可复用章节素材：设计、关键实现、实验方法与结果、创新点与局限 |
 | [docs/HANDOFF.md](docs/HANDOFF.md) | 交接说明：v1.0.17 当前状态首屏、已知遗留、如何验证 |
 | [docs/archive/HANDOFF_HISTORY.md](docs/archive/HANDOFF_HISTORY.md) | 历史快照归档（v1.0.0 → v1.0.10，历史读数，非当前事实） |
+| [docs/archive/README.md](docs/archive/README.md) | 归档索引：旧看板、历史截图、历史交接快照，以及「为什么不删除」 |
+| [docs/screenshots/README.md](docs/screenshots/README.md) | 界面图索引：当前版本配图清单、拍摄口径、历史对比图去哪了 |
 | [docs/evidence/pytest-baseline.txt](docs/evidence/pytest-baseline.txt) | 测试基线一次真实运行的完整 stdout |
+| [docs/evidence/gates-2026-11-11.txt](docs/evidence/gates-2026-11-11.txt) | 五项门禁在本地一次全绿实跑的记录（环境、命令、退出码、真实输出） |
+| [CHANGELOG.md](CHANGELOG.md) | 变更记录：v1.0.0 → v1.0.17 的关键变化（数字口径仍以 `docs/FACTS.md` 为准） |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 协作约定：环境准备、五项门禁、提交格式、目录与归档规则、密钥纪律 |
+| [LICENSE](LICENSE) | 许可证（MIT） |

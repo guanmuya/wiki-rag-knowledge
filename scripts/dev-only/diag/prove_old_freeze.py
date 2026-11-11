@@ -7,20 +7,22 @@ from __future__ import annotations
 
 import functools
 import os
+import secrets
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-TMP = Path(os.environ.get("TMP", r"C:\Users\Administrator\AppData\Local\Temp")) / "wrk-old-behavior"
+TMP = Path(tempfile.gettempdir()) / "wrk-old-behavior"     # 跨机器可用：不再写死某个用户目录
 os.environ["WRK_DATA_DIR"] = str(TMP)
 os.environ["WRK_DB_PATH"] = str(TMP / "old.sqlite3")
 os.environ["WRK_SECRET_DIR"] = str(TMP / "secrets")
 os.environ["WRK_WORKER_ENABLED"] = "0"
 os.environ["WRK_WARMUP"] = "0"
-os.environ["WRK_ADMIN_PASSWORD"] = "repro-pass-123456"
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
+os.environ["WRK_ADMIN_PASSWORD"] = secrets.token_urlsafe(18)   # 测试临时口令，不写死
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "backend"))
 
 import anyio.to_thread  # noqa: E402
 

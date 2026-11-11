@@ -3,8 +3,8 @@
 体检清单 `docs/HEALTH_CHECK.md` §4.2 **P1-3「给前端补真实自动化测试」** 的产出。
 
 本目录是**唯一纳入 CI 的前端测试**。
-`frontend/scripts/verify-*` 与 `scripts/verify/` 里的脚本是一次性人工验收辅助，
-不是自动化测试，也不参与合并门禁（见 `frontend/scripts/README.md`）。
+`frontend/scripts/verify-*` 与 `scripts/dev-only/` 里的脚本是一次性人工验收辅助，
+不是自动化测试，也不参与合并门禁（见 `frontend/scripts/README.md` 与 `scripts/dev-only/README.md`）。
 
 ---
 

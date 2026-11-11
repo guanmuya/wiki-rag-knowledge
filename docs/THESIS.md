@@ -43,7 +43,7 @@
 
 ```
 Electron 33（外壳）  →  Python 3.13 + FastAPI（sidecar）  →  SQLite + 本地文件
-   窗口/菜单/日志          路由·检索·生成·任务队列              21 张表 + 原文副本
+   窗口/菜单/日志          路由·检索·生成·任务队列              23 张表 + 原文副本
 ```
 
 | 层 | 关键实现 | 职责边界 |
@@ -61,7 +61,8 @@ Electron 33（外壳）  →  Python 3.13 + FastAPI（sidecar）  →  SQLite + 
 
 ### 2.2 数据模型
 
-21 张表（`backend/app/models.py` 的 21 个 `__tablename__`），四组：
+23 张表（`backend/app/models.py` 的 22 个 `__tablename__` + `backend/app/migrations.py` 用原始 SQL 建的
+`schema_migrations` 账本），四组：
 
 | 组 | 表 | 关键字段 |
 | --- | --- | --- |
@@ -594,3 +595,37 @@ min / P50 / P95 / max / 均值 / 标准差由采集器写入 `docs/results/summa
 | 换模型强制重建 | `POST /api/settings/embedding/switch`（无 `confirm=true` 时 409） |
 
 写作提醒：论文里凡引用「默认值」都要写成「本实现默认值」，因为这些参数全部可由环境变量覆盖（`backend/app/config.py`）；凡引用「实测」都要注明向量来源与是否离线，否则读者无法判断可比性。
+
+---
+
+## 9. 配图清单（界面实测）
+
+所有图为 **v1.0.17 离线配置下的实拍**（1440×900、演示数据、无头 Chromium），
+拍摄口径、复现命令与逐图说明见 [`docs/screenshots/README.md`](screenshots/README.md)；
+`docs/screenshots/current/` 下共 15 张，本节只挑论文直接要用的几张。
+
+**图 3-1 检索调试页：两层融合与外层路由的可视化**（对应 §3.4）。一屏给出候选数、入选数、
+返回证据数、平均覆盖率、RRF k，以及「哪个库走了 Wiki 章节、哪个库走了基础分块、是否回退」。
+
+![图 3-1：检索调试页的检索概览与逐库路由决策](screenshots/current/09-search.png)
+
+**图 3-2 一轮问答的证据链**（对应 §3.5、§3.6）。回答带引用编号 `[1]..[4]`，下面挂思考过程、
+证据条数与路由库数；离线抽取模式下会在正文前显式标注来源方式。
+
+![图 3-2：问答结束后展示引用编号、证据条数与路由信息](screenshots/current/08-chat-answer.png)
+
+**图 3-3 Wiki 页面与来源依据回挂**（对应 §3.3）。正文之外同时展示它由哪些文档片段整理而来，
+以及关联页面，这是「Wiki 不是自由生成」的直接证据。
+
+![图 3-3：Wiki 页面正文、来源依据与关联页面](screenshots/current/05-kb-wiki-page.png)
+
+**图 3-4 成本与用量的界面呈现**（对应 §3.7）。调用次数与成本按阶段归因后落到用量页。
+
+![图 3-4：用量概览](screenshots/current/13-usage.png)
+
+其余可用图（按章节取用即可）：`01-login`、`02-kb-list`、`03-kb-documents`、
+`04-kb-wiki`、`06-kb-settings`、`07-chat-empty`、`10-tasks`、`11-users`、
+`12-models`、`14-about`、`15-agent`（均为 `screenshots/current/` 下的 PNG）。
+
+> 图注纪律：图里出现的数字（如某次检索的候选数、覆盖率）是**拍摄时的一次读数**，
+> 正文若要当结果引用，必须换成 `docs/results/` 里可追溯的那一行。
