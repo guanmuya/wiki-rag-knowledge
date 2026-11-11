@@ -1,4 +1,4 @@
-/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
+﻿/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
 
 /* ---------------------------------------------------------------- 13 登录 / 初始化 */
 .login-page {
@@ -11,12 +11,12 @@
   position: relative;
   overflow: hidden;
   padding: 56px 60px;
-  color: #12304f;
+  color: var(--c-brand-ink);
   display: flex;
   flex-direction: column;
   justify-content: center;
   gap: 26px;
-  background: #e8f2ff;
+  background: var(--c-brand-bg);
 }
 .login-aside::after {
   content: "";
@@ -28,17 +28,17 @@
 .login-aside > * { position: relative; z-index: 1; }
 .login-aside .brand { padding: 0; }
 .login-aside .brand-mark { background: var(--c-primary); box-shadow: none; border: 1px solid transparent; }
-.login-aside .brand-text strong { color: #12304f; font-size: 14px; }
-.login-aside .brand-text span { color: #5c7896; }
+.login-aside .brand-text strong { color: var(--c-brand-ink); font-size: 14px; }
+.login-aside .brand-text span { color: var(--c-info-ink-soft); }
 .login-aside h1 {
-  color: #0f2744;
+  color: var(--c-brand-ink-deep);
   font-size: 30px;
   line-height: 1.35;
   letter-spacing: -0.02em;
   max-width: 540px;
 }
 .login-aside p {
-  color: #3d5a78;
+  color: var(--c-brand-ink-soft);
   font-size: 13.5px;
   line-height: 1.75;
   max-width: 500px;
@@ -49,12 +49,12 @@
   align-items: flex-start;
   gap: 10px;
   font-size: 12.5px;
-  color: #33506e;
+  color: var(--c-code-inline-ink);
   line-height: 1.6;
 }
 .login-feature .mark {
-  background: #ffffff;
-  border: 1px solid #d8e7ff;
+  background: var(--c-surface);
+  border: 1px solid var(--c-primary-soft-strong);
   color: var(--c-primary);
 }
 
@@ -74,11 +74,12 @@
 .login-panel .btn-primary { height: 40px; font-size: 13.5px; margin-top: 6px; }
 .login-error {
   background: var(--c-danger-soft);
-  border: 1px solid #fecaca;
-  color: #b91c1c;
-  border-radius: 9px;
-  padding: 9px 12px;
-  font-size: 12.5px;
+  border: 1px solid var(--c-danger-line);
+  color: var(--c-danger-ink);
+  border-radius: var(--radius);
+  padding: 9px 13px;
+  font-size: 12px;
+  line-height: 1.6;
   margin-bottom: 14px;
 }
 .login-foot {
@@ -92,7 +93,7 @@
 .kb-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 14px;
+  gap: var(--gap-grid);
 }
 
 .kb-card {
@@ -100,16 +101,16 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 16px;
+  padding: var(--space-card);
   background: var(--c-surface);
   border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-card);
   box-shadow: var(--shadow-xs);
   cursor: pointer;
   transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
 }
 .kb-card:hover {
-  border-color: #cfd4e8;
+  border-color: var(--c-border-hover);
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
 }
@@ -184,10 +185,10 @@
   transition: all 0.15s ease;
   user-select: none;
 }
-.kb-pick:hover { border-color: #c9cee0; background: #fbfbff; }
+.kb-pick:hover { border-color: var(--c-border-hover); background: var(--c-hover-soft); }
 .kb-pick.on {
   background: var(--c-primary-soft);
-  border-color: #c9dcf5;
+  border-color: var(--c-primary-line);
   color: var(--c-primary);
   font-weight: 600;
 }
@@ -240,9 +241,9 @@
   display: block;
   width: 100%;
   line-height: inherit;
-  border: 1.5px dashed #cdd2e3;
-  border-radius: var(--radius-lg);
-  background: #f8fbff;
+  border: 1.5px dashed var(--c-border-hover);
+  border-radius: var(--radius-card);
+  background: var(--c-hover-soft);
   padding: 22px;
   text-align: center;
   cursor: pointer;
@@ -312,7 +313,7 @@
   padding: 8px;
   background: var(--c-surface);
   border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-card);
 }
 .wiki-tree-title {
   font-size: inherit;
@@ -339,7 +340,7 @@
   cursor: pointer;
   transition: background 0.14s ease, color 0.14s ease;
 }
-.wiki-tree-item:hover { background: #f5f6fa; color: var(--c-text); }
+.wiki-tree-item:hover { background: var(--c-hover-soft); color: var(--c-text); }
 .wiki-tree-item.active { background: var(--c-primary-soft); color: var(--c-primary); font-weight: 600; }
 .wiki-tree-item:disabled, .related-chips .chip:disabled { cursor: not-allowed; opacity: 0.6; }
 
@@ -347,7 +348,7 @@
 .wiki-doc {
   background: var(--c-surface);
   border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-card);
   padding: 22px 26px;
   box-shadow: var(--shadow-xs);
 }
@@ -394,12 +395,12 @@
 .markdown p { margin: 0 0 10px; }
 .markdown ul, .markdown ol { margin: 0 0 10px; padding-left: 20px; }
 .markdown li { margin: 3px 0; }
-.markdown li::marker { color: #a3a9ba; }
+.markdown li::marker { color: var(--c-icon-muted); }
 .markdown a { color: var(--c-primary); text-decoration: underline; text-underline-offset: 2px; }
 .markdown blockquote {
   margin: 12px 0;
   padding: 8px 14px;
-  border-left: 3px solid #c9dcf5;
+  border-left: 3px solid var(--c-primary-line);
   background: var(--c-surface-alt);
   border-radius: 0 8px 8px 0;
   color: var(--c-text-secondary);
@@ -431,10 +432,10 @@
   vertical-align: top;
 }
 .markdown tbody tr:last-child td { border-bottom: none; }
-.markdown tbody tr:nth-child(even) td { background: #fcfcfe; }
+.markdown tbody tr:nth-child(even) td { background: var(--c-hover-soft); }
 .markdown pre {
-  background: #12141c;
-  color: #d7dbe8;
+  background: var(--c-code-bg);
+  color: var(--c-code-ink);
   border-radius: var(--radius);
   padding: 14px 16px;
   overflow-x: auto;

@@ -1,12 +1,12 @@
 /* 管理员用量页：指标卡 → 趋势图 → 来源/核心表 → 页脚口径，外加单价弹窗。
-   颜色只用 styles/01-tokens-base.css 的令牌与本文件顶部这几个序列色变量，
+   颜色只用 styles/01-tokens-base.css 的令牌（含本文件这几个序列色别名），
    不写内联色值（图表颜色也一律靠类名，见 UsageTrend.tsx 的注释）。 */
 .usage-page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--gap-stack);
 
-  --usage-series-input: #8fb3f2;
+  --usage-series-input: var(--c-primary-tint);
   --usage-series-output: var(--c-primary);
   --usage-series-embed: var(--c-success);
   --usage-series-cost: var(--c-warn);
@@ -14,7 +14,9 @@
 }
 
 /* ---------------------------------------------------------------- 页头 / 工具条 */
-.usage-heading { margin-bottom: 0; align-items: flex-start; }
+/* 页头沿用全局 .page-head；本页是 flex 纵向布局，间距由 .usage-page 的
+   --gap-stack 统一给出，这里只消掉 .page-head 自带的外边距避免叠加。 */
+.usage-heading { margin-bottom: 0; }
 .usage-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .usage-auto {
   display: inline-flex;
@@ -38,33 +40,11 @@
   background: var(--c-danger-soft);
   color: var(--c-danger);
   font-size: 12px;
+  line-height: 1.6;
 }
 
-/* 分段控件：时间范围与图表的两组切换共用 */
-.usage-segment {
-  display: inline-flex;
-  padding: 3px;
-  gap: 2px;
-  background: var(--c-surface-sunken);
-  border-radius: 10px;
-}
-.usage-segment button {
-  border: 0;
-  border-radius: 7px;
-  padding: 5px 12px;
-  color: var(--c-text-secondary);
-  background: transparent;
-  cursor: pointer;
-  font-size: 12.5px;
-  white-space: nowrap;
-}
-.usage-segment button:hover { color: var(--c-text); }
-.usage-segment button.selected {
-  color: var(--c-primary);
-  background: var(--c-surface);
-  box-shadow: var(--shadow-xs);
-  font-weight: 600;
-}
+/* 分段控件不再在本页另写一套：口径见 05-overlays-tabs.css 的
+   .view-switch / .usage-segment 共用规则。 */
 
 /* ---------------------------------------------------------------- 指标卡 */
 .usage-metrics { display: flex; flex-direction: column; gap: 10px; }
@@ -73,11 +53,11 @@
   grid-template-columns: repeat(6, minmax(0, 1fr));
   background: var(--c-surface);
   border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-card);
   box-shadow: var(--shadow-xs);
   overflow: hidden;
 }
-.usage-metric { min-width: 0; display: flex; flex-direction: column; gap: 7px; padding: 18px; }
+.usage-metric { min-width: 0; display: flex; flex-direction: column; gap: 7px; padding: var(--space-card); }
 .usage-metric + .usage-metric { border-left: 1px solid var(--c-border); }
 .usage-metric-label {
   display: flex;
@@ -93,6 +73,7 @@
   font-size: 24px;
   line-height: 1.2;
   font-weight: 650;
+  letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
@@ -113,9 +94,9 @@
 .usage-panel {
   background: var(--c-surface);
   border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-card);
   box-shadow: var(--shadow-xs);
-  padding: 20px 22px;
+  padding: var(--space-card);
 }
 .usage-panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
 .usage-panel-head h2 { font-size: 15px; }
@@ -182,20 +163,21 @@ svg polyline.usage-chart-calls { fill: none; stroke: var(--usage-series-calls); 
 /* ---------------------------------------------------------------- 模型单价面板 */
 .pricing-note {
   margin: 0 0 14px;
-  padding: 10px 12px;
+  padding: 9px 13px;
   border-radius: var(--radius);
   background: var(--c-surface-alt);
   color: var(--c-text-secondary);
   font-size: 12px;
-  line-height: 1.7;
+  line-height: 1.6;
 }
 .pricing-notice {
   margin: 0 0 12px;
-  padding: 8px 12px;
+  padding: 9px 13px;
   border-radius: var(--radius);
   background: var(--c-success-soft);
   color: var(--c-success);
   font-size: 12px;
+  line-height: 1.6;
 }
 .pricing-list { display: flex; flex-direction: column; gap: 10px; }
 .pricing-row { border: 1px solid var(--c-border); border-radius: var(--radius); padding: 14px 16px; }

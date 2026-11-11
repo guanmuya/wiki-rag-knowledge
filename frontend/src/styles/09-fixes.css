@@ -1,4 +1,4 @@
-/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
+﻿/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
 
 /* ---------------------------------------------------------------- 25 第二轮修正 */
 /* 说明列表：About / 模型设置用的是 <dl><dt><dd>，之前只处理了 div 结构，
@@ -42,7 +42,7 @@
   flex: 0 0 14px;
   display: grid;
   place-items: center;
-  color: #b6bccd;
+  color: var(--c-icon-muted);
 }
 .wiki-mark::before {
   content: '';
@@ -80,17 +80,18 @@ td .btn-link.danger { color: var(--c-danger); }
 /* 任务详情里的 embedding_signature 是长技术串，截断一行就够 */
 .task-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 登录右侧：表单放进卡片，和左侧品牌区分层 */
-.login-panel { background: #f7fafe; }
+/* 登录右侧：表单放进卡片，和左侧品牌区分层。右栏沿用全局点阵画布，
+   让白色登录卡和其余内容页的浮层卡片落在同一种底上。 */
+.login-panel { background: var(--canvas-bg); }
 .login-panel > * { max-width: 400px; }
 .login-panel h2 { margin-top: 0; }
 .login-panel form {
   width: 100%;
   background: var(--c-surface);
   border: 1px solid var(--c-border);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-card);
   box-shadow: var(--shadow-sm);
-  padding: 22px;
+  padding: var(--space-card);
 }
 
 /* 登录/初始化：标题、表单、错误提示放在同一张卡里，避免「标题飘在卡片外」 */
@@ -98,9 +99,9 @@ td .btn-link.danger { color: var(--c-danger); }
   width: 100%;
   background: var(--c-surface);
   border: 1px solid var(--c-border);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-card);
   box-shadow: var(--shadow-sm);
-  padding: 26px;
+  padding: var(--space-card);
 }
 .login-card h2 { margin-top: 0; }
 .login-card .sub { margin-bottom: 18px; }
@@ -131,7 +132,7 @@ td .btn-link.danger { color: var(--c-danger); }
   font-size: 18px;
   color: var(--c-primary);
   background: var(--c-primary-soft);
-  border: 1px solid #d8e7ff;
+  border: 1px solid var(--c-primary-soft-strong);
   margin-bottom: 4px;
 }
 .chat-empty-title { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
@@ -147,7 +148,7 @@ td .btn-link.danger { color: var(--c-danger); }
   cursor: pointer;
   transition: all 0.15s ease;
 }
-.sample-chip:hover { border-color: #c9dcf5; background: var(--c-primary-soft); color: var(--c-primary); }
+.sample-chip:hover { border-color: var(--c-primary-line); background: var(--c-primary-soft); color: var(--c-primary); }
 .chat-empty-tip { margin-top: 12px; font-size: 11px; color: var(--c-text-muted); }
 
 /* 知识库卡片底部的「删除」：默认降到次要色，悬停才变红，避免三张卡片上三块红字 */
@@ -167,10 +168,10 @@ td .btn-link.danger { color: var(--c-danger); }
   gap: 12px;
   padding: 9px 14px;
   margin-bottom: 14px;
-  border-radius: var(--radius-lg);
-  border: 1px solid #d5e5fb;
-  background: #f0f6ff;
-  color: #2c4a6b;
+  border-radius: var(--radius-card);
+  border: 1px solid var(--c-info-line);
+  background: var(--c-info-bg);
+  color: var(--c-info-ink);
 }
 /* 聊天页是 content-flush（无内边距），横幅自己补一点留白，避免贴边 */
 .content-flush > .lock-banner { margin: 10px 14px 0; }
@@ -181,13 +182,13 @@ td .btn-link.danger { color: var(--c-danger); }
   border-radius: 8px;
   display: grid;
   place-items: center;
-  background: #dcebff;
+  background: var(--c-info-icon-bg);
   color: var(--c-primary);
   font-size: 12px;
 }
 .lock-banner-body { min-width: 0; flex: 1; }
 .lock-banner-body strong { font-size: 12.5px; font-weight: 650; display: block; }
-.lock-banner-detail { font-size: 11.5px; color: #5c7896; line-height: 1.55; }
+.lock-banner-detail { font-size: 11.5px; color: var(--c-info-ink-soft); line-height: 1.55; }
 .lock-banner-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 
 /* 轮询失败提示条：出现在列表内部，保留上次数据的同时说清「这不是空列表」 */
@@ -198,21 +199,21 @@ td .btn-link.danger { color: var(--c-danger); }
   padding: 9px 12px;
   margin: 0 0 10px;
   border-radius: var(--radius);
-  border: 1px solid #fde68a;
-  background: #fffbeb;
-  color: #92400e;
+  border: 1px solid var(--c-warn-line);
+  background: var(--c-warn-bg);
+  color: var(--c-warn-ink);
   font-size: 12px;
   line-height: 1.6;
 }
 .poll-notice-icon { flex: 0 0 auto; font-size: 12px; }
 .poll-notice-body { min-width: 0; }
 .poll-notice-body strong { font-size: 12px; font-weight: 650; display: block; }
-.poll-notice-detail { font-size: 11.5px; color: #a16207; }
+.poll-notice-detail { font-size: 11.5px; color: var(--c-warn); }
 /* 任务卡片内部左右有 16px 内边距，提示条跟着对齐，不然会顶到卡片边上 */
 .task-list > .poll-notice { margin: 12px 16px 4px; }
 
 /* 任务心跳：和 stage 同一行，字号更小、颜色更淡，不跟进度条抢注意力 */
-.task-heartbeat { color: #a2b0c4; }
+.task-heartbeat { color: var(--c-icon-muted); }
 
 /* 运行中但 30 秒没进展：浅蓝说明条，绝不能长得像 .task-error */
 .task-hint {
@@ -221,11 +222,45 @@ td .btn-link.danger { color: var(--c-danger); }
   gap: 8px;
   padding: 7px 10px;
   border-radius: var(--radius-sm);
-  border: 1px solid #dbe9fb;
-  background: #f5f9ff;
-  color: #4a6b8f;
+  border: 1px solid var(--c-info-line);
+  background: var(--c-info-bg);
+  color: var(--c-info-ink);
   font-size: 11.5px;
   line-height: 1.6;
 }
 .task-hint-icon { flex: 0 0 auto; }
+
+/* ---------------------------------------------------------------- 提示条统一口径
+   此前页级说明条（离线 / Wiki 锁定 / 证据不足）分别写了 14px 与 10px 圆角、
+   12.5px 与 12px 字号、10px 14px / 9px 14px / 10px 12px 内边距，图标还有
+   26px 与 24px 两档，加上行内小提示，看起来像五六种不同组件。这里收成两档：
+   页级说明条用顶层卡片圆角，行内小提示用次级圆角；颜色一律由
+   --c-info-* / --c-warn-* / --c-danger-* 语义令牌区分，不再各写一套淡彩。 */
+.offline-banner, .lock-banner, .insufficient-banner {
+  gap: 10px;
+  padding: 9px 13px;
+  border-radius: var(--radius-card);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.offline-banner-icon, .lock-banner-icon {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+.offline-banner-body strong, .lock-banner-body strong { font-size: 12px; font-weight: 650; }
+.offline-banner-detail, .lock-banner-detail {
+  font-size: 11.5px;
+  color: var(--c-info-ink-soft);
+  line-height: 1.6;
+}
+.poll-notice, .task-hint {
+  gap: 10px;
+  padding: 9px 13px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  line-height: 1.6;
+}
 

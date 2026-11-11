@@ -1,4 +1,4 @@
-/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
+﻿/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
 
 /* ---------------------------------------------------------------- 智能问答：模型选择器 */
 .chat-model-picker {
@@ -16,7 +16,7 @@
   font-weight: 600;
   max-width: 340px;
   border-radius: 999px;
-  border-color: #c9dcf5;
+  border-color: var(--c-primary-line);
   background-color: var(--c-primary-soft);
   color: var(--c-primary);
   cursor: pointer;
