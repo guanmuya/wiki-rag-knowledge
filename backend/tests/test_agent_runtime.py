@@ -58,7 +58,9 @@ def _make_kb(db, name: str | None = None) -> int:
 
 def _write_fake_agent(directory, *, body: str, plugin_id: str = "fake-cli",
                       protocols: list[str] | None = None,
-                      env: dict | None = None) -> str:
+                      env: dict | None = None, output: str = "text",
+                      text_paths: list[str] | None = None,
+                      usage_event: str = "") -> str:
     script = directory / f"{plugin_id}.py"
     script.write_text(body, encoding="utf-8")
     manifest = {
@@ -75,8 +77,12 @@ def _write_fake_agent(directory, *, body: str, plugin_id: str = "fake-cli",
             "OPENAI_BASE_URL": "{base_url}",
             "OPENAI_MODEL": "{model}",
         },
-        "output": "text",
+        "output": output,
     }
+    if text_paths:
+        manifest["text_paths"] = text_paths
+    if usage_event:
+        manifest["usage_event"] = usage_event
     (directory / f"{plugin_id}.json").write_text(
         json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
     return plugin_id
@@ -586,3 +592,111 @@ def test_api_key_never_appears_in_command_line_or_events(
     assert "sk-test" not in blob
     assert "<密钥>" in blob            # 证明确实注入了密钥、随后被脱敏
     assert "sk-test" not in result["message"]["meta"]["command"]
+
+
+# ------------------------------------------------------------------ 用量（P1 用量入统计）
+@pytest.mark.parametrize("obj, event, expected", [
+    # Codex 0.167.0 的 turn.completed 结构（input/output_tokens）
+    ({"type": "turn.completed",
+      "usage": {"input_tokens": 3, "output_tokens": 4}}, "turn.completed", (3, 4)),
+    # OpenAI 兼容 chat 的写法（prompt/completion_tokens）同样认
+    ({"type": "turn.completed",
+      "usage": {"prompt_tokens": 5, "completion_tokens": 6}}, "turn.completed", (5, 6)),
+    # 只有一侧有值也照实记，另一侧按 0
+    ({"type": "turn.completed", "usage": {"output_tokens": 7}}, "turn.completed", (0, 7)),
+    # 负数、bool、空对象、非用量事件一律返回 None（当作「没有用量」）
+    ({"type": "turn.completed", "usage": {"input_tokens": -1}}, "turn.completed", None),
+    # 坏掉的一侧忽略、好的一侧照记——与 usage._valid_counters 同口径
+    ({"type": "turn.completed",
+      "usage": {"input_tokens": True, "output_tokens": 2}}, "turn.completed", (0, 2)),
+    ({"type": "turn.completed",
+      "usage": {"input_tokens": "1", "output_tokens": 1.5}}, "turn.completed", None),
+    ({"type": "turn.completed", "usage": {}}, "turn.completed", None),
+    ({"type": "item.completed", "usage": {"input_tokens": 1}}, "turn.completed", None),
+    ({"type": "turn.completed"}, "turn.completed", None),
+    ({"type": "turn.completed", "usage": {"input_tokens": 1}}, "", None),
+    ("not an object", "turn.completed", None),
+])
+def test_jsonl_usage_parser(obj, event, expected):
+    assert runtime._jsonl_usage(obj, event) == expected
+
+
+def test_jsonl_usage_event_is_written_to_agent_meta(app_client, admin_headers,
+                                                    db_session, cli_plugin):
+    """JSONL 核心按清单声明的 usage_event 累计 token，写进 meta.usage。
+
+    样例按本机 codex-cli 0.167.0 的事件结构（thread.started / item.completed /
+    turn.completed）构造；本机没有可用的在线模型，所以这是**样例验证**，
+    不是真实模型调用的实测数字。
+    """
+    model_id = _make_model(db_session)
+    _write_fake_agent(cli_plugin, output="jsonl", text_paths=["item.text"],
+                      usage_event="turn.completed", body="""
+import json
+
+
+def emit(payload):
+    print(json.dumps(payload), flush=True)
+
+
+emit({"type": "thread.started", "thread_id": "t-1"})
+emit({"type": "item.completed", "item": {"type": "agent_message", "text": "第一段"}})
+emit({"type": "turn.completed", "usage": {"input_tokens": 120,
+                                          "cached_input_tokens": 40,
+                                          "output_tokens": 30,
+                                          "reasoning_output_tokens": 5,
+                                          "total_tokens": 150}})
+emit({"type": "item.completed", "item": {"type": "agent_message", "text": "第二段"}})
+emit({"type": "turn.completed", "usage": {"input_tokens": 80, "output_tokens": 20,
+                                          "total_tokens": 100}})
+""")
+    plugins.clear_detection_cache()
+
+    created = app_client.post("/api/agent/sessions", headers=admin_headers, json={
+        "core_id": "fake-cli", "model_config_id": model_id,
+    })
+    assert created.status_code == 201, created.text
+    sent = app_client.post(
+        f"/api/agent/sessions/{created.json()['id']}/messages",
+        headers=admin_headers, json={"content": "跑一轮"},
+    )
+    assert sent.status_code == 200, sent.text
+    result = _wait_run(app_client, admin_headers, sent.json()["run_id"])
+    assert result["status"] == "ok", result
+    assert "第一段" in result["message"]["content"]
+    assert "第二段" in result["message"]["content"]
+
+    meta = result["message"]["meta"]
+    usage = meta["usage"]
+    # 两次 turn.completed 累加；调用仍记 1 次（这是「一次执行」）。
+    assert usage["prompt_tokens"] == 200
+    assert usage["completion_tokens"] == 50
+    assert usage["calls"] == 1 and usage["chat_calls"] == 1 and usage["live_calls"] == 1
+    assert usage["embed_tokens"] == 0
+    assert usage["latency_ms"] >= 0
+    assert "usage_unmetered" not in meta
+
+
+def test_text_cli_without_usage_is_marked_unmetered(app_client, admin_headers,
+                                                    db_session, cli_plugin):
+    """纯文本核心解析不到用量：token 记 0 并标注，绝不猜数字。"""
+    model_id = _make_model(db_session)
+    _write_fake_agent(cli_plugin, body="print('plain text output')\n")
+    plugins.clear_detection_cache()
+
+    created = app_client.post("/api/agent/sessions", headers=admin_headers, json={
+        "core_id": "fake-cli", "model_config_id": model_id,
+    })
+    assert created.status_code == 201, created.text
+    sent = app_client.post(
+        f"/api/agent/sessions/{created.json()['id']}/messages",
+        headers=admin_headers, json={"content": "跑一轮"},
+    )
+    result = _wait_run(app_client, admin_headers, sent.json()["run_id"])
+    assert result["status"] == "ok", result
+
+    meta = result["message"]["meta"]
+    assert meta["usage_unmetered"] is True
+    assert meta["usage"]["calls"] == 1
+    assert meta["usage"]["prompt_tokens"] == 0
+    assert meta["usage"]["completion_tokens"] == 0

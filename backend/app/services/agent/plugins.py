@@ -124,6 +124,10 @@ class AgentPlugin:
     env: dict[str, str] = field(default_factory=dict)
     output: str = "text"                    # text | jsonl
     text_paths: tuple[str, ...] = ()
+    # 只有 output="jsonl" 的核心才可能有「用量事件」：在逐行 JSON 里，哪一类
+    # 事件的 usage 字段是本次执行的 token 用量（例如 Codex 的 turn.completed）。
+    # 纯文本输出拿不到逐次用量，这里留空，运行时按「未计量」记录。
+    usage_event: str = ""
     timeout_seconds: int = 900
     requires_workspace: bool = True
     builtin: bool = False
@@ -160,12 +164,13 @@ def _builtin(id: str, name: str, description: str, *, kind: str = "cli",
              protocols: tuple[str, ...] = (), bins: tuple[str, ...] = (),
              run_args: tuple[str, ...] = (), env: dict[str, str] | None = None,
              output: str = "text", text_paths: tuple[str, ...] = (),
-             homepage: str = "", isolated_home: str = "") -> AgentPlugin:
+             usage_event: str = "", homepage: str = "",
+             isolated_home: str = "") -> AgentPlugin:
     return AgentPlugin(
         id=id, name=name, description=description, kind=kind, source="builtin",
         homepage=homepage, protocols=protocols, bins=bins, run_args=run_args,
-        env=env or {}, output=output, text_paths=text_paths, builtin=True,
-        isolated_home=isolated_home,
+        env=env or {}, output=output, text_paths=text_paths,
+        usage_event=usage_event, builtin=True, isolated_home=isolated_home,
     )
 
 
@@ -199,6 +204,10 @@ BUILTIN_PLUGINS: tuple[AgentPlugin, ...] = (
         env={"OPENAI_BASE_URL": "{base_url}", "OPENAI_API_KEY": "{api_key}"},
         output="jsonl",
         text_paths=("item.text", "msg.message", "message", "text"),
+        # `codex exec --json` 在每轮结束时打一条 turn.completed，里面带
+        # usage（input_tokens / output_tokens 等）。字段名来自 codex 0.167.0
+        # 实际输出，见 docs/AGENT_PLUGINS.md §3.4。
+        usage_event="turn.completed",
         homepage="https://github.com/openai/codex",
         isolated_home="codex",
     ),
@@ -357,6 +366,10 @@ def parse_manifest(data: Any, *, source: str = "plugin", manifest_path: str = ""
     if output not in SUPPORTED_OUTPUTS:
         raise PluginError("output 只能是 text 或 jsonl")
     text_paths = _str_tuple(data.get("text_paths"), "text_paths", limit=16)
+    usage_event = _text(data.get("usage_event"), "usage_event", max_len=64)
+    if usage_event and output != "jsonl":
+        # 纯文本输出里没有可解析的事件，写了也不会生效——宁可拒绝，不做静默忽略。
+        raise PluginError("usage_event 只在 output=jsonl 时可用（纯文本输出没有可解析的事件）")
 
     timeout = data.get("timeout_seconds", 900)
     if not isinstance(timeout, int) or not (10 <= timeout <= 3600):
@@ -370,7 +383,7 @@ def parse_manifest(data: Any, *, source: str = "plugin", manifest_path: str = ""
         id=plugin_id, name=name, description=description, kind=kind,
         source=source, homepage=homepage, protocols=protocols, bins=bins,
         version_args=version_args, run_args=run_args, env=env, output=output,
-        text_paths=text_paths, timeout_seconds=timeout,
+        text_paths=text_paths, usage_event=usage_event, timeout_seconds=timeout,
         requires_workspace=requires_workspace, builtin=(source == "builtin"),
         manifest_path=manifest_path,
     )
@@ -644,6 +657,7 @@ def _plugin_out(plugin: AgentPlugin, *, enabled: bool) -> dict:
         "requires_workspace": plugin.requires_workspace,
         "timeout_seconds": plugin.timeout_seconds,
         "output": plugin.output,
+        "usage_event": plugin.usage_event,
         "manifest_path": plugin.manifest_path,
         # 非空表示这个核心用应用自己的配置目录（目前只有 Codex → 应用数据目录下的
         # agent_codex_home），界面可以据此说明「不继承你本机的 Codex 配置」。

@@ -367,15 +367,46 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/usage?days=` | admin。`days` ∈ `7` \| `30`（默认）\| `0`（全部），其他值 422 → `{period_days, timezone, totals, daily, by_source}`（`routers/usage.py` 的 `get_usage()`，汇总口径见本节下文） |
+| GET | `/api/usage?days=` | admin。`days` ∈ `7` \| `30`（默认）\| `0`（全部），其他值 422 → `{period_days, timezone, currency, price_unit, totals, daily, by_source, by_core}`（`routers/usage.py` 的 `get_usage()`，汇总口径见本节下文） |
 
 `GET /api/usage?days=30` 汇总全局已记录用量，仅管理员可访问。`days` 可为 `7`、`30`（默认）或 `0`（全部），其他值返回 422。7/30 天以 UTC 当日为末日，按 UTC 日期补齐无记录的日期。
 
-响应为 `{period_days, timezone, totals, daily, by_source}`；`timezone` 为 `UTC`，`daily` 是带 `date` 的每日汇总，`by_source` 的 `source` 为 `processing`（知识库处理）或 `chat`（问答）。各汇总包含 `calls`、`live_calls`、`offline_calls`、`chat_calls`、`embed_calls`、`vision_calls`、`prompt_tokens`、`completion_tokens`、`embed_tokens`、`total_tokens`、`latency_ms` 和 `record_count`。`total_tokens` 为前三类 Token 之和。
+响应字段：`timezone` 为 `UTC`；`currency` 固定 `USD`，`price_unit` 固定 `per_1m_tokens`（金额按「每 100 万 token 的美元价」估算）。`daily` 是带 `date` 的每日汇总；`by_source` 的 `source` 为 `processing`（知识库处理）、`chat`（问答）或 `agent`（个人 Agent），带中文 `label`；`by_core` 只统计个人 Agent，按核心 `core_id` 拆分，`label` 取内置清单里的名字，未知/第三方核心回落 `core_id`。
 
-知识库处理使用成本流水；缺少流水的旧任务回退到任务结果，同一任务已有流水时不会重复计数。问答使用成功保存的助手消息，每条消息只计一次。处理按流水入账时间统计，旧任务按完成时间（无完成时间则创建时间），问答按消息创建时间统计。删除知识库或会话会同时删除其关联记录。
+```json
+{
+  "period_days": 7, "timezone": "UTC",
+  "currency": "USD", "price_unit": "per_1m_tokens",
+  "totals": {
+    "calls": 12, "live_calls": 10, "offline_calls": 2, "chat_calls": 6,
+    "embed_calls": 5, "vision_calls": 1,
+    "prompt_tokens": 250000, "completion_tokens": 40000, "embed_tokens": 8000,
+    "total_tokens": 298000, "latency_ms": 42000, "record_count": 9,
+    "unmetered_records": 1,
+    "cost": {"currency": "USD", "amount": 0.017, "priced_records": 6,
+             "unpriced_records": 2, "unpriced_tokens": 52000}
+  },
+  "daily": [{"date": "2026-11-05", "...": "..."}],
+  "by_source": [{"source": "processing", "label": "知识库处理", "...": "..."}],
+  "by_core": [{"core_id": "codex", "label": "Codex CLI", "...": "..."}]
+}
+```
 
-该接口不包括检索调试、连接测试、未保存或失败的问答；供应商可能不返回 Token 数，失败或中断的调用也可能产生未记录用量。历史流水没有供应商、模型、价格或余额信息，响应不能作为账单或完整用量。
+各汇总桶（`totals`、`daily[]`、`by_source[]`、`by_core[]`）都包含同一组计数：`calls`、`live_calls`、`offline_calls`、`chat_calls`、`embed_calls`、`vision_calls`、`prompt_tokens`、`completion_tokens`、`embed_tokens`、`total_tokens`（前三类 Token 之和）、`latency_ms`、`record_count`，以及：
+
+- `unmetered_records`：有调用记录、但**一条 Token 记录都没有**的行数（供应商没回报用量、纯文本 CLI 核心等）。这些行照常计入 `calls`，Token 记 0，不填推测值。
+- `cost`：`{currency, amount, priced_records, unpriced_records, unpriced_tokens}`。金额只给生成/视觉 Token 计价（输入价 × `prompt_tokens` + 输出价 × `completion_tokens` ÷ 1e6）；`priced_records` 是找到单价的行数，`unpriced_records` 是没找到单价的行数，`unpriced_tokens` 是未计价的 Token 数（**向量 Token 一律算未计价**——记录里没有保存向量模型）。没有 Token 的行只进 `unmetered_records`，不进 `cost` 的两个行数。总额是**参考估算**，不能当账单或余额。
+
+三个来源的口径：
+
+- **知识库处理**：优先使用成本流水；缺少流水的旧任务回退到任务结果，同一任务已有流水时不会重复计数。按流水入账时间统计，旧任务按完成时间（无完成时间则创建时间）。
+- **问答**：使用成功保存的助手消息，每条消息只计一次；按消息创建时间统计。金额按该条消息实际使用的模型（`Message.model_config_id`，未选模型时是解析出的默认模型）计价，解析不到模型就留空并按未计价计。
+- **个人 Agent**：`agent_messages` 里 `role=assistant` 且 `status=ok` 的行，每条执行计 1 次调用；用量取 `meta.usage`（键名与 `CallStats.as_dict()` 一致），解析不到就记 `calls/chat_calls/live_calls` 各 1、Token 为 0，并计入 `unmetered_records`。个人 Agent 的知识库核心**不并入「问答」**，单独计入「个人 Agent」。按模型配置（`AgentSession.model_config_id`）计价。
+- 失败或中止的个人 Agent 执行与失败问答同口径，不计入（它们消耗的 Token 也没有落库）。
+
+计价取价顺序：管理员为具体模型配置填写的单价（`/api/settings/pricing`，见 §8）> 内置参考价（按模型标识归一化后精确匹配，规则见 `docs/PRICING.md`）> 未计价。
+
+该接口不包括检索调试、连接测试、未保存或失败的问答；供应商可能不返回 Token 数，失败或中断的调用也可能产生未记录用量。历史流水没有供应商、模型、价格或余额信息，响应不能作为账单或完整用量。删除知识库、会话或个人 Agent 会话会同时删除其关联记录。
 
 ## 8. 模型设置（admin）
 
@@ -394,7 +425,18 @@
 | POST | `/api/settings/models/{id}/test` | 连接测试 → `{ok,message,latency_ms}` |
 | POST | `/api/settings/embedding/switch` | `{model_config_id,confirm}`：已有索引时需 `confirm=true`，触发全量重建任务 |
 | GET | `/api/settings/embedding/status` | 当前 Embedding、各库签名是否一致、是否有重建进行中 |
+| GET | `/api/settings/pricing` | 参考单价目录 → `{currency, price_unit, reference, note, sources[], items[]}`；`items[]` 每个模型配置一项：`{model_config_id, model, label, provider, purpose, match_key, builtin, user, effective}`（`routers/settings.py` 的 `list_pricing()`） |
+| PUT | `/api/settings/pricing/{id}` | `{input_per_1m, output_per_1m}`（0..100000，单位「每 100 万 token」）；按模型配置 upsert，未知模型 404，审计 `set_model_price`；返回单项，`effective.origin` 为 `user` |
+| DELETE | `/api/settings/pricing/{id}` | 删除覆盖价、回到内置参考价；幂等（没有覆盖价也 200），审计 `clear_model_price`；返回单项，`effective.origin` 为 `builtin` 或 `none` |
 | GET | `/api/settings/audit?page=` | 审计日志 |
+
+价格相关字段口径：
+
+- `currency` 固定 `USD`，`price_unit` 固定 `per_1m_tokens`；`reference` 恒为 `true`，`note` 是「参考价、不用于账单」的口径说明，界面应原样展示。
+- `sources[]` 是价目页清单 `{id, name, url}`；`builtin` 是命中的内置目录条目 `{model_id, currency, price_unit, input_per_1m, output_per_1m, source, source_url, verified_at, note}`，没命中为 `null`。
+- `match_key` 是模型标识归一化后的匹配键（小写、取最后一个 `/` 之后、`_`→`-`、去掉日期/纯数字后缀），内置价只做**精确相等**匹配，不做子串或相似度；规则与维护流程见 `docs/PRICING.md`。
+- `user` 是管理员覆盖价 `{currency, price_unit, input_per_1m, output_per_1m, updated_by, updated_at}`，没填为 `null`。**「行存在」才代表填过价**：填 `0` 也是合法价格，与「没填」严格区分。
+- `effective` 是最终生效价 `{origin, currency, price_unit, input_per_1m, output_per_1m, model_id, source, source_url, verified_at, note}`；`origin` 为 `user`（管理员价）、`builtin`（内置参考价）或 `none`（未计价，此时两个单价为 `null`）。`unpriced_records` 等用量口径见 §7.2。
 
 ## 8.1 个人 Agent（admin）
 
@@ -402,7 +444,7 @@ v1 全部要求管理员令牌；CLI 核心以应用进程身份执行本机命�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/agent/cores` | `{items, errors, plugin_dir, schema, supported_protocols}`；每项含 `installed/version/enabled/available/unavailable_reason/protocols/compatible_model_count/isolated_home`（`isolated_home=codex` 表示该核心用应用自己的配置目录） |
+| GET | `/api/agent/cores` | `{items, errors, plugin_dir, schema, supported_protocols}`；每项含 `installed/version/enabled/available/unavailable_reason/protocols/compatible_model_count/output/usage_event/isolated_home`（`isolated_home=codex` 表示该核心用应用自己的配置目录） |
 | GET | `/api/agent/models?core_id=` | `{items, core_id}`；每项含 `protocol/compatible/display`，`compatible=false` 表示协议不匹配 |
 | POST | `/api/agent/plugins/rescan` | 清探测缓存并重新扫描插件目录，返回同 cores |
 | PATCH | `/api/agent/plugins/{id}` | `{enabled}`，返回单个核心 |
@@ -416,6 +458,8 @@ v1 全部要求管理员令牌；CLI 核心以应用进程身份执行本机命�
 | POST | `/api/agent/runs/{id}/stop` | 终止子进程树；已结束 409 |
 
 事件 `type`：`status`（阶段文案）、`text`（正文增量）、`log`（CLI stderr/命令摘要）、`evidence`（历史数据里可能有，个人 Agent 不再产生）、`done`、`error`、`stopped`。
+
+每次执行结束时，助手消息的 `meta` 里带一份用量快照 `meta.usage`（键名与 `CallStats.as_dict()` 一致：`calls/chat_calls/live_calls/offline_calls/prompt_tokens/completion_tokens/embed_tokens/latency_ms`），它同时是 `/api/usage` 里「个人 Agent」来源的唯一数据源（§7.2）。CLI 核心的用量来自插件清单声明的 `usage_event`（仅 `output=jsonl`，例如 Codex 的 `turn.completed`）；一个都没解析到时会额外写 `meta.usage_unmetered = true`，Token 记 0——宁可显示「未计量」，也不填推测值。字段口径见 `docs/AGENT_PLUGINS.md` §3.4。
 
 ## 8.2 运维诊断（admin）
 
@@ -445,7 +489,7 @@ v1 全部要求管理员令牌；CLI 核心以应用进程身份执行本机命�
 | `applied_at` | 应用时间（UTC，带 `+00:00`） |
 
 - 这张表**不在** `Base.metadata` 里（由 `migrations.py` 用原始 SQL 建），所以 `create_all()` 不建它；
-  `docs/FACTS.md` §1 的「23 张表」= `models.py` 的 22 张 + 本表。
+  `docs/FACTS.md` §1 的「24 张表」= `models.py` 的 23 张 + 本表。
 - 回退是**库层能力**：`migrations.downgrade(bind, target=1)` 按版本逆序执行 `revert_sql` 并删除对应记录；
   任何一步没有可逆 DDL 就整体拒绝回退并抛 `MigrationError`——不做「猜着删数据」的操作。
   当前**没有** HTTP 接口或命令行入口暴露它（桌面版暂无降级需求）。

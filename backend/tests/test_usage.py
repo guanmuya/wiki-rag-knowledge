@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import uuid
 from contextlib import contextmanager
 
 import pytest
@@ -14,18 +15,29 @@ from app import models, security
 from app.db import get_db
 from app.main import app
 from app.services import answering, cost, llm, taskflow, usage, worker
+from app.services.agent import plugins as agent_plugins
 
 
 TODAY = dt.date(2025, 3, 1)
 FIELDS = (
     "calls", "live_calls", "offline_calls", "chat_calls", "embed_calls", "vision_calls",
     "prompt_tokens", "completion_tokens", "embed_tokens", "total_tokens", "latency_ms",
-    "record_count",
+    "record_count", "unmetered_records",
 )
+# 一个汇总桶除计数外还带 cost；比较子集时要用这两组键分别取。
+BUCKET_FIELDS = (*FIELDS, "cost")
+
+
+def cost_bucket(amount=0.0, priced=0, unpriced=0, unpriced_tokens=0):
+    """金额桶：priced/unpriced 是「有 token 且找到/没找到单价」的行数。"""
+    return {"currency": "USD", "amount": amount, "priced_records": priced,
+            "unpriced_records": unpriced, "unpriced_tokens": unpriced_tokens}
 
 
 def totals(**values):
-    return {field: values.get(field, 0) for field in FIELDS}
+    bucket = {field: values.get(field, 0) for field in FIELDS}
+    bucket["cost"] = values.get("cost") or cost_bucket()
+    return bucket
 
 
 def stamp(day, hour=0, minute=0, second=0, microsecond=0):
@@ -92,14 +104,17 @@ def test_empty_response_period_validation_and_auth(isolated_api):
     response = client.get("/api/usage", headers=headers["admin"])
     assert response.status_code == 200
     data = response.json()
-    assert set(data) == {"period_days", "timezone", "totals", "daily", "by_source"}
+    assert set(data) == {"period_days", "timezone", "currency", "price_unit",
+                         "totals", "daily", "by_source", "by_core"}
     assert data["period_days"] == 30 and data["timezone"] == "UTC"
+    assert data["currency"] == "USD" and data["price_unit"] == "per_1m_tokens"
     assert data["totals"] == totals()
     assert len(data["daily"]) == 30
     assert data["daily"][0] == {"date": "2025-01-31", **totals()}
     assert data["daily"][-1] == {"date": "2025-03-01", **totals()}
-    assert {row["source"] for row in data["by_source"]} == {"processing", "chat"}
-    assert all(row["label"] and {k: row[k] for k in FIELDS} == totals()
+    assert {row["source"] for row in data["by_source"]} == {"processing", "chat", "agent"}
+    assert data["by_core"] == []
+    assert all(row["label"] and {k: row[k] for k in BUCKET_FIELDS} == totals()
                for row in data["by_source"])
 
     data = client.get("/api/usage?days=0", headers=headers["admin"]).json()
@@ -182,14 +197,18 @@ def test_real_sources_aggregate_without_duplicate_tasks_or_kbs(isolated_api):
     processing = totals(calls=13, live_calls=6, offline_calls=7, chat_calls=5,
                         embed_calls=6, vision_calls=2, prompt_tokens=150,
                         completion_tokens=28, embed_tokens=71, total_tokens=249,
-                        latency_ms=121, record_count=5)
+                        latency_ms=121, record_count=5,
+                        # 这些行都没有 model_config_id，按定义未计价。
+                        cost=cost_bucket(unpriced=5, unpriced_tokens=249))
     chat = totals(calls=3, live_calls=1, offline_calls=2, chat_calls=1, embed_calls=1,
                   vision_calls=1, prompt_tokens=50, completion_tokens=6,
-                  embed_tokens=9, total_tokens=65, latency_ms=30, record_count=1)
+                  embed_tokens=9, total_tokens=65, latency_ms=30, record_count=1,
+                  cost=cost_bucket(unpriced=1, unpriced_tokens=65))
     expected = totals(calls=16, live_calls=7, offline_calls=9, chat_calls=6,
                       embed_calls=7, vision_calls=3, prompt_tokens=200,
                       completion_tokens=34, embed_tokens=80, total_tokens=314,
-                      latency_ms=151, record_count=6)
+                      latency_ms=151, record_count=6,
+                      cost=cost_bucket(unpriced=6, unpriced_tokens=314))
     before = [db.scalar(select(func.count()).select_from(model))
               for model in (models.CostRecord, models.Task, models.Message)]
     statements = []
@@ -209,8 +228,8 @@ def test_real_sources_aggregate_without_duplicate_tasks_or_kbs(isolated_api):
     assert data["period_days"] == 7 and data["timezone"] == "UTC"
     assert data["totals"] == expected
     by_source = {row["source"]: row for row in data["by_source"]}
-    assert {k: by_source["processing"][k] for k in FIELDS} == processing
-    assert {k: by_source["chat"][k] for k in FIELDS} == chat
+    assert {k: by_source["processing"][k] for k in BUCKET_FIELDS} == processing
+    assert {k: by_source["chat"][k] for k in BUCKET_FIELDS} == chat
     assert [row["date"] for row in data["daily"]] == [
         (dt.date(2025, 2, 23) + dt.timedelta(days=i)).isoformat() for i in range(7)
     ]
@@ -277,6 +296,7 @@ def test_existing_writers_are_reflected_in_the_endpoint(isolated_api, monkeypatc
         calls=5, live_calls=4, offline_calls=1, chat_calls=2, embed_calls=2,
         vision_calls=1, prompt_tokens=35, completion_tokens=12, embed_tokens=15,
         total_tokens=62, latency_ms=42, record_count=3,
+        cost=cost_bucket(unpriced=3, unpriced_tokens=62),
     )
     sources = {row["source"]: row for row in data["by_source"]}
     assert sources["processing"]["record_count"] == 2
@@ -364,7 +384,7 @@ def test_bounded_queries_handle_offsets_and_old_data(isolated_api, monkeypatch):
         data = client.get("/api/usage?days=7", headers=headers["admin"]).json()
     finally:
         event.remove(engine, "before_cursor_execute", capture)
-    assert data["totals"] == totals(calls=6, record_count=6)
+    assert data["totals"] == totals(calls=6, record_count=6, unmetered_records=6)
     assert data["daily"][0]["calls"] == 3
     assert data["daily"][-1]["calls"] == 3
     assert len(observed) == 4  # outside-window JSON is never parsed
@@ -424,14 +444,17 @@ def test_concurrent_worker_commit_uses_one_snapshot(isolated_api):
     assert committed == [True]
     assert response.status_code == 200, response.text
     # The in-flight read sees the complete old state, not an empty mixture.
-    assert response.json()["totals"] == totals(calls=1, prompt_tokens=10,
-                                               total_tokens=10, record_count=1)
+    assert response.json()["totals"] == totals(
+        calls=1, prompt_tokens=10, total_tokens=10, record_count=1,
+        cost=cost_bucket(unpriced=1, unpriced_tokens=10))
     aggregation = [sql for sql in statements if "FROM cost_records" in sql]
     assert len(aggregation) == 1 and "UNION ALL" in aggregation[0]
     # A later read sees the complete committed state, still counted once.
     after = client.get("/api/usage?days=7", headers=headers["admin"]).json()
-    assert after["totals"] == totals(calls=6, prompt_tokens=20,
-                                     total_tokens=20, record_count=2)
+    assert after["totals"] == totals(
+        calls=6, prompt_tokens=20, total_tokens=20, record_count=2,
+        unmetered_records=1,
+        cost=cost_bucket(unpriced=1, unpriced_tokens=20))
     sources = {row["source"]: row for row in after["by_source"]}
     assert sources["processing"]["calls"] == 2 and sources["chat"]["calls"] == 4
 
@@ -449,7 +472,7 @@ def test_summarize_preserves_caller_transaction_and_pending_writes(isolated_api)
     db.add(pending)
 
     result = usage.summarize(db, 7)
-    assert result["totals"] == totals(calls=5, record_count=1)
+    assert result["totals"] == totals(calls=5, record_count=1, unmetered_records=1)
     assert pending in db.new and pending.id is None
     db.rollback()
     assert db.scalar(select(models.KnowledgeBase.id).where(
@@ -706,8 +729,165 @@ def test_malformed_and_invalid_usage_is_ignored(isolated_api):
     db.commit()
 
     data = client.get("/api/usage?days=7", headers=headers["admin"]).json()
-    assert data["totals"] == totals(calls=3, record_count=3)
+    assert data["totals"] == totals(calls=3, record_count=3, unmetered_records=3)
     sources = {row["source"]: row for row in data["by_source"]}
     assert sources["processing"]["record_count"] == 2
     assert sources["chat"]["record_count"] == 1
     assert data["daily"][-1]["total_tokens"] == 0
+
+
+# ------------------------------------------------------------------ 个人 Agent 与计价
+def _model_config(db, model: str, *, purpose: str = "llm") -> models.ModelConfig:
+    provider = models.Provider(
+        name=f"usage-{uuid.uuid4().hex[:8]}", base_url="https://example.test/v1",
+        api_key_enc="", protocol="openai")
+    db.add(provider)
+    db.flush()
+    cfg = models.ModelConfig(provider_id=provider.id, purpose=purpose, model=model,
+                             label="测试模型")
+    db.add(cfg)
+    db.commit()
+    return cfg
+
+
+def _agent_session(db, user_id: int, core_id: str,
+                   model_config_id: int | None = None) -> models.AgentSession:
+    session = models.AgentSession(user_id=user_id, core_id=core_id,
+                                  model_config_id=model_config_id)
+    db.add(session)
+    db.flush()
+    return session
+
+
+def test_agent_usage_counts_once_and_splits_by_core(isolated_api):
+    client, db, headers, admin = isolated_api
+    # 用户模型标识带渠道前缀、目录里带日期后缀：归一化后应命中同一条参考价。
+    cfg = _model_config(db, "kz/deepseek-v4.1-flash")
+    kb_session = _agent_session(db, admin.id, "kb", cfg.id)
+    cli_session = _agent_session(db, admin.id, "codex")
+    conv = models.Conversation(user_id=admin.id)
+    db.add(conv)
+    db.flush()
+
+    kb_usage = {"calls": 1, "chat_calls": 1, "live_calls": 1, "offline_calls": 0,
+                "prompt_tokens": 1_000_000, "completion_tokens": 500_000,
+                "embed_tokens": 2_000, "latency_ms": 1200}
+    cli_usage = {"calls": 1, "chat_calls": 1, "live_calls": 1, "offline_calls": 0,
+                 "prompt_tokens": 300_000, "completion_tokens": 100_000,
+                 "embed_tokens": 0, "latency_ms": 800}
+    chat_usage = {"calls": 1, "chat_calls": 1, "live_calls": 1,
+                  "prompt_tokens": 1_000_000, "completion_tokens": 0}
+    db.add_all([
+        models.AgentMessage(session_id=kb_session.id, role="assistant", status="ok",
+                            core_id="kb", meta=encoded(kb_usage, core="kb"),
+                            created_at=stamp(TODAY)),
+        models.AgentMessage(session_id=cli_session.id, role="assistant", status="ok",
+                            core_id="codex", meta=encoded(cli_usage, core="codex"),
+                            created_at=stamp(TODAY)),
+        models.Message(conversation_id=conv.id, role="assistant", status="ok",
+                       model_config_id=cfg.id, route=encoded(chat_usage),
+                       created_at=stamp(TODAY)),
+    ])
+    db.commit()
+
+    data = client.get("/api/usage?days=7", headers=headers["admin"]).json()
+    assert data["currency"] == "USD" and data["price_unit"] == "per_1m_tokens"
+    total = data["totals"]
+    # 个人 Agent 的每次执行、每条成功问答各算一次：三条记录，互不吞并。
+    assert total["calls"] == 3 and total["record_count"] == 3
+    assert total["prompt_tokens"] == 2_300_000
+    assert total["completion_tokens"] == 600_000
+    assert total["unmetered_records"] == 0
+    # 内置参考价 0.022 / 0.294 USD / 1M token：
+    #   kb 核心 = 1.0 × 0.022 + 0.5 × 0.294 = 0.169
+    #   问答    = 1.0 × 0.022 = 0.022
+    #   codex 会话没有配置模型 → 整行未计价
+    assert total["cost"]["amount"] == pytest.approx(0.191)
+    assert total["cost"]["priced_records"] == 2
+    assert total["cost"]["unpriced_records"] == 1
+    # 未计价 token = codex 的 400000 + kb 记录的向量 token 2000（向量永不按生成价计）
+    assert total["cost"]["unpriced_tokens"] == 402_000
+
+    sources = {row["source"]: row for row in data["by_source"]}
+    assert sources["agent"]["calls"] == 2
+    assert sources["agent"]["record_count"] == 2
+    assert sources["chat"]["calls"] == 1
+    cores = {row["core_id"]: row for row in data["by_core"]}
+    assert set(cores) == {"kb", "codex"}
+    # kb 核心已下线，但历史会话仍在用量里出现：标签走 core_label()，落到「已下线」文案。
+    assert cores["kb"]["label"] == agent_plugins.core_label("kb")
+    assert cores["codex"]["label"] == agent_plugins.BUILTIN_BY_ID["codex"].name
+    assert cores["kb"]["cost"]["amount"] == pytest.approx(0.169)
+    assert cores["codex"]["cost"]["unpriced_records"] == 1
+    # 每日金额之和必须等于总计，否则趋势图和汇总表会对不上。
+    assert sum(day["cost"]["amount"] for day in data["daily"]) == pytest.approx(
+        total["cost"]["amount"])
+
+
+def test_agent_without_usage_is_unmetered_and_filters_apply(isolated_api):
+    client, db, headers, admin = isolated_api
+    session = _agent_session(db, admin.id, "kb")
+    db.add_all([
+        # 执行确实发生了，但没留下任何 token：计 1 次调用、标未计量。
+        models.AgentMessage(session_id=session.id, role="assistant", status="ok",
+                            core_id="kb", meta="{}", created_at=stamp(TODAY)),
+        # 失败/停止的执行与问答同口径，不计入；用户消息也不是用量记录。
+        models.AgentMessage(session_id=session.id, role="assistant", status="failed",
+                            core_id="kb", meta=encoded({"calls": 1, "prompt_tokens": 10}),
+                            created_at=stamp(TODAY)),
+        models.AgentMessage(session_id=session.id, role="assistant", status="stopped",
+                            core_id="kb", meta=encoded({"calls": 1, "prompt_tokens": 10}),
+                            created_at=stamp(TODAY)),
+        models.AgentMessage(session_id=session.id, role="user", status="ok",
+                            core_id="kb", meta=encoded({"calls": 1, "prompt_tokens": 10}),
+                            created_at=stamp(TODAY)),
+    ])
+    db.commit()
+
+    data = client.get("/api/usage?days=7", headers=headers["admin"]).json()
+    assert data["totals"] == totals(calls=1, chat_calls=1, live_calls=1,
+                                    record_count=1, unmetered_records=1)
+    assert data["by_core"] == [{
+        "core_id": "kb", "label": agent_plugins.core_label("kb"),
+        **totals(calls=1, chat_calls=1, live_calls=1, record_count=1,
+                 unmetered_records=1),
+    }]
+
+
+def test_user_price_overrides_builtin_price(isolated_api):
+    client, db, headers, admin = isolated_api
+    cfg = _model_config(db, "kz/deepseek-v4.1-flash")
+    session = _agent_session(db, admin.id, "codex", cfg.id)
+    db.add(models.AgentMessage(
+        session_id=session.id, role="assistant", status="ok", core_id="codex",
+        meta=encoded({"calls": 1, "chat_calls": 1, "live_calls": 1,
+                      "prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}),
+        created_at=stamp(TODAY)))
+    db.commit()
+
+    builtin = client.get("/api/usage?days=7", headers=headers["admin"]).json()
+    assert builtin["totals"]["cost"]["amount"] == pytest.approx(0.022 + 0.294)
+
+    # 用户单价优先于内置参考价；0 也是合法价格（行存在 = 填过）。
+    price = models.ModelPrice(model_config_id=cfg.id, currency="USD",
+                              input_per_1m=1.0, output_per_1m=2.0, updated_by=admin.id)
+    db.add(price)
+    db.commit()
+    override = client.get("/api/usage?days=7", headers=headers["admin"]).json()
+    assert override["totals"]["cost"]["amount"] == pytest.approx(3.0)
+    assert override["totals"]["cost"]["priced_records"] == 1
+    assert override["totals"]["cost"]["unpriced_tokens"] == 0
+
+    price.input_per_1m = 0.0
+    price.output_per_1m = 0.0
+    db.commit()
+    zero = client.get("/api/usage?days=7", headers=headers["admin"]).json()
+    assert zero["totals"]["cost"]["amount"] == 0.0
+    # 「填了 0」仍是已计价：不能退回内置价，也不能算成未计价。
+    assert zero["totals"]["cost"]["priced_records"] == 1
+    assert zero["totals"]["cost"]["unpriced_records"] == 0
+
+    db.delete(price)
+    db.commit()
+    restored = client.get("/api/usage?days=7", headers=headers["admin"]).json()
+    assert restored["totals"]["cost"]["amount"] == pytest.approx(0.022 + 0.294)

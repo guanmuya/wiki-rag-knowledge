@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from .. import models, schemas, security, serializers
 from ..db import get_db
 from ..deps import audit, require_admin
-from ..services import llm
+from ..services import llm, pricing
 
 router = APIRouter(tags=["settings"])
 
@@ -224,6 +224,59 @@ def _clear_default(db: Session, purpose: str, keep_id: int | None = None) -> Non
 
 def _has_any_index(db: Session) -> bool:
     return bool(db.execute(select(models.Chunk.id).limit(1)).first())
+
+
+# ------------------------------------------------------------------ 模型参考单价
+@router.get("/settings/pricing")
+def list_pricing(db: Session = Depends(get_db), admin: models.User = Depends(require_admin)):
+    """所有模型配置的内置参考价、管理员覆盖价与最终生效价。
+
+    价格是**参考价**（公开价目页 + 查证日期），只用于用量页估算金额；
+    响应里的 `reference: true` 与 `note` 是给界面原样展示的口径说明。
+    """
+    return pricing.catalog_payload(db)
+
+
+@router.put("/settings/pricing/{model_config_id}")
+def set_model_price(model_config_id: int, body: schemas.ModelPriceIn,
+                    db: Session = Depends(get_db),
+                    admin: models.User = Depends(require_admin)):
+    """按模型配置 upsert 覆盖价；0 是合法价格（行存在才算「填过」）。"""
+    cfg = db.get(models.ModelConfig, model_config_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="模型配置不存在")
+    provider_name = cfg.provider.name if cfg.provider else ""
+    row = db.execute(select(models.ModelPrice).where(
+        models.ModelPrice.model_config_id == model_config_id)).scalar_one_or_none()
+    if row is None:
+        row = models.ModelPrice(model_config_id=model_config_id)
+        db.add(row)
+    row.currency = pricing.CURRENCY
+    row.input_per_1m = float(body.input_per_1m)
+    row.output_per_1m = float(body.output_per_1m)
+    row.updated_by = admin.id
+    row.updated_at = models.utcnow()
+    audit(db, admin, "set_model_price", target=cfg.model,
+          detail=f"input={row.input_per_1m} output={row.output_per_1m} currency={row.currency}")
+    db.commit()
+    return pricing.item_payload(cfg, provider_name, row)
+
+
+@router.delete("/settings/pricing/{model_config_id}")
+def clear_model_price(model_config_id: int, db: Session = Depends(get_db),
+                      admin: models.User = Depends(require_admin)):
+    """删除覆盖价，回到内置参考价；没有覆盖价时也返回 200（幂等）。"""
+    cfg = db.get(models.ModelConfig, model_config_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="模型配置不存在")
+    provider_name = cfg.provider.name if cfg.provider else ""
+    row = db.execute(select(models.ModelPrice).where(
+        models.ModelPrice.model_config_id == model_config_id)).scalar_one_or_none()
+    if row is not None:
+        db.delete(row)
+        audit(db, admin, "clear_model_price", target=cfg.model)
+        db.commit()
+    return pricing.item_payload(cfg, provider_name, None)
 
 
 # ------------------------------------------------------------------ Embedding 状态与切换

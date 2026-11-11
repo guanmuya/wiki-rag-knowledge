@@ -137,6 +137,7 @@ Codex 核心跑在应用自己的配置目录里：
 | `env` | 否 | 注入子进程的环境变量模板，最多 32 项；键必须在 `ALLOWED_ENV_KEYS` 白名单内，不能覆盖 `PATH`/`PYTHONPATH`/`NODE_OPTIONS` 等系统或代码加载变量 |
 | `output` | 否 | `text`（默认，逐行当正文）或 `jsonl`（逐行解析 JSON） |
 | `text_paths` | 否 | `output=jsonl` 时提取正文的点路径，如 `["item.text","message"]` |
+| `usage_event` | 否 | `output=jsonl` 时哪一类事件带 token 用量（如 `turn.completed`）；写了 `output=text` 会被拒绝。见 §3.4 |
 | `timeout_seconds` | 否 | 单轮硬超时，10..3600，默认 900；仍受全局 `WRK_AGENT_RUN_TIMEOUT` 限制 |
 | `requires_workspace` | 否 | 默认 `true`；CLI 在会话工作目录里启动（该目录必须落在 `AGENT_WORKSPACE_DIR` 内） |
 
@@ -189,6 +190,49 @@ Codex 核心跑在应用自己的配置目录里：
 应用会逐行 `json.loads`，按 `text_paths` 顺序找第一个非空字符串作为正文；
 解析失败的行会作为运行日志展示，不会中断执行。Codex CLI 的
 `codex exec --json` 就使用这种模式。
+
+#### 用量事件（`usage_event`）
+
+想知道每个核心花了多少 token，让清单声明哪一类事件带用量：
+
+```json
+{
+  "output": "jsonl",
+  "text_paths": ["item.text"],
+  "usage_event": "turn.completed"
+}
+```
+
+匹配到该事件时，应用从事件的 `usage` 对象里读 token：
+
+- 输入侧依次找 `input_tokens`、`prompt_tokens`；
+- 输出侧依次找 `output_tokens`、`completion_tokens`；
+- 只接受非负整数；负数、布尔、字符串、小数一律忽略（哪侧坏就丢哪侧，不猜）；
+- **一次执行内出现多条用量事件会累加**，但调用数始终记 **1 次**——统计的是「用户点了一次」，
+  不是 CLI 内部真实发了几个模型请求。
+
+以 Codex CLI 0.167.0 的事件为例（`codex exec --json`）：
+
+```json
+{"type":"thread.started","thread_id":"..."}
+{"type":"item.completed","item":{"type":"agent_message","text":"..."}}
+{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":40,"output_tokens":30,"reasoning_output_tokens":5,"total_tokens":150}}
+```
+
+内置 `codex` 清单声明的就是 `usage_event: "turn.completed"`。纯文本输出（`output=text`）
+没有可解析的事件，**不要**写 `usage_event`——清单校验会直接拒绝，而不是静默忽略。
+
+执行结束后这份用量写进助手消息的 `meta.usage`（键名同 `CallStats.as_dict()`：
+
+```json
+{"calls":1,"chat_calls":1,"live_calls":1,"offline_calls":0,
+ "prompt_tokens":200,"completion_tokens":50,"embed_tokens":0,"latency_ms":1234}
+```
+
+），并成为 `/api/usage` 里「个人 Agent」来源的数据源（`docs/API.md` §7.2）。
+一个用量事件都没解析到时，`meta` 里会多一个 `usage_unmetered: true`：调用照记 1 次，
+token 记 0，用量页把它算进 `unmetered_records`。**不填推测值**是这个字段的设计目标——
+CLI 没吐用量就老实说「未计量」。
 
 ### 3.5 一个能直接跑的示例
 

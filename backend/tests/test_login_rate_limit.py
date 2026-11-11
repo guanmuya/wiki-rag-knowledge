@@ -45,6 +45,19 @@ def _create(client, admin_headers, username: str, password: str = PASSWORD) -> N
     assert r.status_code == 201, r.text
 
 
+def test_retry_after_rounds_up_without_float_noise():
+    """`now + 900 - now` 在浮点里可能是 900.0000000001，不能因此报 901。
+
+    这条不是钻牛角尖：整轮测试里时好时坏地报 901 会让基线不稳定，
+    而客户端多等一秒是实打实的体验问题。
+    """
+    for now in (0.1, 1234.5678, 98765.4321, 1_000_000.5, 7.0):
+        assert login_guard._retry_after(now + 900, now) == 900
+    # 真的还剩 0.2 秒：仍然至少报 1 秒，不能报 0。
+    assert login_guard._retry_after(1000.2, 1000.0) == 1
+    assert login_guard._retry_after(1000.0, 1000.0) == 1
+
+
 def test_account_locks_after_threshold_and_stops_being_a_password_oracle(app_client, admin_headers, monkeypatch):
     monkeypatch.setattr(config, "LOGIN_MAX_FAILURES", 3)
     monkeypatch.setattr(config, "LOGIN_MAX_FAILURES_PER_SOURCE", 100)
