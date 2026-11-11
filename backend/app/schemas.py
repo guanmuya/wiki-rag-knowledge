@@ -147,11 +147,12 @@ class RebuildIn(BaseModel):
 
 
 # ---------------------------------------------------------------- 个人 Agent
+# 个人 Agent 不检索知识库（知识库问答在「智能问答」页），所以会话载荷里没有 kb_ids：
+# 旧调用方仍带着它也不会 422（Pydantic 默认忽略多余字段），只是不再起作用。
 class AgentSessionIn(BaseModel):
     title: str = "新会话"
     core_id: str | None = None
     model_config_id: int | None = None
-    kb_ids: list[int] = []
     # 不传就用数据目录下的 agent_workspace；传了必须是已存在的目录。
     workspace: str | None = None
 
@@ -160,7 +161,6 @@ class AgentSessionUpdateIn(BaseModel):
     title: str | None = None
     core_id: str | None = None
     model_config_id: int | None = None
-    kb_ids: list[int] | None = None
     workspace: str | None = None
 
 

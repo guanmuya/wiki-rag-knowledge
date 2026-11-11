@@ -2,7 +2,8 @@
 
 权限：v1 只对管理员开放。CLI 核心会以应用进程身份执行本机命令，等于把
 shell 交给使用者；在单企业桌面部署里这应当是管理员的能力，而不是每个员工
-的默认能力。知识库问答本身仍走原有的员工问答页。
+的默认能力。知识库问答不在这里——它在员工问答页（「智能问答」），本页的
+个人 Agent 只跑本机 CLI 核心。
 """
 from __future__ import annotations
 
@@ -41,6 +42,9 @@ def _my_session(db: Session, user: models.User, session_id: int) -> models.Agent
 def _core(db: Session, core_id: str, *, require_available: bool = True) -> plugins.AgentPlugin:
     plugin = plugins.find_plugin(core_id)
     if plugin is None:
+        if plugins.is_legacy_core(core_id):
+            # 历史会话里的 kb 核心：不要 404 了事，直接告诉用户该去哪儿。
+            raise HTTPException(status_code=400, detail=plugins.LEGACY_CORE_HINT)
         raise HTTPException(status_code=404, detail=f"Agent 核心 `{core_id}` 不存在")
     out = plugins.plugin_out(db, plugin)
     if require_available and not out["enabled"]:
@@ -64,26 +68,11 @@ def _validate_model(db: Session, plugin: plugins.AgentPlugin,
     provider = db.get(models.Provider, cfg.provider_id)
     if provider is None or not provider.enabled:
         raise HTTPException(status_code=400, detail="所选模型的供应商已停用")
-    if not plugin.is_kb and (provider.protocol or "openai") not in plugin.protocols:
+    if (provider.protocol or "openai") not in plugin.protocols:
         raise HTTPException(
             status_code=400,
             detail=f"{plugin.name} 不支持 {provider.name} 的协议（{provider.protocol}），请换一个模型")
     return cfg
-
-
-def _filter_kb_ids(db: Session, user: models.User, kb_ids: list[int]) -> list[int]:
-    from ..deps import grant_level
-
-    allowed: list[int] = []
-    seen: set[int] = set()
-    for kb_id in kb_ids:
-        if kb_id in seen:
-            continue
-        seen.add(kb_id)
-        kb = db.get(models.KnowledgeBase, kb_id)
-        if kb is not None and grant_level(db, user, kb_id) is not None:
-            allowed.append(kb_id)
-    return allowed
 
 
 def _workspace(value: str | None) -> str:
@@ -108,12 +97,16 @@ def _session_out(db: Session, session: models.AgentSession, *,
             select(func.count(models.AgentMessage.id)).where(
                 models.AgentMessage.session_id == session.id)
         ).scalar() or 0
-    return serializers.agent_session_out(
+    data = serializers.agent_session_out(
         session,
         message_count=message_count,
-        core_name=plugin.name if plugin else session.core_id,
+        core_name=plugins.core_label(session.core_id),
         model_label=label,
     )
+    # 历史 kb 会话：核心已下线，但历史消息仍可读。界面据此提示「换核心」。
+    data["core_available"] = plugin is not None
+    data["core_legacy"] = plugins.is_legacy_core(session.core_id)
+    return data
 
 
 def _has_pending(db: Session, session_id: int) -> bool:
@@ -143,7 +136,7 @@ def list_cores(db: Session = Depends(get_db), admin: models.User = Depends(requi
         models_list = plugins.list_models(db, plugin)
         item["compatible_model_count"] = len([m for m in models_list if m["compatible"]])
         item["default_model_id"] = plugins.default_model_id(db, plugin)
-        item["model_ready"] = plugin.is_kb or item["compatible_model_count"] > 0
+        item["model_ready"] = item["compatible_model_count"] > 0
     return data
 
 
@@ -174,9 +167,9 @@ def toggle_plugin(plugin_id: str, body: schemas.AgentPluginToggleIn,
                   admin: models.User = Depends(require_admin)):
     plugin = plugins.find_plugin(plugin_id)
     if plugin is None:
+        if plugins.is_legacy_core(plugin_id):
+            raise HTTPException(status_code=400, detail=plugins.LEGACY_CORE_HINT)
         raise HTTPException(status_code=404, detail=f"Agent 核心 `{plugin_id}` 不存在")
-    if plugin_id == "kb" and not body.enabled:
-        raise HTTPException(status_code=400, detail="内置知识库核心不能停用，它是最小可用回退")
     plugins.set_enabled(db, plugin_id, body.enabled)
     audit(db, admin, "agent_plugin_toggle", target=plugin_id,
           detail="enabled" if body.enabled else "disabled")
@@ -223,15 +216,13 @@ def create_session(body: schemas.AgentSessionIn,
     model_id = body.model_config_id
     if model_id is None:
         model_id = plugins.default_model_id(db, plugin)
-    _validate_model(db, plugin, model_id, required=not plugin.is_kb)
+    _validate_model(db, plugin, model_id, required=True)
 
-    kb_ids = _filter_kb_ids(db, admin, body.kb_ids)
     session = models.AgentSession(
         user_id=admin.id,
         title=(body.title or "").strip()[:255] or "新会话",
         core_id=plugin.id,
         model_config_id=model_id,
-        kb_ids=json.dumps(kb_ids),
         workspace=_workspace(body.workspace),
         status="idle",
     )
@@ -249,10 +240,9 @@ def get_session(session_id: int, db: Session = Depends(get_db),
         .where(models.AgentMessage.session_id == session.id)
         .order_by(models.AgentMessage.id)
     ).scalars().all()
-    core_map = {p.id: p.name for p in plugins.all_plugins()[0]}
     data = _session_out(db, session, message_count=len(messages))
     data["messages"] = [
-        serializers.agent_message_out(m, core_name=core_map.get(m.core_id, m.core_id))
+        serializers.agent_message_out(m, core_name=plugins.core_label(m.core_id))
         for m in messages
     ]
     plugin = plugins.find_plugin(session.core_id)
@@ -268,16 +258,29 @@ def update_session(session_id: int, body: schemas.AgentSessionUpdateIn,
     session = _my_session(db, admin, session_id)
     _ensure_idle(db, session)
 
-    old_plugin = plugins.find_plugin(session.core_id)
+    old_core_id = session.core_id
+    old_plugin = plugins.find_plugin(old_core_id)
     plugin = old_plugin
     if "core_id" in body.model_fields_set and body.core_id is not None:
         plugin = _core(db, body.core_id)
-    if plugin is None:
+    if plugin is None and not plugins.is_legacy_core(session.core_id):
         # 内置核心被删除/改名属于异常状态：给用户一个可恢复的错误，而不是 500。
         raise HTTPException(status_code=400, detail="当前会话的 Agent 核心已不存在，请重新选择核心")
+    if plugin is None and "model_config_id" in body.model_fields_set:
+        raise HTTPException(status_code=400, detail=plugins.LEGACY_CORE_HINT)
 
     if body.title is not None:
         session.title = body.title.strip()[:255] or session.title
+
+    # 历史 kb 会话：核心已下线，但历史消息仍可读，改标题/工作目录仍然允许；
+    # 只有换核心才能继续对话。
+    if plugin is None:
+        if body.workspace is not None:
+            session.workspace = _workspace(body.workspace)
+        session.updated_at = models.utcnow()
+        db.add(session)
+        db.commit()
+        return _session_out(db, session)
 
     core_changed = plugin.id != session.core_id
     if core_changed:
@@ -286,7 +289,7 @@ def update_session(session_id: int, body: schemas.AgentSessionUpdateIn,
     # 核心换了以后，原来那条模型可能协议不兼容：显式传了模型就按新核心校验，
     # 没传就自动挑一条兼容的，避免用户切到 Claude Code 还挂着 OpenAI 模型。
     if "model_config_id" in body.model_fields_set:
-        _validate_model(db, plugin, body.model_config_id, required=not plugin.is_kb)
+        _validate_model(db, plugin, body.model_config_id, required=True)
         session.model_config_id = body.model_config_id
     elif core_changed:
         current = db.get(models.ModelConfig, session.model_config_id) if session.model_config_id else None
@@ -294,21 +297,19 @@ def update_session(session_id: int, body: schemas.AgentSessionUpdateIn,
         if current is not None:
             provider = db.get(models.Provider, current.provider_id)
             compatible = provider is not None and (
-                plugin.is_kb or (provider.protocol or "openai") in plugin.protocols)
+                (provider.protocol or "openai") in plugin.protocols)
         if not compatible:
             session.model_config_id = plugins.default_model_id(db, plugin)
-            if not plugin.is_kb and session.model_config_id is None:
+            if session.model_config_id is None:
                 raise HTTPException(
                     status_code=400,
                     detail=f"没有与 {plugin.name} 协议兼容的模型，请先在模型设置里添加")
 
-    if body.kb_ids is not None:
-        session.kb_ids = json.dumps(_filter_kb_ids(db, admin, body.kb_ids))
     if body.workspace is not None:
         session.workspace = _workspace(body.workspace)
 
     if core_changed:
-        old_name = old_plugin.name if old_plugin else session.core_id
+        old_name = plugins.core_label(old_core_id)
         db.add(models.AgentMessage(
             session_id=session.id, role="system", status="ok",
             core_id=plugin.id,
@@ -341,7 +342,7 @@ def send_message(session_id: int, body: schemas.AgentMessageIn,
         session = _my_session(db, admin, session_id)
         _ensure_idle(db, session)
         plugin = _core(db, session.core_id)
-        cfg = _validate_model(db, plugin, session.model_config_id, required=not plugin.is_kb)
+        cfg = _validate_model(db, plugin, session.model_config_id, required=True)
         content = body.content.strip()
         if not content:
             raise HTTPException(status_code=400, detail="消息不能为空")
@@ -402,23 +403,21 @@ def run_events(run_id: int, after: int = 0, db: Session = Depends(get_db),
         if state.status != "running":
             fresh = db.get(models.AgentMessage, run_id)
             if fresh is not None:
-                core_map = {p.id: p.name for p in plugins.all_plugins()[0]}
                 data["message"] = serializers.agent_message_out(
-                    fresh, core_name=core_map.get(fresh.core_id, fresh.core_id))
+                    fresh, core_name=plugins.core_label(fresh.core_id))
         data["run_id"] = run_id
         data["session_id"] = session.id
         return data
 
     # 内存里没有这次运行：通常是进程重启后前端还挂着旧轮询。
     # pending 在启动时已被 recover_pending 收尾成 failed，这里照实返回。
-    core_map = {p.id: p.name for p in plugins.all_plugins()[0]}
     return {
         "events": [],
         "next": after,
         "status": message.status if message.status != "pending" else "failed",
         "error": "" if message.status != "pending" else runtime.RECOVERED_TEXT,
         "message": serializers.agent_message_out(
-            message, core_name=core_map.get(message.core_id, message.core_id)),
+            message, core_name=plugins.core_label(message.core_id)),
         "run_id": run_id,
         "session_id": session.id,
     }

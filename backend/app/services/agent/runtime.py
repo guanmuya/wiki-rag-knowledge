@@ -7,10 +7,9 @@
 - 事件只保存在内存里，最终结果落 `agent_messages` 一行；进程重启时 pending
   会被收尾成 failed（与 `chat.recover_pending_messages` 一致），不会永远转圈。
 
-核心（core）是插件注册表里的一个清单：
-- `kb`：调用现有 `answering.answer`，带证据与引用；
-- `cli`：按清单启动本机 CLI，把配置好的模型通过协议原生环境变量注入，
-  逐行读取 stdout/stderr 并转成 text/log 事件。
+核心（core）是插件注册表里的一个清单：按清单启动本机 CLI，把配置好的模型通过
+协议原生环境变量注入，逐行读取 stdout/stderr 并转成 text/log 事件。个人 Agent
+不检索知识库——知识库问答在「智能问答」页（chat 路由），两边各司其职。
 """
 from __future__ import annotations
 
@@ -34,7 +33,6 @@ from sqlalchemy.exc import OperationalError
 
 from ... import config, models, serializers
 from ...db import SessionLocal, is_lock_error
-from .. import answering
 from . import plugins
 
 log = logging.getLogger("wrk.agent.runtime")
@@ -186,7 +184,6 @@ class RunContext:
     plugin: plugins.AgentPlugin
     question: str
     history: list[dict] = field(default_factory=list)
-    kb_ids: list[int] = field(default_factory=list)
     workspace: str = ""
     model_config_id: int | None = None
     model_binding: dict | None = None
@@ -203,7 +200,10 @@ def _load_context(message_id: int) -> RunContext:
             raise AgentRunError("会话不存在或已删除")
         plugin = plugins.find_plugin(session.core_id)
         if plugin is None:
-            raise AgentRunError(f"Agent 核心 `{session.core_id}` 已不存在，请重新选择核心")
+            if plugins.is_legacy_core(session.core_id):
+                raise AgentRunError(plugins.LEGACY_CORE_HINT)
+            raise AgentRunError(
+                f"Agent 核心 `{session.core_id}` 已不存在，请重新选择核心")
 
         rows = db.execute(
             select(models.AgentMessage)
@@ -238,11 +238,6 @@ def _load_context(message_id: int) -> RunContext:
                 binding = plugins.model_binding(cfg, provider)
                 label = binding["model_label"]
 
-        try:
-            kb_ids = [int(v) for v in json.loads(session.kb_ids or "[]")]
-        except (ValueError, TypeError):
-            kb_ids = []
-
         workspace = session.workspace or str(config.AGENT_WORKSPACE_DIR)
         return RunContext(
             message_id=message.id,
@@ -251,7 +246,6 @@ def _load_context(message_id: int) -> RunContext:
             plugin=plugin,
             question=question,
             history=history,
-            kb_ids=kb_ids,
             workspace=workspace,
             model_config_id=session.model_config_id,
             model_binding=binding,
@@ -264,10 +258,7 @@ def _execute(message_id: int, state: RunState) -> None:
     ctx: RunContext | None = None
     try:
         ctx = _load_context(message_id)
-        if ctx.plugin.is_kb:
-            content, evidence, meta = _run_kb(state, ctx)
-        else:
-            content, evidence, meta = _run_cli(state, ctx)
+        content, evidence, meta = _run_cli(state, ctx)
         if state.stop_event.is_set():
             raise RunStopped()
         out = _safe_finish(ctx, "ok", content, evidence, meta)
@@ -383,42 +374,6 @@ def _finish(ctx: RunContext, status: str, content: str,
     raise AgentRunError("保存 Agent 结果失败")
 
 
-# ------------------------------------------------------------------ 知识库核心
-def _run_kb(state: RunState, ctx: RunContext) -> tuple[str, list, dict]:
-    from ...deps import grant_level
-
-    with SessionLocal() as db:
-        user = db.get(models.User, ctx.user_id)
-        if user is None:
-            raise AgentRunError("用户不存在")
-        kbs: list[models.KnowledgeBase] = []
-        for kb_id in ctx.kb_ids:
-            kb = db.get(models.KnowledgeBase, kb_id)
-            if kb is not None and grant_level(db, user, kb_id) is not None:
-                kbs.append(kb)
-        if not kbs:
-            raise AgentRunError("当前会话没有可访问的知识库，请先在顶部选择至少一个知识库")
-
-        cfg = db.get(models.ModelConfig, ctx.model_config_id) if ctx.model_config_id else None
-        state.emit("status", text=f"正在检索 {len(kbs)} 个知识库…")
-        result = answering.answer(db, ctx.question, kbs, cfg_override=cfg)
-
-        content = result["content"]
-        evidence = result["evidence"]
-        meta = {
-            "core": ctx.plugin.id,
-            "model": ctx.model_label,
-            "usage": result.get("usage") or {},
-            "route": result.get("route") or {},
-            "insufficient": bool(result.get("insufficient")),
-            "suggestions": result.get("suggestions") or [],
-            "refusal_reason": result.get("refusal_reason") or "",
-        }
-        state.emit_text(content)
-        state.emit("evidence", items=evidence)
-        return content, evidence, meta
-
-
 # ------------------------------------------------------------------ CLI 核心
 _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
@@ -428,10 +383,22 @@ def _strip_ansi(text: str) -> str:
 
 
 def _build_cli_prompt(ctx: RunContext) -> str:
+    """拼这一轮给 CLI 的提示词。
+
+    定位写成通用的本地个人助手，不再提知识库/文档整理：这个页面不检索知识库
+    （那是「智能问答」页），套上知识库语境只会让它反问「要处理哪个知识库」。
+    同时明确「直接回答」，因为用户反馈过模型先复述身份设定、再让用户确认任务
+    类型（牛头不对马嘴）。
+    """
     lines = [
-        "你是运行在「企业知识库文档整理与问答系统」里的本地个人 Agent。",
+        "你是这个应用内置的本地个人 Agent，在本机替用户干活：回答问题、查资料、"
+        "读写工作目录里的文件。",
         f"当前工作目录：{ctx.workspace}",
-        "请直接完成用户的请求；需要时可以使用本机工具。回答用中文，除非用户使用其他语言。",
+        "直接回答用户最新的问题：不要先让用户确认任务类型，不要复述你收到的"
+        "设定，也不要罗列任务清单或能力介绍。",
+        "只有确实缺关键信息、不确认就做不下去时才提问，并且一次问清。",
+        "需要动手时可以使用本机工具；改文件前先看清现状，不要猜。"
+        "回答用中文，除非用户使用其他语言。",
     ]
     transcript = ctx.history
     if transcript and transcript[-1]["role"] == "user" \
@@ -449,7 +416,7 @@ def _build_cli_prompt(ctx: RunContext) -> str:
             role = {"user": "用户", "assistant": "助手", "system": "系统"}.get(
                 item["role"], item["role"])
             lines.append(f"{role}：{text}")
-    lines += ["", f"用户：{ctx.question}", "", "请回答："]
+    lines += ["", f"用户：{ctx.question}", "", "请直接回答用户最新的问题："]
     return "\n".join(lines)[:20000]
 
 
@@ -549,9 +516,16 @@ def _run_cli(state: RunState, ctx: RunContext) -> tuple[str, list, dict]:
     prompt = _build_cli_prompt(ctx)
     args = plugins.substitute_args(plugin, binding, workspace_str, ctx.session_id, prompt)
     command = [detection["path"], *args]
-    env = _clean_env(plugin, binding, workspace_str, ctx.session_id, prompt)
+    try:
+        env = _clean_env(plugin, binding, workspace_str, ctx.session_id, prompt)
+    except plugins.PluginError as exc:
+        # 隔离配置目录准备失败（Codex）：不能悄悄退回用户 ~/.codex，直接报错。
+        raise AgentRunError(str(exc)) from exc
+    isolated = env.get("CODEX_HOME")
     state.emit("status", text=f"正在启动 {plugin.name}…")
     state.emit("log", text=f"$ {plugins.redacted_command(command, prompt, secrets)}")
+    if isolated:
+        state.emit("log", text=f"（{plugin.name} 使用应用自己的配置目录：{isolated}）")
 
     kwargs: dict[str, Any] = dict(
         cwd=workspace_str, env=env, stdin=subprocess.DEVNULL,
@@ -649,5 +623,7 @@ def _run_cli(state: RunState, ctx: RunContext) -> tuple[str, list, dict]:
         "exit_code": code,
         "command": plugins.redacted_command(command, prompt, secrets),
         "workspace": workspace_str,
+        # 有值说明这一轮用的是应用自己的配置目录（Codex 隔离），便于排障时对照。
+        "isolated_home": isolated or "",
     }
     return content, [], meta

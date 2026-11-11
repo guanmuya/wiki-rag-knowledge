@@ -2,9 +2,10 @@
 
 设计目标（对齐 magpie 的「Agents 页」思路，但按本仓库的技术栈实现）：
 
-1. **内置核心开箱即用**：知识库助手直接用现有 RAG 链路；Claude Code、Codex、
-   Qwen Code、Aider、Goose 等 CLI Agent 只要本机装了对应命令，就能在界面上
-   选到，并把「已配置的模型」通过各家自己的环境变量注入进去。
+1. **内置核心开箱即用**：Claude Code、Codex、Qwen Code、Aider、Goose 等 CLI
+   Agent 只要本机装了对应命令，就能在界面上选到，并把「已配置的模型」通过
+   各家自己的环境变量注入进去。个人 Agent 不检索知识库——知识库问答在
+   「智能问答」页，那边才是 RAG 链路。
 2. **插件只描述、不执行代码**：第三方核心是一个 JSON 清单（可执行文件名、
    参数模板、环境变量模板、输出格式）。管理员把它放进数据目录的
    `agent_plugins/`，应用负责发现、校验、探测安装状态。这样既能接入任意
@@ -18,6 +19,9 @@
 P1-7 执行边界：清单是敌意输入。`bins` 只接受 PATH 中可查找的命令名并校验解析
 结果；`env` 只能覆盖白名单键；`{api_key}` 不得进入命令行；命令行摘要、运行日志、
 正文统一脱敏；会话 `workspace` 必须落在 `AGENT_WORKSPACE_DIR` 内。
+
+Codex 的配置隔离见 `services/agent/codex_home.py`：内置 core 可以在清单之外声明
+`isolated_home`，运行前由应用准备好自己的 `CODEX_HOME`，不继承用户 `~/.codex`。
 """
 from __future__ import annotations
 
@@ -38,6 +42,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ... import config, models, security
+from . import codex_home
 
 log = logging.getLogger("wrk.agent.plugins")
 
@@ -50,6 +55,9 @@ PROTOCOL_LABELS = {
     "anthropic": "Anthropic Messages",
 }
 DISABLED_SETTING_KEY = "agent_disabled_plugins"
+# 个人 Agent 的界面名，供插件清单里的 {app_name} 占位符使用。刻意不再用
+# 「企业知识库…系统」：这个页面不再和知识库交互，也不该把知识库语境塞进提示词。
+APP_DISPLAY_NAME = "个人 Agent"
 _ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _VERSION_SUFFIX_RE = re.compile(r"/v\d+(?:beta/openai)?$", re.I)
@@ -106,7 +114,7 @@ class AgentPlugin:
     id: str
     name: str
     description: str = ""
-    kind: str = "cli"                       # kb（内置）| cli（外部命令）
+    kind: str = "cli"                       # 目前只有 cli（外部命令）一种
     source: str = "plugin"                  # builtin | plugin
     homepage: str = ""
     protocols: tuple[str, ...] = ()
@@ -120,10 +128,31 @@ class AgentPlugin:
     requires_workspace: bool = True
     builtin: bool = False
     manifest_path: str = ""
+    # 需要应用自带配置目录的 CLI（目前只有 Codex → "codex"）。空串表示用 CLI 自己的
+    # 默认配置；外部清单不能声明它（见 parse_manifest）。
+    isolated_home: str = ""
 
-    @property
-    def is_kb(self) -> bool:
-        return self.kind == "kb"
+
+# ------------------------------------------------------------------ 已下线的核心
+# 个人 Agent 不再检索知识库（用户要求：它和「智能问答」页重复）。历史 kb 会话保留
+# 可读，只是不能继续执行；界面要能看到「为什么」和「怎么办」。
+LEGACY_CORES: dict[str, str] = {"kb": "知识库助手（已下线）"}
+LEGACY_CORE_HINT = (
+    "个人 Agent 不再检索知识库——知识库问答在「智能问答」页。"
+    "请先在顶部把这个会话的核心换成可用的 CLI 核心（例如 Codex CLI）。"
+)
+
+
+def core_label(core_id: str) -> str:
+    """会话/消息上显示的核心名：插件还在用插件名，已下线给历史名。"""
+    plugin = find_plugin(core_id)
+    if plugin is not None:
+        return plugin.name
+    return LEGACY_CORES.get(core_id, core_id)
+
+
+def is_legacy_core(core_id: str) -> bool:
+    return core_id in LEGACY_CORES and find_plugin(core_id) is None
 
 
 # ------------------------------------------------------------------ 内置核心
@@ -131,20 +160,16 @@ def _builtin(id: str, name: str, description: str, *, kind: str = "cli",
              protocols: tuple[str, ...] = (), bins: tuple[str, ...] = (),
              run_args: tuple[str, ...] = (), env: dict[str, str] | None = None,
              output: str = "text", text_paths: tuple[str, ...] = (),
-             homepage: str = "") -> AgentPlugin:
+             homepage: str = "", isolated_home: str = "") -> AgentPlugin:
     return AgentPlugin(
         id=id, name=name, description=description, kind=kind, source="builtin",
         homepage=homepage, protocols=protocols, bins=bins, run_args=run_args,
         env=env or {}, output=output, text_paths=text_paths, builtin=True,
+        isolated_home=isolated_home,
     )
 
 
 BUILTIN_PLUGINS: tuple[AgentPlugin, ...] = (
-    _builtin(
-        "kb", "知识库助手",
-        "内置核心：检索本应用的知识库并带引用回答；没有配置模型时也能用抽取式回答。",
-        kind="kb", homepage="",
-    ),
     _builtin(
         "claude-code", "Claude Code",
         "Anthropic 官方编码 Agent。使用已配置的 Anthropic Messages 协议模型。",
@@ -160,12 +185,14 @@ BUILTIN_PLUGINS: tuple[AgentPlugin, ...] = (
     ),
     _builtin(
         "codex", "Codex CLI",
-        "OpenAI 官方编码 Agent。使用已配置的 OpenAI 兼容 / Responses 模型。",
+        "OpenAI 官方编码 Agent。使用已配置的 OpenAI 兼容 / Responses 模型；"
+        "配置目录由应用独占，不继承用户 ~/.codex 的提示词与人设。",
         protocols=("openai", "openai-responses"),
         bins=("codex",),
         # Codex 的 provider 来自 config.toml；只用环境变量在用户自定义过
         # model_provider 时不生效。显式把内置 openai provider 指到本会话的
         # base_url，再用 OPENAI_API_KEY 提供密钥。
+        # CODEX_HOME 由 build_env 注入（应用自己的数据目录），不会落到用户 ~/.codex。
         run_args=("-c", "model_provider=openai", "-c",
                   "openai_base_url={base_url}", "exec", "--json",
                   "--skip-git-repo-check", "-m", "{model}", "{prompt}"),
@@ -173,6 +200,7 @@ BUILTIN_PLUGINS: tuple[AgentPlugin, ...] = (
         output="jsonl",
         text_paths=("item.text", "msg.message", "message", "text"),
         homepage="https://github.com/openai/codex",
+        isolated_home="codex",
     ),
     _builtin(
         "qwen-code", "Qwen Code",
@@ -259,39 +287,40 @@ def parse_manifest(data: Any, *, source: str = "plugin", manifest_path: str = ""
     homepage = _text(data.get("homepage"), "homepage", max_len=500)
 
     kind = _text(data.get("kind"), "kind", max_len=16, required=True)
-    if kind not in ("cli", "kb"):
-        raise PluginError("kind 只能是 cli 或 kb")
-    if kind == "kb" and source != "builtin":
-        raise PluginError("外部插件不能声明 kb 核心（知识库助手是内置实现）")
-    if plugin_id == "kb" and source != "builtin":
-        raise PluginError("id `kb` 是内置核心保留标识")
+    if kind != "cli":
+        # 个人 Agent 不再内置知识库核心，外部清单也只能声明 cli 核心。
+        raise PluginError("kind 只能是 cli（个人 Agent 不再内置 kb 核心）")
+    if plugin_id == "kb":
+        raise PluginError(
+            "id `kb` 是保留标识（内置知识库助手已下线，知识库问答在「智能问答」页）")
+    if data.get("isolated_home"):
+        raise PluginError(
+            "isolated_home 是内置核心专用的执行选项，外部清单不能声明")
 
     protocols = _str_tuple(data.get("protocols"), "protocols")
-    if kind == "cli":
-        if not protocols:
-            raise PluginError("cli 核心必须声明 protocols（openai / openai-responses / anthropic）")
-        unknown = [p for p in protocols if p not in SUPPORTED_PROTOCOLS]
-        if unknown:
-            raise PluginError(f"不支持的协议：{', '.join(unknown)}")
-        protocols = tuple(dict.fromkeys(protocols))
+    if not protocols:
+        raise PluginError("cli 核心必须声明 protocols（openai / openai-responses / anthropic）")
+    unknown = [p for p in protocols if p not in SUPPORTED_PROTOCOLS]
+    if unknown:
+        raise PluginError(f"不支持的协议：{', '.join(unknown)}")
+    protocols = tuple(dict.fromkeys(protocols))
 
     bins = _str_tuple(data.get("bins"), "bins")
-    if kind == "cli" and not bins:
+    if not bins:
         raise PluginError("cli 核心必须声明 bins（可执行文件名，按顺序探测）")
-    if kind == "cli":
-        for candidate in bins:
-            if not _BIN_NAME_RE.fullmatch(candidate) or ".." in candidate:
-                raise PluginError(
-                    f"bins 只能写 PATH 中可查找的命令名，不能是路径或含非法字符：{candidate!r}")
-            if Path(candidate).suffix.lower() in _REJECTED_BIN_SUFFIXES:
-                raise PluginError(f"bins 不能指向批处理/脚本宿主：{candidate!r}")
-            if candidate.lower() in _FORBIDDEN_BIN_NAMES:
-                raise PluginError(f"bins 不能指向命令解释器或系统外壳：{candidate!r}")
+    for candidate in bins:
+        if not _BIN_NAME_RE.fullmatch(candidate) or ".." in candidate:
+            raise PluginError(
+                f"bins 只能写 PATH 中可查找的命令名，不能是路径或含非法字符：{candidate!r}")
+        if Path(candidate).suffix.lower() in _REJECTED_BIN_SUFFIXES:
+            raise PluginError(f"bins 不能指向批处理/脚本宿主：{candidate!r}")
+        if candidate.lower() in _FORBIDDEN_BIN_NAMES:
+            raise PluginError(f"bins 不能指向命令解释器或系统外壳：{candidate!r}")
 
     run_args = _str_tuple(data.get("run_args"), "run_args")
-    if kind == "cli" and not run_args:
+    if not run_args:
         raise PluginError("cli 核心必须声明 run_args（非交互执行参数）")
-    if "{prompt}" not in " ".join(run_args) and kind == "cli":
+    if "{prompt}" not in " ".join(run_args):
         raise PluginError("run_args 必须包含 {prompt} 占位符")
     if any("{api_key}" in arg for arg in run_args):
         raise PluginError(
@@ -345,7 +374,6 @@ def parse_manifest(data: Any, *, source: str = "plugin", manifest_path: str = ""
         requires_workspace=requires_workspace, builtin=(source == "builtin"),
         manifest_path=manifest_path,
     )
-
 
 def _load_external() -> tuple[list[AgentPlugin], list[dict]]:
     plugins: list[AgentPlugin] = []
@@ -435,7 +463,8 @@ def _kill_tree(proc: subprocess.Popen) -> None:
         pass
 
 
-def _run_version(path: str, args: tuple[str, ...]) -> str:
+def _run_version(path: str, args: tuple[str, ...],
+                 env: dict[str, str] | None = None) -> str:
     """探测 CLI 的版本行；失败/超时返回空串。
 
     为什么不用 `subprocess.run(capture_output=True)`（v1.0.14 事故）：
@@ -449,7 +478,7 @@ def _run_version(path: str, args: tuple[str, ...]) -> str:
     with tempfile.TemporaryFile() as sink:
         kwargs: dict[str, Any] = dict(
             stdin=subprocess.DEVNULL, stdout=sink, stderr=subprocess.STDOUT,
-            cwd=str(config.AGENT_WORKSPACE_DIR), env=_minimal_env(),
+            cwd=str(config.AGENT_WORKSPACE_DIR), env=env or _minimal_env(),
         )
         if os.name == "nt":
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -498,15 +527,30 @@ def _resolve_bin(candidate: str, *, strict: bool) -> str:
     return real
 
 
+def _probe_env(plugin: AgentPlugin) -> dict[str, str]:
+    """版本探测子进程的环境：最小集 + 隔离核心的配置目录。
+
+    Codex 一旦被探测就会往 `CODEX_HOME` 里写 `.sandbox`、`installation_id`、
+    `skills/.system` 之类的东西；探测时也把它指到应用自己的目录，用户 `~/.codex`
+    就不会被顺带改动。
+    """
+    env = _minimal_env()
+    if plugin.isolated_home:
+        try:
+            env["CODEX_HOME"] = codex_home.ensure_dir()
+        except codex_home.CodexHomeError as exc:
+            log.warning("准备 %s 的隔离配置目录失败：%s", plugin.id, exc)
+    return env
+
+
 def _detect_uncached(plugin: AgentPlugin) -> dict:
-    if plugin.kind == "kb":
-        return {"installed": True, "path": "", "version": "", "detect_error": ""}
     strict = plugin.source != "builtin"
+    env = _probe_env(plugin)
     for candidate in plugin.bins:
         resolved = _resolve_bin(candidate, strict=strict)
         if not resolved:
             continue
-        version = _run_version(resolved, plugin.version_args)
+        version = _run_version(resolved, plugin.version_args, env=env)
         return {"installed": True, "path": resolved, "version": version, "detect_error": ""}
     return {
         "installed": False, "path": "", "version": "",
@@ -574,11 +618,11 @@ def find_plugin(plugin_id: str) -> AgentPlugin | None:
 
 def _plugin_out(plugin: AgentPlugin, *, enabled: bool) -> dict:
     detection = detect(plugin)
-    available = enabled and (plugin.is_kb or detection["installed"])
+    available = enabled and detection["installed"]
     reason = ""
     if not enabled:
         reason = "已停用"
-    elif not plugin.is_kb and not detection["installed"]:
+    elif not detection["installed"]:
         reason = detection["detect_error"] or "未安装"
     return {
         "id": plugin.id,
@@ -601,6 +645,9 @@ def _plugin_out(plugin: AgentPlugin, *, enabled: bool) -> dict:
         "timeout_seconds": plugin.timeout_seconds,
         "output": plugin.output,
         "manifest_path": plugin.manifest_path,
+        # 非空表示这个核心用应用自己的配置目录（目前只有 Codex → 应用数据目录下的
+        # agent_codex_home），界面可以据此说明「不继承你本机的 Codex 配置」。
+        "isolated_home": plugin.isolated_home,
     }
 
 
@@ -608,9 +655,7 @@ def list_plugins(db: Session) -> dict:
     plugins, errors = all_plugins()
     disabled = _disabled_ids(db)
     items = [_plugin_out(p, enabled=p.id not in disabled) for p in plugins]
-    items.sort(key=lambda item: (0 if item["kind"] == "kb" else 1,
-                                 0 if item["builtin"] else 1,
-                                 item["name"].lower()))
+    items.sort(key=lambda item: (0 if item["builtin"] else 1, item["name"].lower()))
     return {
         "items": items,
         "errors": errors,
@@ -687,7 +732,7 @@ def list_models(db: Session, plugin: AgentPlugin | None = None) -> list[dict]:
     for cfg in rows:
         provider = cfg.provider
         protocol = provider.protocol or "openai"
-        compatible = plugin is None or plugin.is_kb or protocol in plugin.protocols
+        compatible = plugin is None or protocol in plugin.protocols
         out.append({
             "id": cfg.id,
             "model": cfg.model,
@@ -718,15 +763,7 @@ def build_env(plugin: AgentPlugin, binding: dict, workspace: str,
               session_id: int, prompt: str = "") -> dict[str, str]:
     """最小环境变量集 + 白名单内的清单模板。不继承调用进程里的密钥类变量。"""
     env = _minimal_env()
-    values = {
-        "prompt": prompt,
-        "model": binding["model"],
-        "base_url": binding["base_url"],
-        "api_key": binding["api_key"],
-        "workspace": workspace,
-        "session_id": str(session_id),
-        "app_name": "企业知识库",
-    }
+    values = _template_values(binding, workspace, session_id, prompt, with_api_key=True)
     for key, template in plugin.env.items():
         if key not in ALLOWED_ENV_KEYS:
             # parse_manifest 已经拒绝外部清单；这里兜住绕过校验手工构造的插件。
@@ -740,7 +777,48 @@ def build_env(plugin: AgentPlugin, binding: dict, workspace: str,
             env[key] = os.environ[key]
     env.setdefault("NO_COLOR", "1")
     env.setdefault("TERM", "dumb")
+    # 放在最后：隔离目录必须压过调用进程里可能存在的同名变量。
+    env.update(_isolated_home_env(plugin))
     return env
+
+
+def _isolated_home_env(plugin: AgentPlugin) -> dict[str, str]:
+    """需要应用自带配置目录的核心：把 `CODEX_HOME` 指到应用数据目录。
+
+    为什么不写成清单里的 env 模板：模板只能填占位符，而隔离目录还要生成
+    config.toml、把用户技能以只读方式挂进去——这些必须在启动前实际做完。
+    准备失败时**不回退**到用户 `~/.codex`：那样会把用户的人格设定悄悄带回来。
+    """
+    if plugin.isolated_home != "codex":
+        return {}
+    try:
+        status = codex_home.prepare()
+    except codex_home.CodexHomeError as exc:
+        raise PluginError(str(exc)) from exc
+    skills = status["skills"]
+    log.info(
+        "Codex 隔离配置目录 %s（技能：链接 %s / 复制 %s / 移除 %s，来源 %s）",
+        status["home"], skills["linked"], skills["copied"], skills["removed"],
+        skills["source"],
+    )
+    return {"CODEX_HOME": status["home"]}
+
+
+def _template_values(binding: dict, workspace: str, session_id: int,
+                     prompt: str, *, with_api_key: bool = False) -> dict[str, str]:
+    values = {
+        "prompt": prompt,
+        "model": binding["model"],
+        "base_url": binding["base_url"],
+        "workspace": workspace,
+        "session_id": str(session_id),
+        "app_name": APP_DISPLAY_NAME,
+    }
+    # 密钥只给 env 模板用：命令行模板里即便写了 {api_key} 也只会展开成空串，
+    # 免得它出现在进程命令行、事件日志和命令摘要里（P1-7）。
+    if with_api_key:
+        values["api_key"] = binding.get("api_key", "")
+    return values
 
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
@@ -756,14 +834,7 @@ def _substitute(template: str, values: dict[str, str]) -> str:
 def substitute_args(plugin: AgentPlugin, binding: dict, workspace: str,
                     session_id: int, prompt: str) -> list[str]:
     """展开命令行参数。**不含 api_key**：密钥只应经 `env` 模板注入。"""
-    values = {
-        "prompt": prompt,
-        "model": binding["model"],
-        "base_url": binding["base_url"],
-        "workspace": workspace,
-        "session_id": str(session_id),
-        "app_name": "企业知识库",
-    }
+    values = _template_values(binding, workspace, session_id, prompt)
     return [_substitute(arg, values) for arg in plugin.run_args]
 
 
