@@ -1,0 +1,107 @@
+# 删除 v1.0.17 草稿 Release 实测记录（2026-11-11）
+
+对应任务：**删除 v1.0.17 的空草稿 Release**。
+本文件记录删除前的身份核对、删除命令与输出、删除后的六项校验，
+以及两处与任务描述不一致、需要留档的事实：草稿并非「0 资产」，以及「空草稿」这个结论当初是怎么来的。
+
+> 背景（v1.0.18 发布时发现的遗留）见 [`release-v1.0.18-publish.txt`](release-v1.0.18-publish.txt) §6；
+> 发版链路见 [`docs/UPDATE.md`](../UPDATE.md)。
+
+## 1. 授权与范围
+
+| 项 | 值 |
+| --- | --- |
+| 用户原话 | 「可以删除」（2026-11-11 22:2x） |
+| 追加确认 | 核对发现草稿内有 2 件残件后再次询问，用户选择「**照样删掉**」 |
+| 允许删的 | 仅 GitHub 上 tagName 为 `v1.0.17` 的那一条**草稿** Release |
+| 不允许动的 | `v1.0.17` 的 git tag；`v1.0.18` / `v1.0.19` 的任何 Release、资产或 tag |
+
+## 2. 删除前核对（身份三项 + 资产）
+
+命令与实测（`gh` 已登录；本文件不记录任何令牌值）：
+
+```
+gh release view v1.0.17 --repo guanmuya/wiki-rag-knowledge \
+  --json tagName,name,isDraft,publishedAt,createdAt,url,assets
+```
+
+| 检查项 | 实测结果 | 与任务描述是否一致 |
+| --- | --- | --- |
+| 是不是 v1.0.17 那条 | `tagName = v1.0.17`，`name = v1.0.17 问答与 Wiki 体验改进` | 一致 |
+| 状态是不是草稿 | `isDraft = true`，`publishedAt = null` | 一致 |
+| 资产数是不是 0 | **`assets.count = 2`**：<br>`wiki-rag-knowledge-1.0.17-x64-setup.exe.blockmap` 138,074 B（uploaded）<br>`latest.yml` 376 B（uploaded） | **不一致** |
+| 创建时间 | `2026-11-07T13:45:27Z` | 一致（2026-11-07 的遗留） |
+| Release URL | `https://github.com/guanmuya/wiki-rag-knowledge/releases/tag/untagged-b7914fff4f77d68f65bf` | 草稿未绑 tag，故为 `untagged-*` |
+
+「空草稿」这个说法当时是**推断**而不是实测：v1.0.18 发布时用的是
+`GET /releases/tags/v1.0.17`，该端点在对象是草稿时**恒返回 404**，
+于是把 404 读成了「不存在 / 无资产」。用 `gh release view`（对草稿可见）才看到真实资产数。
+
+草稿里的 `latest.yml` 内容（376 B，用 `gh api .../releases/assets/<id> -H "Accept: application/octet-stream"` 读取）：
+
+```
+version: 1.0.17
+files:
+  - url: wiki-rag-knowledge-1.0.17-x64-setup.exe
+    sha512: QOGsGpxHMa91zbIpf/ik61SV+rH34DtbHq+fmlG9oZsKVd5MBXJRHrvvkVX5XXxqvgNt8SD/tfXQaliZXiVdEA==
+    size: 131918244
+path: wiki-rag-knowledge-1.0.17-x64-setup.exe
+releaseDate: '2026-11-07T13:08:54.218Z'
+```
+
+即 `latest.yml` 指向的 131,918,244 B 安装包**从未上传成功**，
+这份草稿是 2026-11-07 那次发布中断后留下的半成品（元数据 + 差分块，缺主包）。
+
+删除前对外影响面（匿名、不带令牌）：
+
+```
+GET https://api.github.com/repos/guanmuya/wiki-rag-knowledge/releases?per_page=100
+→ 19 条，不含 v1.0.17                        （草稿不计入公开列表）
+
+HEAD https://github.com/guanmuya/wiki-rag-knowledge/releases/download/untagged-b7914fff4f77d68f65bf/latest.yml
+→ 404                                        （草稿资产匿名不可下载）
+```
+
+结论：这条草稿对外不可见、资产拿不到，删它不影响任何用户的更新；
+但「资产数为 0」这一条与实测不符，因此按任务约定先停下询问，用户确认后才执行删除。
+
+## 3. 删除命令与输出
+
+```
+> gh release delete v1.0.17 --repo guanmuya/wiki-rag-knowledge --yes --cleanup-tag=false
+
+（无输出）
+> exit code: 0
+```
+
+`--cleanup-tag=false` 是显式写出来的：`gh` 的 `--cleanup-tag` 默认就是 false，
+写死它是为了表明「只删 Release、不删 tag」是本次的明确要求，而不是默认行为碰巧如此。
+
+## 4. 删除后校验（六项，全部通过）
+
+| # | 检查 | 命令 | 实测结果 |
+| --- | --- | --- | --- |
+| A | 该 Release 已不存在 | `gh release view v1.0.17 --repo guanmuya/wiki-rag-knowledge` | `release not found`，退出码 1 |
+| B | 列表里不再有 v1.0.17 | `gh release list --limit 30 --json tagName,isDraft,isLatest` | 19 条，`含 v1.0.17 = False`；**草稿条目为空集**（没有其他残留草稿） |
+| C | v1.0.19 仍是 Latest、三件资产仍在 | `gh release view v1.0.19 --json ...` | `draft=false`，`assets=3`：`latest.yml` 376 B、`wiki-rag-knowledge-1.0.19-x64-setup.exe` 131,534,818 B、`.blockmap` 136,540 B（与删除前逐字节一致） |
+| D | v1.0.18 未受影响 | `gh release view v1.0.18 --json ...` | `draft=false`，`assets=3` |
+| E | 公开侧一致 | 匿名 `GET /releases` 与 `/releases/latest` | 公开 Release 19 条、不含 v1.0.17；`latest = v1.0.19` |
+| F | tag 一个都没少 | `git ls-remote --tags origin` | `v1.0.16` `92f9618`、**`v1.0.17` `d5ffe20`**、`v1.0.18` `d99724b`、**`v1.0.19` `cda67b2`**（与删除前完全一致） |
+| G | 更新源端到端仍可用 | 匿名 `curl -L .../releases/latest/download/latest.yml` | HTTP 200、`Content-Length: 376`、内容首行 `version: 1.0.19` |
+
+`v1.0.17` 的 tag 指向 `d5ffe203c39bafd4be77be771b856a728b067489`（2026-11-11 03:12 的 PR #59 合并提交，在 `master` 上），
+与这条草稿本来就没有关系，删除后仍原样保留。
+
+## 5. 本次覆盖的边界
+
+- **只删 Release**：没有删 tag、没有 `git push --delete`、没有碰 `v1.0.18` / `v1.0.19` 的任何对象。
+- **没有发布动作**：没有新建 Release、没有上传资产、没有改版本号。
+- **没有改业务代码**：`backend/app/**`、`frontend/src/**`、`frontend/electron/**` 零改动。
+- **没有读取或落盘令牌**：全部命令走本机已登录的 `gh`，未查询 `gh auth token`、未打印任何密钥；匿名校验用不带凭据的 `curl` / `Invoke-RestMethod`。
+
+## 6. 对既有记录的更正
+
+`release-v1.0.18-publish.txt` §6 写「`v1.0.17` 的 Release 是草稿、`assets` 为空」。
+**「assets 为空」不成立**：删前实测有 2 件资产（见 §2），当时的依据是对草稿恒 404 的
+`/releases/tags/{tag}` 端点，属于把「看不见」当成了「没有」。
+该草稿已在 2026-11-11T14:39Z 前的这一轮删除，历史段落按快照保留不改写。
