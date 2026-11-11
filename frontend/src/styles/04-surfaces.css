@@ -1,0 +1,304 @@
+/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
+
+/* ---------------------------------------------------------------- 7 卡片 / 面板 */
+.card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--c-hairline);
+  min-height: 48px;
+}
+.card-head h3 { font-size: 13.5px; font-weight: 600; }
+.card-body { padding: 20px; }
+.card-pad { padding: 20px; }
+.card-body-flush { padding: 0; }
+
+.panel {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-xs);
+  overflow: hidden;
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--c-hairline);
+  font-size: 12.5px;
+  font-weight: 600;
+  background: var(--c-surface-alt);
+}
+.panel-body { padding: 14px; }
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+.info-list { display: flex; flex-direction: column; }
+.info-list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 0;
+  border-bottom: 1px dashed var(--c-hairline);
+  font-size: 12.5px;
+}
+.info-list > div:last-child { border-bottom: none; }
+.info-list .k { flex: 0 0 auto; }
+.info-list .v { color: var(--c-text-secondary); text-align: right; word-break: break-all; }
+
+.stat-cell { display: flex; flex-direction: column; gap: 2px; }
+.stat-value {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+  font-variant-numeric: tabular-nums;
+}
+.stat-label { font-size: 11px; color: var(--c-text-muted); }
+
+/* ---------------------------------------------------------------- 8 状态 / 骨架 */
+.state-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--c-text-secondary);
+}
+.state-block.inline {
+  flex-direction: row;
+  justify-content: flex-start;
+  align-items: center;
+  padding: 10px 0;
+  gap: 10px;
+  text-align: left;
+}
+.state-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--c-surface-sunken);
+  color: #9aa1b4;
+  font-size: 15px;
+  margin-bottom: 2px;
+}
+.state-title { font-size: 13.5px; font-weight: 600; color: var(--c-text); }
+.state-hint { font-size: 12px; color: var(--c-text-muted); max-width: 460px; line-height: 1.6; }
+.state-action { margin-top: 8px; }
+.state-block.error .state-icon { background: var(--c-danger-soft); color: var(--c-danger); }
+.state-block.empty .state-icon { background: #f5f6fb; color: #a8aec0; }
+
+.spinner {
+  display: inline-block;
+  border-radius: 50%;
+  border: 2px solid rgba(59, 130, 246, 0.18);
+  border-top-color: var(--c-primary);
+  animation: spin 0.7s linear infinite;
+  flex: 0 0 auto;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.skeleton-block { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+.skeleton-line {
+  height: 10px;
+  border-radius: 6px;
+  background: #eaf1fb;
+  animation: skeleton-pulse 1.3s ease-in-out infinite;
+}
+@keyframes skeleton-pulse { 0%, 100% { opacity: 0.65; } 50% { opacity: 1; } }
+
+.boot-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: var(--canvas-bg);
+  padding: 32px;
+}
+.boot-screen .state-block { padding: 0; }
+
+/* 页面级错误兜底（Layout 里的 ErrorBoundary）：内容区居中，但不像 .boot-screen
+   那样占满视口——那时侧边栏还在，撑满高度会凭空多一条滚动条。 */
+.error-boundary {
+  min-height: 60vh;
+  display: grid;
+  place-items: center;
+  padding: 32px 0;
+}
+
+.backend-down {
+  width: min(640px, 100%);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  padding: 28px;
+  text-align: left;
+}
+.backend-down-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--c-danger-soft);
+  color: var(--c-danger);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 18px;
+  margin-bottom: 14px;
+}
+.backend-down h1 { font-size: 19px; margin-bottom: 6px; }
+.backend-down-msg { color: var(--c-text-secondary); font-size: 13px; line-height: 1.65; }
+.backend-down-actions { display: flex; gap: 8px; margin: 16px 0; flex-wrap: wrap; }
+.backend-down-meta {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 6px 12px;
+  font-size: 12px;
+  color: var(--c-text-muted);
+  padding: 12px 14px;
+  background: var(--c-surface-alt);
+  border: 1px solid var(--c-hairline);
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+}
+.backend-down-meta b { color: var(--c-text-secondary); font-weight: 600; }
+.backend-down-tips { font-size: 12px; color: var(--c-text-secondary); padding-left: 18px; margin: 0 0 12px; }
+.backend-down-tips li { margin: 3px 0; }
+.backend-down-logs {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  background: #12141c;
+  color: #c9cfdd;
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ---------------------------------------------------------------- 9 表格 / 分页 */
+.table-wrap {
+  width: 100%;
+  /* 刻意不做滚动容器：`overflow-x: auto` 会把这里变成新的 scrollport，
+     `thead th` 的 `position: sticky` 就只相对这个盒子生效，而它本身不纵向滚动，
+     结果就是页面往下滚时表头照样跟着走（用户反馈的问题）。
+     需要横向/纵向内滚动的表格请显式加 .table-wrap--scroll。 */
+  overflow: visible;
+  border-radius: var(--radius);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+}
+.table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
+/* 表头吸顶：页面滚动时始终停在顶栏下方，列名不会丢。
+   top 用 --topbar-h（54px），因为顶栏本身是 sticky top:0、z-index 20。 */
+.table thead th {
+  position: sticky;
+  top: var(--topbar-h);
+  z-index: 3;
+}
+/* 自带内滚动的表格（如模型探测列表）：表头吸在这个滚动区的顶部 */
+.table-wrap--scroll { overflow: auto; }
+.table-wrap--scroll .table thead th { top: 0; }
+.table th {
+  text-align: left;
+  font-size: 12px;
+  color: var(--c-text-muted);
+  font-weight: 600;
+  background: var(--c-surface-alt);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--c-border);
+  white-space: nowrap;
+}
+.table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--c-hairline);
+  vertical-align: middle;
+  color: var(--c-text-secondary);
+}
+.table tbody tr:last-child td { border-bottom: none; }
+.table tbody tr:hover td { background: #fafbff; }
+.table td strong, .table td .strong { color: var(--c-text); }
+.table td.actions { text-align: right; white-space: nowrap; }
+/* 表头自带底色，会盖住 .table-wrap 的圆角：首行两端跟着容器一起收角。
+   .table-wrap 有 1px 描边，所以内层圆角要减 1。 */
+.table-wrap .table thead tr:first-child th:first-child { border-top-left-radius: calc(var(--radius) - 1px); }
+.table-wrap .table thead tr:first-child th:last-child { border-top-right-radius: calc(var(--radius) - 1px); }
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 2px 2px;
+  font-size: 12px;
+  color: var(--c-text-muted);
+}
+
+/* ---------------------------------------------------------------- 10 进度 / 覆盖率 */
+.progress {
+  position: relative;
+  height: 18px;
+  min-width: 76px;
+  border-radius: 999px;
+  background: var(--c-surface-sunken);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--c-primary);
+  transition: width 0.25s ease;
+}
+.progress-text {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 650;
+  color: #2c4a6b;
+  font-variant-numeric: tabular-nums;
+}
+.progress-danger .progress-fill { background: var(--c-danger); }
+.progress-success .progress-fill { background: #10b981; }
+
+.coverage-bar {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--c-surface-sunken);
+  overflow: hidden;
+  min-width: 64px;
+}
+.coverage-bar-fill { height: 100%; border-radius: 999px; background: var(--c-primary); }
+.coverage-chip {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--c-primary);
+  background: var(--c-primary-soft);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+/* 库名与入选数之间留一点空隙，否则「人事制度库1」看起来像一个词 */
+.coverage-chip strong { margin-left: 4px; }
+

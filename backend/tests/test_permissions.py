@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import mark_user_ready
+
 
 @pytest.fixture(scope="module")
 def kb(app_client, admin_headers):
@@ -20,6 +22,9 @@ def employee(app_client, admin_headers, kb):
         "grants": [{"kb_id": kb["id"], "level": "read"}],
     })
     assert r.status_code == 201, r.text
+    # P1-8 之后 must_change_password 的账号会被拒绝业务接口；本组用例考察的是
+    # 知识库授权边界，所以先把这个账号标记为「已完成初始改密」。
+    mark_user_ready("emp_perm")
     return r.json()
 
 
@@ -136,6 +141,7 @@ def test_download_requires_permission(app_client, admin_headers, kb):
         "username": "emp_nodl", "display_name": "下载测试",
         "password": "NoDl#Passw0rd7", "role": "employee", "grants": [],
     })
+    mark_user_ready("emp_nodl")     # P1-8：本用例测的是下载鉴权，不是改密拦截
     headers = _login(app_client, "emp_nodl", "NoDl#Passw0rd7")
     r = app_client.get("/api/documents/1/download", headers=headers)
     assert r.status_code in (403, 404)

@@ -1,0 +1,231 @@
+/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
+
+/* ---------------------------------------------------------------- 25 第二轮修正 */
+/* 说明列表：About / 模型设置用的是 <dl><dt><dd>，之前只处理了 div 结构，
+   结果标签和值竖着堆在一起，读起来像两列断开的文字。 */
+.info-list {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  column-gap: 16px;
+  row-gap: 9px;
+  align-items: start;
+  margin: 0;
+}
+.info-list dt {
+  font-size: 12px;
+  color: var(--c-text-muted);
+  line-height: 1.6;
+}
+.info-list dd {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--c-text-secondary);
+  line-height: 1.6;
+  word-break: break-word;
+}
+.info-list > div { display: contents; }
+
+/* Wiki 目录：标题要占满剩余宽度，否则 justify-between 会把标题推到右边 */
+.wiki-tree-item { justify-content: flex-start; }
+.wiki-tree-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+/* Wiki 目录状态：一个 6px 状态点，颜色只表达「已发布 / 待校对 / 草稿」 */
+.wiki-mark {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  display: grid;
+  place-items: center;
+  color: #b6bccd;
+}
+.wiki-mark::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+}
+.wiki-mark.published { color: var(--c-success); }
+.wiki-mark.published::before { opacity: 1; }
+/* 待校对用空心环：不靠颜色也能和「已发布」区分（色盲用户可辨） */
+.wiki-mark.review { color: var(--c-warn); }
+.wiki-mark.review::before {
+  opacity: 1;
+  background: transparent;
+  border: 1.5px solid currentColor;
+}
+.wiki-tree-item.active .wiki-mark { color: var(--c-primary); }
+.wiki-lock { display: inline-flex; color: var(--c-text-muted); flex: 0 0 auto; }
+
+/* 上传区收窄：原来是一大块空白的虚线框，占掉半屏 */
+.dropzone { padding: 16px 20px; }
+.dropzone-title { font-size: 12.5px; }
+.dropzone-hint { margin-top: 3px; }
+
+/* 表格与卡片头里的文字按钮统一降权，红色只留给破坏性操作 */
+.card-head .btn-link,
+td .btn-link,
+.table-actions .btn-link { color: var(--c-text-secondary); font-weight: 500; }
+.card-head .btn-link:hover,
+td .btn-link:hover { color: var(--c-primary); }
+td .btn-link.danger { color: var(--c-danger); }
+
+/* 任务详情里的 embedding_signature 是长技术串，截断一行就够 */
+.task-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 登录右侧：表单放进卡片，和左侧品牌区分层 */
+.login-panel { background: #f7fafe; }
+.login-panel > * { max-width: 400px; }
+.login-panel h2 { margin-top: 0; }
+.login-panel form {
+  width: 100%;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  padding: 22px;
+}
+
+/* 登录/初始化：标题、表单、错误提示放在同一张卡里，避免「标题飘在卡片外」 */
+.login-card {
+  width: 100%;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  padding: 26px;
+}
+.login-card h2 { margin-top: 0; }
+.login-card .sub { margin-bottom: 18px; }
+.login-panel form {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+.login-foot { max-width: 400px; }
+
+/* 空会话：给示例问题，而不是一整屏空白 */
+.chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 64px 24px;
+  text-align: center;
+}
+.chat-empty-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  color: var(--c-primary);
+  background: var(--c-primary-soft);
+  border: 1px solid #d8e7ff;
+  margin-bottom: 4px;
+}
+.chat-empty-title { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+.chat-empty-hint { font-size: 12.5px; color: var(--c-text-muted); max-width: 460px; line-height: 1.7; }
+.chat-samples { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 8px; }
+.sample-chip {
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-text-secondary);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.sample-chip:hover { border-color: #c9dcf5; background: var(--c-primary-soft); color: var(--c-primary); }
+.chat-empty-tip { margin-top: 12px; font-size: 11px; color: var(--c-text-muted); }
+
+/* 知识库卡片底部的「删除」：默认降到次要色，悬停才变红，避免三张卡片上三块红字 */
+.kb-card-actions .btn-link { color: var(--c-text-muted); }
+.kb-card-actions .btn-link:hover { color: var(--c-text); }
+.kb-card-actions .btn-link.danger { color: var(--c-text-muted); }
+.kb-card-actions .btn-link.danger:hover { color: var(--c-danger); }
+
+/* ---------------------------------------------------------------- 25 后端忙 / 轮询失败 */
+/*
+   这一组样式只描述「后端忙/刷新失败」这类「不是用户操作错了」的状态：
+   统一用淡蓝说明条，不用红色报错块——红色会让人以为数据坏了、去点删除或重装。
+*/
+.lock-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px;
+  margin-bottom: 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid #d5e5fb;
+  background: #f0f6ff;
+  color: #2c4a6b;
+}
+/* 聊天页是 content-flush（无内边距），横幅自己补一点留白，避免贴边 */
+.content-flush > .lock-banner { margin: 10px 14px 0; }
+.lock-banner-icon {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: #dcebff;
+  color: var(--c-primary);
+  font-size: 12px;
+}
+.lock-banner-body { min-width: 0; flex: 1; }
+.lock-banner-body strong { font-size: 12.5px; font-weight: 650; display: block; }
+.lock-banner-detail { font-size: 11.5px; color: #5c7896; line-height: 1.55; }
+.lock-banner-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+
+/* 轮询失败提示条：出现在列表内部，保留上次数据的同时说清「这不是空列表」 */
+.poll-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 12px;
+  margin: 0 0 10px;
+  border-radius: var(--radius);
+  border: 1px solid #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.poll-notice-icon { flex: 0 0 auto; font-size: 12px; }
+.poll-notice-body { min-width: 0; }
+.poll-notice-body strong { font-size: 12px; font-weight: 650; display: block; }
+.poll-notice-detail { font-size: 11.5px; color: #a16207; }
+/* 任务卡片内部左右有 16px 内边距，提示条跟着对齐，不然会顶到卡片边上 */
+.task-list > .poll-notice { margin: 12px 16px 4px; }
+
+/* 任务心跳：和 stage 同一行，字号更小、颜色更淡，不跟进度条抢注意力 */
+.task-heartbeat { color: #a2b0c4; }
+
+/* 运行中但 30 秒没进展：浅蓝说明条，绝不能长得像 .task-error */
+.task-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid #dbe9fb;
+  background: #f5f9ff;
+  color: #4a6b8f;
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+.task-hint-icon { flex: 0 0 auto; }
+

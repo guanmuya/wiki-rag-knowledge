@@ -8,6 +8,7 @@ import { Badge, Button, ConfirmDialog, ErrorState, SkeletonLines, Spinner } from
 import UpdateCard from '../components/UpdateCard'
 import { errorText, formatMs } from '../utils'
 import { PROJECT_LICENSE, THIRD_PARTY_NOTICES } from './aboutInfo'
+import { LOG_EMPTY, LOG_READ_FAILED } from '../shared/messages'
 import { IconAlert, IconClock } from '../components/icons'
 
 interface ProbeResult {
@@ -134,9 +135,9 @@ export default function AboutPage() {
     }
     try {
       const text = await window.wrkDesktop?.getLogs()
-      setLogHint(text && text.trim() ? text.slice(-2000) : '（日志为空）')
+      setLogHint(text && text.trim() ? text.slice(-2000) : LOG_EMPTY)
     } catch {
-      setLogHint('读取日志失败')
+      setLogHint(LOG_READ_FAILED)
     }
   }
 
@@ -152,7 +153,7 @@ export default function AboutPage() {
     }
     try {
       const text = await window.wrkDesktop?.getLogs()
-      setDiagLogs(text && text.trim() ? text.slice(-2000) : '（日志为空）')
+      setDiagLogs(text && text.trim() ? text.slice(-2000) : LOG_EMPTY)
     } catch {
       setDiagLogs('读取日志失败，可点「打开日志目录」直接查看文件。')
     }

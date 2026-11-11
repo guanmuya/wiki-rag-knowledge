@@ -34,6 +34,30 @@ os.environ["WRK_HTTP_TIMEOUT_READ"] = "2"
 ADMIN_PASSWORD = os.environ["WRK_ADMIN_PASSWORD"]
 
 
+def mark_user_ready(username: str) -> None:
+    """把账号标记为「已完成初始改密」（测试辅助）。
+
+    P1-8 之后，`must_change_password=true` 的账号会被后端拒绝业务接口——这才是
+    真正的边界，前端弹窗只是体验层。用例里新建的账号（含 bootstrap 管理员）默认
+    带着这个标记，而绝大多数用例考察的是业务与权限行为，不是口令策略，所以先
+    完成「改密」这一步再测。
+
+    强制改密本身由 `tests/test_must_change_password.py` 用真实接口覆盖：那条路径
+    （登录 → 只放行 /auth/me、/auth/change-password、/auth/logout → 改密后恢复）
+    不经过这个辅助函数。
+    """
+    from sqlalchemy import update
+
+    from app import models
+    from app.db import SessionLocal
+
+    with SessionLocal() as db:
+        db.execute(update(models.User)
+                   .where(models.User.username == username)
+                   .values(must_change_password=False))
+        db.commit()
+
+
 @pytest.fixture(scope="session")
 def isolated_env():
     return _TMP
@@ -52,6 +76,9 @@ def admin_headers(app_client):
     r = app_client.post("/api/auth/login",
                         json={"username": "admin", "password": ADMIN_PASSWORD})
     assert r.status_code == 200, r.text
+    # bootstrap 出来的管理员带 must_change_password=true（真实首次登录必须改密）。
+    # 这里先完成这一步，让其余用例测的是业务行为，见 mark_user_ready 的说明。
+    mark_user_ready("admin")
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 

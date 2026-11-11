@@ -1,12 +1,27 @@
 """依赖注入：当前用户、权限校验、审计。"""
 from __future__ import annotations
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import models, security
 from .db import get_db
+
+# 强制初始口令修改（P1-8）：`must_change_password` 以前只写库、只给前端看，
+# 后端从不校验，于是绕过前端（脚本 / 直接打 API）就能用初始口令调用全部业务
+# 接口——管理员下发的初始口令等于长期有效。真正的边界必须在这里：待改密的
+# 账号只放行「自助改密」这条窄路径，其余一律 403。
+#
+# 路径清单刻意保持最短，且都是改密流程本身需要的：
+# - /auth/me              前端登录后要知道自己被要求改密，也用来确认改密结果
+# - /auth/change-password 改密动作本身
+# - /auth/logout          允许放弃这次会话（否则用户只能关进程）
+PASSWORD_CHANGE_ALLOWED_PATHS = (
+    "/api/auth/me",
+    "/api/auth/change-password",
+    "/api/auth/logout",
+)
 
 
 def _unauthorized(detail: str = "登录状态失效，请重新登录") -> HTTPException:
@@ -14,7 +29,15 @@ def _unauthorized(detail: str = "登录状态失效，请重新登录") -> HTTPE
                          headers={"WWW-Authenticate": "Bearer"})
 
 
+def path_allows_pending_password_change(path: str) -> bool:
+    """待改密账号能否访问这个路径。拆成函数是为了能单独测、也便于将来加白名单。"""
+    normalized = (path or "").rstrip("/")
+    return any(normalized == allowed or normalized.endswith(allowed)
+               for allowed in PASSWORD_CHANGE_ALLOWED_PATHS)
+
+
 def get_current_user(
+    request: Request,
     authorization: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ) -> models.User:
@@ -32,6 +55,13 @@ def get_current_user(
     # 同样会被这里挡下。
     if int(payload.get("ver", 0)) != int(user.token_version or 0):
         raise _unauthorized()
+    # 强制初始口令修改（P1-8）。放在 401 之后：先确认「这个令牌还有效」，
+    # 再谈「这个有效会话能不能办事」，两种失败对前端是不同的处理路径。
+    if user.must_change_password and not path_allows_pending_password_change(request.url.path):
+        raise HTTPException(
+            status_code=403,
+            detail="请先修改初始密码，再使用其他功能",
+        )
     return user
 
 

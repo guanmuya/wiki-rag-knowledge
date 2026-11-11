@@ -21,6 +21,7 @@ from sqlalchemy import delete, select
 
 from app import models
 from app.services import answering, llm, retrieval, wiki, worker
+from conftest import mark_user_ready
 
 
 @pytest.fixture()
@@ -342,6 +343,7 @@ def test_cost_endpoint_requires_kb_access(app_client, admin_headers, db_session)
                         json={"new_password": pwd})
     login = app_client.post("/api/auth/login", json={"username": "emp_cost", "password": pwd})
     assert login.status_code == 200, login.text
+    mark_user_ready("emp_cost")     # P1-8：先完成初始改密，否则下面测到的是改密拦截
     headers = {"Authorization": f"Bearer {login.json()['token']}"}
 
     denied = app_client.get(f"/api/kbs/{kb['id']}/cost", headers=headers)

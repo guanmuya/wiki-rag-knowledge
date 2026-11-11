@@ -69,8 +69,10 @@ def race_env(tmp_path, monkeypatch):
 def _prepare(env, tmp_path, *, count, secret_no, old_source_no):
     sessions, client, _ = env
     with sessions() as db:
-        admin = models.User(username="admin", password_hash="unused", role="admin", status="active")
-        reader = models.User(username="reader", password_hash="unused", role="employee", status="active")
+        admin = models.User(username="admin", password_hash="unused", role="admin",
+                            status="active", must_change_password=False)
+        reader = models.User(username="reader", password_hash="unused", role="employee",
+                             status="active", must_change_password=False)
         kb = models.KnowledgeBase(name="input-race", mode="wiki", status="ready")
         db.add_all([admin, reader, kb])
         db.flush()

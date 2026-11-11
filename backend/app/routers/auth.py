@@ -1,24 +1,61 @@
 """认证与用户管理。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import models, schemas, security, serializers
 from ..db import get_db
 from ..deps import audit, get_current_user, require_admin
+from ..services import login_guard
 
 router = APIRouter(tags=["auth"])
 
 
+def _login_source(request: Request) -> str:
+    """登录来源（IP）：限流的第二维度。取不到就归到 unknown 桶。"""
+    client = getattr(request, "client", None)
+    return getattr(client, "host", "") or "unknown"
+
+
+def _too_many(decision: login_guard.Decision) -> HTTPException:
+    # 429 是「现在不行、晚点再来」的语义；Retry-After 让脚本和前端都知道要等多久。
+    return HTTPException(status_code=429, detail=decision.detail(),
+                         headers={"Retry-After": str(decision.retry_after)})
+
+
+def _reject_locked(db: Session, username: str, decision: login_guard.Decision) -> None:
+    """记一条 login_blocked 审计再抛 429。两个入口（预检、本次失败触发锁定）共用。"""
+    audit(db, None, "login_blocked", target=username,
+          detail=(f"reason={decision.reason} retry_after={decision.retry_after}s "
+                  f"failures={decision.failures}"))
+    db.commit()
+    raise _too_many(decision)
+
+
 @router.post("/auth/login")
-def login(body: schemas.LoginIn, db: Session = Depends(get_db)):
+def login(body: schemas.LoginIn, request: Request, db: Session = Depends(get_db)):
+    source = _login_source(request)
+    # 先看这一对（用户名，来源）是否已被锁：被锁时连密码都不校验，
+    # 否则限流只是把「试错」变慢，攻击者仍在拿到真实的「密码对不对」信号。
+    decision = login_guard.check(body.username, source)
+    if not decision.allowed:
+        _reject_locked(db, body.username, decision)
+
     user = db.execute(select(models.User).where(models.User.username == body.username)).scalar_one_or_none()
     if not user or not security.verify_password(body.password, user.password_hash):
+        # 失败计数 + 审计：事后能回答「谁在撞库」和「锁是怎么触发的」。
+        failed = login_guard.register_failure(body.username, source)
+        audit(db, None, "login_failed", target=body.username,
+              detail=f"source={source} failures={failed.failures}")
+        db.commit()
+        if not failed.allowed:
+            _reject_locked(db, body.username, failed)
         raise HTTPException(status_code=401, detail="用户名或密码不正确")
     if user.status != models.UserStatus.active.value:
         raise HTTPException(status_code=403, detail="账号已停用，请联系管理员")
+    login_guard.register_success(body.username, source)
     user.last_login_at = models.utcnow()
     db.add(user)
     audit(db, user, "login", target=user.username)

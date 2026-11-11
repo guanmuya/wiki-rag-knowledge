@@ -46,7 +46,7 @@ cd frontend; pnpm build:web
 cd frontend; pnpm test
 ```
 
-测试**确实通过的输出**才叫证据。数字口径（目前 673 passed / 1 skipped 的来源、命令、环境、skip 原因）
+测试**确实通过的输出**才叫证据。数字口径（当前基线的数字、来源、命令、环境、skip 原因）
 只在 [`docs/FACTS.md`](docs/FACTS.md) §2 维护一处，**改完顺手更新那一处，不要在别的文档里另写一份**。
 
 ## 3. 提交信息

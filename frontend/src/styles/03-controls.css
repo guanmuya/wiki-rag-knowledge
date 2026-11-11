@@ -1,0 +1,266 @@
+/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
+
+/* ---------------------------------------------------------------- 4 按钮 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--c-border-strong);
+  background: var(--c-surface);
+  color: var(--c-text-secondary);
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease,
+    box-shadow 0.15s ease, transform 0.05s ease;
+}
+.btn:hover { border-color: #c3c8d6; color: var(--c-text); background: #fcfcfe; }
+.btn:active { transform: translateY(0.5px); }
+.btn:disabled, .btn[disabled] { opacity: 0.55; cursor: not-allowed; }
+.btn:disabled:hover { border-color: var(--c-border-strong); background: var(--c-surface); }
+.btn-primary:disabled:hover { border-color: var(--c-primary); background: var(--c-primary); color: #fff; }
+.btn-danger:disabled:hover { border-color: var(--c-danger); background: var(--c-danger); color: #fff; }
+
+.btn-primary {
+  background: var(--c-primary);
+  border-color: var(--c-primary);
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(59, 130, 246, 0.28);
+}
+.btn-primary:hover {
+  background: var(--c-primary-hover);
+  border-color: var(--c-primary-hover);
+  color: #fff;
+}
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--c-text-secondary);
+}
+.btn-ghost:hover { background: #f2f3f8; border-color: transparent; color: var(--c-text); }
+
+.btn-danger {
+  background: var(--c-danger);
+  border-color: var(--c-danger);
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(207, 59, 59, 0.24);
+}
+.btn-danger:hover { background: #c81e22; border-color: #c81e22; color: #fff; }
+
+.btn-link {
+  border: none;
+  background: none;
+  padding: 0;
+  height: auto;
+  color: var(--c-primary);
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.btn-link:hover { color: var(--c-primary-hover); text-decoration: underline; text-underline-offset: 2px; }
+.btn-link.danger { color: var(--c-danger); }
+
+.btn-sm { height: 28px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
+
+.icon-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--c-text-muted);
+  font-size: 15px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.icon-btn:hover { background: #f2f3f8; color: var(--c-text); }
+
+.actions { text-align: right; }
+.table-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+
+/* ---------------------------------------------------------------- 5 表单 */
+.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.field:last-child { margin-bottom: 0; }
+
+.field-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--c-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.req { color: var(--c-danger); }
+
+.input, .select, .textarea {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: 8px;
+  background: var(--c-surface);
+  color: var(--c-text);
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.textarea { height: auto; min-height: 92px; padding: 9px 12px; line-height: 1.6; resize: vertical; }
+.input::placeholder, .textarea::placeholder { color: #a7adbd; }
+.input:hover, .select:hover, .textarea:hover { border-color: #c3c8d6; }
+.input:focus, .select:focus, .textarea:focus {
+  border-color: var(--c-primary);
+  box-shadow: var(--ring);
+}
+.input:disabled, .select:disabled, .textarea:disabled {
+  background: var(--c-surface-sunken);
+  color: var(--c-text-muted);
+  cursor: not-allowed;
+}
+.select {
+  appearance: none;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%23878da0' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+.field-hint { font-size: 11.5px; color: var(--c-text-muted); line-height: 1.5; }
+.field-error { font-size: 11.5px; color: var(--c-danger); }
+
+.checkbox {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--c-primary);
+  cursor: pointer;
+}
+
+/* 开关：label 是轨道，::after 是滑块；原生 checkbox 铺满轨道但透明，
+   保留点击与键盘焦点语义。label 必须 inline-block，否则 width/height 不生效。 */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: #d9dde8;
+  border: none;
+  cursor: pointer;
+  transition: background 0.18s ease;
+  flex: 0 0 34px;
+  vertical-align: middle;
+}
+.switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.2);
+  transition: transform 0.18s ease;
+}
+.switch.on { background: var(--c-primary); }
+.switch.on::after { transform: translateX(14px); }
+.switch:focus-within { box-shadow: var(--ring); }
+
+.pwd-meter { display: flex; align-items: center; gap: 10px; }
+.pwd-meter-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--c-surface-sunken);
+  overflow: hidden;
+}
+.pwd-meter-fill { height: 100%; border-radius: 999px; transition: width 0.2s ease, background 0.2s ease; }
+.pwd-meter-text { font-size: 11.5px; color: var(--c-text-muted); white-space: nowrap; }
+
+/* ---------------------------------------------------------------- 6 徽标 */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: #f2f3f8;
+  color: #5b6274;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.badge-success { background: var(--c-success-soft); color: var(--c-success); }
+.badge-warn { background: var(--c-warn-soft); color: var(--c-warn); }
+.badge-danger { background: var(--c-danger-soft); color: var(--c-danger); }
+.badge-partial { background: var(--c-partial-soft); color: var(--c-partial); }
+.badge-info { background: var(--c-info-soft); color: var(--c-info); }
+.badge-muted { background: #f2f3f8; color: #5b6274; }
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  display: inline-block;
+  flex: 0 0 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-text-secondary);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.chip:hover { border-color: #c9cee0; background: #fbfbff; color: var(--c-text); }
+
+.lv {
+  font-size: 10px;
+  color: var(--c-text-muted);
+  background: var(--c-surface-sunken);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 16px;
+  font-weight: 500;
+}
+
+.mark {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 600;
+}

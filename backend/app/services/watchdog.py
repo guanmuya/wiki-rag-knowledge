@@ -85,9 +85,23 @@ _last_probe: dict[str, Any] = {}
 _block_started: tuple[float, float] | None = None
 _state_lock = threading.Lock()
 _tls = threading.local()   # 每线程的语句起始时间栈（支持嵌套执行）
+# 日志轮转失败的现场 (时间, 原因)。P1-8 要求「日志轮转失败有告警」：只吞异常的话，
+# 磁盘满/文件被占用会让日志无限增长，而用户和日志里都看不出来。
+_rotation_state: dict[str, Any] = {}
 
 
 # ---------------------------------------------------------------- 小工具
+def _ignore(where: str, exc: BaseException) -> None:
+    """看门狗内部异常一律自吞，但**不能完全静默**。
+
+    这个模块的原则是「绝不把应用点着」，所以事件回调里的异常必须咽掉；
+    可如果连一行记录都不留，排查「看门狗为什么没工作」时就完全无从下手
+    （P1-8 的 14 处 `except Exception: pass` 正是在这里）。用 debug 级别：
+    默认 INFO 级别下几乎零成本，需要排查时把日志级别调到 DEBUG 就能看到完整原因。
+    """
+    log.debug("锁看门狗 %s 失败（已忽略）：%s", where, exc, exc_info=True)
+
+
 def _now_iso(ts: float | None = None) -> str:
     dt = datetime.fromtimestamp(ts if ts is not None else time.time()).astimezone()
     return dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
@@ -136,14 +150,26 @@ def _write_line(line: str) -> None:
 
 
 def _rotate_if_needed() -> None:
+    """日志超过上限就滚动一次。
+
+    失败必须留痕（P1-8）：Windows 上杀软、编辑器、日志查看器只要握着文件句柄，
+    `os.replace` / `rename` 就会失败；原实现 `except Exception: pass` 让轮转
+    永久静默失效，日志再也没有上限。现在失败一次就 warning 并写进
+    `_rotation_state`，随 status()/诊断接口暴露出去。
+    """
     try:
         if _LOG_PATH.exists() and _LOG_PATH.stat().st_size > _MAX_LOG_BYTES:
             backup = _LOG_PATH.with_suffix(".log.1")
             if backup.exists():
                 backup.unlink()
             _LOG_PATH.rename(backup)
-    except Exception:
-        pass
+            if _rotation_state:
+                _rotation_state.clear()
+                log.info("看门狗日志轮转已恢复：%s", _LOG_PATH)
+    except Exception as exc:
+        _rotation_state.update({"at": _now_iso(), "error": str(exc)[:300]})
+        log.warning("看门狗日志轮转失败（%s）：%s —— 看门狗日志已超过 %d 字节上限，"
+                    "文件可能被其他进程占用或磁盘已满", _now_iso(), exc, _MAX_LOG_BYTES)
 
 
 # ---------------------------------------------------------------- engine 事件
@@ -161,8 +187,8 @@ def _on_begin(conn) -> None:
                     "t0": t0, "ts": time.time(),
                     "thread": threading.current_thread().name, "ident": ident,
                 }
-    except Exception:
-        pass
+    except Exception as exc:
+        _ignore("_on_begin", exc)
 
 
 def _on_rollback(conn) -> None:
@@ -172,8 +198,8 @@ def _on_rollback(conn) -> None:
         ident = threading.get_ident()
         with _state_lock:
             _open_tx.pop(ident, None)
-    except Exception:
-        pass
+    except Exception as exc:
+        _ignore("_on_rollback", exc)
 
 
 def _on_commit(conn) -> None:
@@ -197,8 +223,8 @@ def _on_commit(conn) -> None:
             _events.append(rec)
             if tx_ms >= _SLOW_MS:
                 _slow.append(rec)
-    except Exception:
-        pass
+    except Exception as exc:
+        _ignore("_on_commit", exc)
 
 
 def _on_before_cursor(conn, cursor, statement, parameters, context, executemany) -> None:
@@ -217,8 +243,8 @@ def _on_before_cursor(conn, cursor, statement, parameters, context, executemany)
         }
         with _state_lock:
             _in_flight[ident] = entry
-    except Exception:
-        pass
+    except Exception as exc:
+        _ignore("_on_before_cursor", exc)
 
 
 def _on_after_cursor(conn, cursor, statement, parameters, context, executemany) -> None:
@@ -239,8 +265,8 @@ def _on_after_cursor(conn, cursor, statement, parameters, context, executemany) 
                     "sql": _short(statement), "thread": threading.current_thread().name,
                     "kind": "cursor",
                 })
-    except Exception:
-        pass
+    except Exception as exc:
+        _ignore("_on_after_cursor", exc)
 
 
 def _on_error(exception_context) -> None:
@@ -265,8 +291,8 @@ def _on_error(exception_context) -> None:
                 _events.append(rec)
                 if ms >= _SLOW_MS:
                     _slow.append(rec)
-    except Exception:
-        pass
+    except Exception as exc:
+        _ignore("_on_error", exc)
 
 
 def _install_listeners() -> None:
@@ -320,8 +346,8 @@ def _probe_once(conn: sqlite3.Connection) -> None:
         err = str(exc)[:200]
         try:
             conn.execute("ROLLBACK")
-        except Exception:
-            pass
+        except Exception as rollback_exc:
+            _ignore("_probe_once/ROLLBACK", rollback_exc)
     ms = (time.perf_counter() - t0) * 1000.0
     blocked = blocked or ms >= _BLOCK_MS
 
@@ -359,8 +385,8 @@ def _track_block_window(blocked: bool) -> None:
         if dur_ms >= _SLOW_MS:
             _write_line(f"----- {_now_iso()} 解锁：写锁阻塞持续 {dur_ms:.0f}ms "
                         f"pid={os.getpid()} -----")
-    except Exception:
-        pass
+    except Exception as exc:
+        _ignore("_track_block_window", exc)
 
 
 def _should_dump() -> bool:
@@ -495,13 +521,14 @@ def _loop() -> None:
                 _stop.wait(backoff)     # 库还没建 / 非 sqlite：慢点再看
                 continue
             _probe_once(conn)
-        except Exception:
+        except Exception as exc:
             # 连接坏了就重开；看门狗自己不能死，也不能把异常抛给主线程。
+            _ignore("_loop/probe", exc)
             try:
                 if conn is not None:
                     conn.close()
-            except Exception:
-                pass
+            except Exception as close_exc:
+                _ignore("_loop/close", close_exc)
             conn = None
             _stop.wait(backoff)
             continue
@@ -509,8 +536,8 @@ def _loop() -> None:
     try:
         if conn is not None:
             conn.close()
-    except Exception:
-        pass
+    except Exception as exc:
+        _ignore("_loop/final-close", exc)
 
 
 def start() -> None:
@@ -554,6 +581,14 @@ def status() -> dict[str, Any]:
         "slow_ms_threshold": _SLOW_MS,
         "log_path": str(_LOG_PATH),
         "log_exists": _LOG_PATH.exists(),
+        # P1-8：「日志轮转失败有告警」。失败时这里带着时间与原因，诊断接口
+        # /api/diagnostics/process 里能看到，不必等用户把日志目录发过来。
+        "log_rotation": {
+            "max_bytes": _MAX_LOG_BYTES,
+            "failed": bool(_rotation_state),
+            "at": _rotation_state.get("at", ""),
+            "error": _rotation_state.get("error", ""),
+        },
     }
 
 

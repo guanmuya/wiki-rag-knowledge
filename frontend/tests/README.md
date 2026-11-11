@@ -15,7 +15,14 @@ cd frontend
 pnpm test
 ```
 
-`pnpm test` 即 `node --test tests/e2e.test.mjs`。
+`pnpm test` 即 `node --test tests/e2e.test.mjs tests/error-hints.test.mjs`，
+把两个测试文件都跑一遍（新增测试文件记得同步写进这个脚本）：
+
+| 文件 | 内容 | 用例数 |
+| --- | --- | --- |
+| `tests/e2e.test.mjs` | 真实 Chromium + Vite 的主链路 E2E（后端换成确定性 mock） | 5 |
+| `tests/error-hints.test.mjs` | 纯 Node，不需要浏览器：失败文案单一来源的回归（体检清单 P2-6） | 5 |
+
 CI（`.github/workflows/ci.yml`）在 `windows-latest` 上跑同一条命令，失败即阻断合并。
 
 前端另外还有一项**不在这里**的 CI 检查：`pnpm check:contract`
@@ -84,3 +91,25 @@ pnpm exec playwright install chromium
 - 每个用例自己 `openWithMock()`，用完 `context.close()`。
 - 断言 UI 用 `waitFor()` 轮询，不要拿一次快照判生死。
 - 不要在测试里引入真实时间、随机数或外部服务，保持「离线可重复」这条底线。
+- 不依赖浏览器的用例（纯数据/纯函数/静态扫描）另开一个 `*.test.mjs`，不要塞进
+  `e2e.test.mjs`：那个文件的用例数（5 条）是发布口径里的「E2E 5/5」，混进去会让
+  这个数字失去意义。
+
+---
+
+## 5. `error-hints.test.mjs` 在守什么
+
+体检清单 P2-6 的原始问题是「错误文案映射表重复三套，改一处要四处同步」。
+收敛后用户可见的失败文案只剩一份：`frontend/electron/error-hints.json`。
+
+- 主进程 `electron/main.cjs` 读 `startup` 段（`require('./error-hints.cjs')` 的 `matchStartup`）；
+- 更新器 `electron/updater.cjs` 读 `update` 段（`matchUpdate`）；
+- 渲染进程 `src/shared/userFacingErrors.ts` 读 `probe` 段，供 `BackendGate` 兜底。
+
+这个用例文件同时守两件事：**匹配结果**与「**源码里不再出现第二份文案**」。
+后一条是静态扫描：把表里的每一句文案拿去 `src/**` 与 `electron/**` 里找
+「被写成字符串字面量」的副本，找到就失败——所以谁想把文案抄回组件里，CI 会拦住。
+
+`frontend/scripts/build.mjs` 的构建失败文案不在本次收敛范围内：那个脚本由并行的
+仓库治理任务负责归档，改它会产生跨任务冲突；它的文案表留在原处，等该任务落地后再并入
+`error-hints.json` 的 `build` 段。

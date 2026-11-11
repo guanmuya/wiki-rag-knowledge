@@ -13,6 +13,7 @@ import {
   Spinner,
 } from '../components/ui'
 import TaskList from '../components/TaskList'
+import { STOP_REQUESTED } from '../shared/messages'
 
 const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: '', label: '全部状态' },
@@ -89,7 +90,7 @@ export default function TasksPage() {
   const stopWiki = async (task: Task) => {
     try {
       await taskApi.stopWiki(task.id, task.run_token)
-      push('已发送停止请求', 'info')
+      push(STOP_REQUESTED, 'info')
     } finally {
       await load(true)
     }

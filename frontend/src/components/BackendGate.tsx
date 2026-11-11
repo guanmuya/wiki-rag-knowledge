@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 import { getApiBase, isDesktop, probeBackend, metaApi, SETUP_COMPLETED_EVENT } from '../api'
 import { useAuth } from '../auth'
+import { LOG_EMPTY, LOG_READ_FAILED } from '../shared/messages'
+import { probeFailureHint } from '../shared/userFacingErrors'
 import type { DesktopInfo, StartupFailure } from '../types'
 import { Spinner } from './ui'
 
@@ -12,39 +14,9 @@ interface ProbeState {
   latencyMs: number
 }
 
-/**
- * 本地兜底：主进程没给失败信息时（浏览器模式、探活超时等）按错误串判断。
- * 数组顺序即优先级，具体原因在前、通用兜底在后。
- */
-const FALLBACK_HINTS: Array<{ title: string; action: string; match: RegExp }> = [
-  {
-    title: '连不上后端服务',
-    action: '桌面版请点「重启后端」；浏览器模式请确认 uvicorn 已在 8000 端口启动，然后点「重试连接」。',
-    match: /无法连接|failed to fetch|networkerror|econnrefused/i,
-  },
-  {
-    title: '后端响应太慢',
-    action: '可能正在初始化数据库或处理大批文档。稍等几秒后点「重试连接」。',
-    match: /超时|timeout|abort/i,
-  },
-  {
-    title: '后端返回了错误',
-    action: '后端进程在，但接口报错。点「查看详情」看具体状态码，并把日志发给技术支持。',
-    match: /HTTP \d{3}/i,
-  },
-]
-
-const GENERIC_HINT = {
-  title: '后端服务未就绪',
-  action: '请先点「重试连接」。如果一直失败，点「查看详情」复制日志发给技术支持。',
-}
-
-function fallbackHint(raw: string): { title: string; action: string } {
-  for (const hint of FALLBACK_HINTS) {
-    if (hint.match.test(raw || '')) return { title: hint.title, action: hint.action }
-  }
-  return GENERIC_HINT
-}
+// 本地兜底文案不在这里写：主进程没给失败信息时（浏览器模式、探活超时等），
+// 文案取自 src/shared/userFacingErrors.ts → electron/error-hints.json 的 probe 段，
+// 与主进程的启动失败翻译是同一份表（体检清单 P2-6：改一处，三处同步生效）。
 
 /**
  * 启动门：后端不可用时不要白屏。
@@ -159,9 +131,9 @@ export default function BackendGate({ children }: { children: ReactNode }) {
     if (!isDesktop()) return
     try {
       const text = await window.wrkDesktop?.getLogs()
-      setLogs(text || '（日志为空）')
+      setLogs(text || LOG_EMPTY)
     } catch {
-      setLogs('读取日志失败')
+      setLogs(LOG_READ_FAILED)
     }
   }
 
@@ -169,7 +141,7 @@ export default function BackendGate({ children }: { children: ReactNode }) {
     setLogsLoading(true)
     try {
       const text = logs || (await window.wrkDesktop?.getLogs()) || ''
-      await navigator.clipboard.writeText(text || '（日志为空）')
+      await navigator.clipboard.writeText(text || LOG_EMPTY)
     } catch {
       /* 剪贴板不可用时忽略 */
     } finally {
@@ -203,7 +175,7 @@ export default function BackendGate({ children }: { children: ReactNode }) {
   // 主进程的解释优先（它知道退出码）；没有才用本地兜底
   const headline = failure
     ? { title: failure.title, action: failure.action }
-    : fallbackHint(rawMessage)
+    : probeFailureHint(rawMessage)
   const technicalDetail = failure?.detail || rawMessage
 
   return (

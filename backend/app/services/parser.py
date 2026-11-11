@@ -578,3 +578,44 @@ def parse_document(path: str | Path) -> ParsedDocument:
 
 def sniff_suffix(filename: str) -> str:
     return Path(filename).suffix.lower()
+
+
+# ---------------------------------------------------------------- 内容魔数（P1-8）
+# 扩展名由用户完全控制：把一个可执行文件/压缩包改名成 `.pdf` 就能进库。旧实现
+# 只看扩展名，于是二进制内容被当文本读进分块（`errors="replace"` 不会报错），
+# 答案里出现乱码，这份「文档」还一直占着索引。这里按容器格式校验文件头：
+# **只做否认、不做推断**——认不出就按扩展名的预期报错，既不改名也不猜格式。
+_ZIP_MAGIC = b"PK\x03\x04"
+_MAGIC_RULES: dict[str, tuple[bytes, ...]] = {
+    ".pdf": (b"%PDF-",),
+    # docx / xlsx / pptx 都是 OOXML：本质是一个 ZIP 容器
+    ".docx": (_ZIP_MAGIC,),
+    ".xlsx": (_ZIP_MAGIC,),
+    ".pptx": (_ZIP_MAGIC,),
+}
+_MAGIC_HINT = {
+    ".pdf": "PDF 文件应以 %PDF- 开头",
+    ".docx": "docx 是 ZIP 容器，应以 PK 开头（请用 Word 2007+ 另存为 .docx）",
+    ".xlsx": "xlsx 是 ZIP 容器，应以 PK 开头（请用 Excel 2007+ 另存为 .xlsx）",
+    ".pptx": "pptx 是 ZIP 容器，应以 PK 开头（请用 PowerPoint 2007+ 另存为 .pptx）",
+}
+# 纯文本扩展名只拦「明显是二进制」的内容（前 8KB 出现 NUL 字节），不猜编码：
+# 解析层用 utf-8 + errors="replace" 读，GBK/UTF-16 文本不该因此被拒。
+_BINARY_SUFFIXES = frozenset({".txt", ".md", ".markdown", ".log"})
+_BINARY_SCAN_BYTES = 8192
+
+
+def magic_error(data: bytes, suffix: str) -> str | None:
+    """校验文件内容与扩展名是否相符。
+
+    返回 None 表示相符；否则返回一句可直接展示给用户的中文原因。
+    """
+    suffix = (suffix or "").lower()
+    expected = _MAGIC_RULES.get(suffix)
+    if expected is not None:
+        if any(data.startswith(magic) for magic in expected):
+            return None
+        return f"文件内容与扩展名不符：{_MAGIC_HINT.get(suffix, suffix + ' 的文件头不正确')}"
+    if suffix in _BINARY_SUFFIXES and b"\x00" in data[:_BINARY_SCAN_BYTES]:
+        return f"文件内容像是二进制，与扩展名 {suffix} 不符"
+    return None

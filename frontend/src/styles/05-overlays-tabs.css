@@ -1,0 +1,172 @@
+/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
+
+/* ---------------------------------------------------------------- 11 弹窗 / Toast */
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(17, 24, 39, 0.42);
+  backdrop-filter: blur(3px);
+}
+.modal {
+  background: var(--c-surface);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  max-width: 100%;
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  animation: modal-in 0.16s ease-out;
+}
+@keyframes modal-in { from { opacity: 0; transform: translateY(6px) scale(0.99); } }
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 15px 20px;
+  border-bottom: 1px solid var(--c-hairline);
+}
+.modal-head h3 { font-size: 15px; }
+.modal-body { padding: 20px; overflow-y: auto; }
+.modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 13px 20px;
+  border-top: 1px solid var(--c-hairline);
+  background: var(--c-surface-alt);
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+}
+.confirm-text { font-size: 13px; color: var(--c-text-secondary); line-height: 1.7; }
+
+.toast-stack {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 360px;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: #1b1f2c;
+  color: #f3f4f8;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  box-shadow: var(--shadow-md);
+  animation: toast-in 0.18s ease-out;
+}
+.toast-dot { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; flex: 0 0 6px; }
+.toast-error .toast-dot { background: #dc4c4c; }
+.toast-text { line-height: 1.5; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
+
+/* ---------------------------------------------------------------- 12 Tabs */
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-surface);
+  overflow-x: auto;
+}
+.tab {
+  position: relative;
+  border: none;
+  background: none;
+  padding: 12px 12px 11px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--c-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+.tab:hover { color: var(--c-text); }
+.tab.active { color: var(--c-primary); font-weight: 600; }
+.tab.active::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--c-primary);
+}
+.tab-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  background: var(--c-surface-sunken);
+  color: var(--c-text-muted);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 16px;
+}
+.tab.active .tab-badge { background: var(--c-primary-soft); color: var(--c-primary); }
+
+/* 页签放进卡片里时不要自带底色：卡片本身已是白底，子元素的不透明背景会盖住
+   卡片的圆角，四个角看起来就是方的（模型设置页的页签条就是这样）。
+   也不要让页签条成为滚动容器：.tabs 的 overflow-x: auto 会连带把 overflow-y 算成
+   auto，激活项 2px 下划线（bottom: -1px）多出的 1px 就会挤出一条竖向滚动条，
+   卡片右端因此看起来像一块带滚轮的方块。卡片里的页签不需要横向滚动。 */
+.card > .tabs { background: transparent; overflow: visible; }
+
+/* 卡片 / 表格视图切换：页头里的分段控件。
+   不复用 .tabs —— 页签容器带 overflow-x: auto，放在这里会挤出横竖两条滚动条，
+   激活项的下划线也会被裁掉，看起来像一块没对齐的白色方块。 */
+.view-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  background: var(--c-surface-sunken);
+}
+.view-switch-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--c-text-secondary);
+  font-size: 12.5px;
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.view-switch-item svg { display: block; flex: 0 0 auto; }
+.view-switch-item:not(.active):hover {
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--c-text);
+}
+.view-switch-item.active {
+  background: var(--c-surface);
+  color: var(--c-primary);
+  font-weight: 600;
+  box-shadow: var(--shadow-xs);
+}
+.view-switch-item:focus-visible { box-shadow: var(--ring); color: var(--c-text); }
+.view-switch-item.active:focus-visible { color: var(--c-primary); }
+

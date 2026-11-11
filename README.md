@@ -177,7 +177,8 @@ Wiki-Rag-Knowledge/
 │   │   ├── config.py             # 全部可调参数（环境变量覆盖）
 │   │   ├── main.py               # FastAPI 入口、引导管理员、/api/meta
 │   │   ├── desktop_entry.py      # sidecar 入口：动态端口 + WRK_READY
-│   │   ├── models.py             # 21 张表
+│   │   ├── models.py             # 23 张表（22 个 __tablename__ + migrations 的 schema_migrations）
+│   │   ├── migrations.py         # 老库自愈迁移（schema_migrations 账本，P1-8）
 │   │   ├── db.py                 # 引擎、WAL、老库补列自愈
 │   │   ├── deps.py               # 鉴权、库级授权、审计
 │   │   ├── routers/              # auth setup kbs wiki chat settings agent
@@ -195,7 +196,7 @@ Wiki-Rag-Knowledge/
 │   │   │   └── cost.py           # 成本流水与聚合
 │   │   └── ...
 │   ├── scripts/                  # seed_demo seed_expanded inspect_chunks collect_metrics run_experiments
-│   ├── tests/                    # 42 个 test_*.py + 1 个 conftest.py；基线见 docs/FACTS.md §2
+│   ├── tests/                    # 53 个 test_*.py + 1 个 conftest.py；基线见 docs/FACTS.md §2
 │   └── requirements.txt
 ├── frontend/
 │   ├── electron/main.cjs         # sidecar 生命周期、失败原因翻译、日志
@@ -217,7 +218,8 @@ Wiki-Rag-Knowledge/
 
 ## 5. 配置项
 
-主要可调项集中在 `backend/app/config.py`（38 个 `WRK_*` 环境变量），均可用环境变量覆盖，
+主要可调项集中在 `backend/app/config.py`（`WRK_*` 环境变量，**当前条数以
+[`docs/FACTS.md`](docs/FACTS.md) §1 为准**——本文件不复述具体数字，避免再次漂移），均可用环境变量覆盖，
 默认值即下表「默认」列。另有少数几项由 `backend/app/desktop_entry.py`（`WRK_HOST` / `WRK_PORT` /
 `WRK_WATCH_STDIN` / `WRK_LOG_LEVEL`）、`backend/app/security.py`（`WRK_PBKDF2_ITER`）、
 `backend/app/services/answering.py`（`WRK_SUGGESTION_LIMIT` / `WRK_SUGGESTION_RESOURCE_LIMIT`）

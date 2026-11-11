@@ -18,6 +18,7 @@ import {
   TextInput,
 } from '../components/ui'
 import TaskList from './TaskList'
+import { STOP_REQUESTED } from '../shared/messages'
 
 export default function SettingsTab({
   kb,
@@ -134,7 +135,7 @@ export default function SettingsTab({
   const stopWiki = async (task: Task) => {
     try {
       await taskApi.stopWiki(task.id, task.run_token)
-      onToast('已发送停止请求', 'info')
+      onToast(STOP_REQUESTED, 'info')
     } finally {
       await loadTasks()
       onChanged()

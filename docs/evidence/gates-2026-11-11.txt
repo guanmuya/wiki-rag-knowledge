@@ -4,7 +4,23 @@
 本轮只做仓库治理与归档，不改业务代码，因此要求「五项门禁在本地全部实跑通过」，
 用同一套命令证明治理动作没有碰坏构建与测试。
 
-## 1. 环境
+## 1. 这份记录测的是哪棵树
+
+本文件记录的是 **`origin/master` 合并进本分支之后**的一次实跑：
+
+| 项 | 值 |
+| --- | --- |
+| 本分支合并前 HEAD | `850c9a5`（`docs(repo): archive kanban and screenshots, add delivery files`） |
+| 并入的 `origin/master` | `d2aff27`（PR #57，带入 P1-8 鉴权加固 / P1-10 / P2-6 等） |
+| 合并方式 | `git merge --no-ff origin/master`，**无冲突**；`docs/DESIGN.md`、`frontend/tests/README.md` 为自动合并 |
+
+**为什么要重测**：本批次第一次实跑时（本分支尚未并入 master 的 P1-8），后端基线是
+`673 passed, 1 skipped`；此后 `docs/FACTS.md` §2 的权威基线随 P1-8 变成
+`707 passed, 1 skipped`。若仍保留 673，仓库里就会同时存在「FACTS 说 707、证据说 673」
+的两个数字，而 FACTS 是唯一口径。因此本轮以合并后的树重跑，**只保留这一套数字**，
+初测的 673 记录作废（历史见本分支 `850c9a5` 那一版文件）。
+
+## 2. 环境
 
 | 项 | 本地实跑 | CI（`.github/workflows/ci.yml`） |
 | --- | --- | --- |
@@ -13,42 +29,33 @@
 | Node | 24.18.0 | 22 |
 | pnpm | 12.3.4 | 9 |
 
-> 本地 Node / pnpm 版本高于 CI，属于「本地更严」的方向；若 CI 出现只有本地没有的差异，
-> 以 CI 的 Node 22 + pnpm 9 为准，命令本身与下表一致。
+> 本地 Node / pnpm 版本高于 CI；若 CI 出现只有本地没有的差异，以 CI 的 Node 22 + pnpm 9 为准，
+> 五条命令本身与下表一致。
 
-基线提交：`3187fd2`（本轮改动基于该提交）。
-
-## 2. 逐项结果
+## 3. 逐项结果
 
 | # | 命令（仓库根目录） | 结果 |
 | --- | --- | --- |
-| 1 | `python -m pytest backend/tests -q` | `673 passed, 1 skipped in 192.65s` |
-| 2 | `cd frontend && pnpm check:contract` | 通过：请求体 4 组、枚举 5 组、路由 77 条全覆盖、桌面桥 2 项一致 |
-| 3 | `cd frontend && pnpm typecheck` | 通过：`tsc -b --noEmit`，退出码 0 |
-| 4 | `cd frontend && pnpm build:web` | 通过：`vite v6.4.5`，66 modules，`dist/assets/index-*.js 493.09 kB` |
-| 5 | `cd frontend && pnpm test` | 通过：`tests 5 / pass 5 / fail 0`（离线 E2E，约 4s） |
+| 1 | `python -m pytest backend/tests -q` | **`707 passed, 1 skipped in 221.09s (0:03:41)`** |
+| 2 | `cd frontend && pnpm check:contract` | 通过（退出码 0）：契约 17 组，含「后端 77 条路由，`docs/API.md` 已覆盖」 |
+| 3 | `cd frontend && pnpm typecheck` | 通过（退出码 0）：`tsc -b --noEmit` |
+| 4 | `cd frontend && pnpm build:web` | 通过（退出码 0）：`vite v6.4.5`，90 modules，`index-GkBxTW7I.js 502.04 kB` |
+| 5 | `cd frontend && pnpm test` | 通过（退出码 0）：`tests 10 / pass 10 / fail 0`，2 个套件（主链路 E2E + 失败文案单一来源） |
 
-第 1 项与 `docs/FACTS.md` §2 的基线口径完全一致（`673 passed, 1 skipped`），
-说明本轮归档没有让任何测试失效或跳过。第 1 项的全量 stdout 未另存
-（基线全文见 [`pytest-baseline.txt`](pytest-baseline.txt)），其余四项的真实输出见下节。
+与权威口径核对：第 1 项的 **`707 passed, 1 skipped`** 与 `docs/FACTS.md` §2 完全一致；
+用例套（53 个 `test_*.py`）也没有因为本轮归档移动而失效或跳过。第 1 项与
+[`pytest-baseline.txt`](pytest-baseline.txt) 是**两次不同的运行**（同一套用例：那边
+`243.49s`、这边 `221.09s`，计数相同），本文件不重复粘贴全量 stdout。
 
-## 3. 第 2–5 项的真实输出
+## 4. 第 2–5 项的真实输出
 
-> 说明：每段开头的 `pnpm.exe : $ ...` 与 `+ CategoryInfo ... RemoteException` 是
-> Windows PowerShell 把 pnpm 自己回显的命令行（走 stderr）当成错误记录显示，**不是失败**。
-> 四条命令的退出码都是 0（见 §2 表）。
+> 说明：每段开头的 `pnpm.exe : $ ...` 是 pnpm 自己回显的命令行（走 stderr）；
+> 在 Windows PowerShell 里它会被显示成错误记录（`CategoryInfo` / `RemoteException`），
+> **不是失败**。四条命令的退出码都是 0（见 §3）。
 
-
-### 2) pnpm check:contract
+### 2) `pnpm check:contract`
 
 ```
-pnpm.exe : $ node scripts/check-api-contract.mjs
-At C:\Users\Administrator\AppData\Roaming\npm\pnpm.ps1:14 char:3
-+   & "$basedir/node_modules/pnpm/pnpm.exe"   $args
-+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : NotSpecified: ($ node scripts/check-api-contract.mjs:String) [], RemoteException
-    + FullyQualifiedErrorId : NativeCommandError
- 
 契约校验通过（17 组）：
   - [请求体] SetupStatus ↔ SetupStatusOut（4 字段）
   - [请求体] SetupAdminPayload ↔ SetupAdminIn（4 字段）
@@ -69,62 +76,58 @@ At C:\Users\Administrator\AppData\Roaming\npm\pnpm.ps1:14 char:3
   - [桌面桥] main.cjs 的 wrk:info ↔ DesktopInfo（14 个字段）
 ```
 
-### 3) pnpm typecheck
+### 3) `pnpm typecheck`
 
 ```
-pnpm.exe : $ tsc -b --noEmit
-At C:\Users\Administrator\AppData\Roaming\npm\pnpm.ps1:14 char:3
-+   & "$basedir/node_modules/pnpm/pnpm.exe"   $args
-+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : NotSpecified: ($ tsc -b --noEmit:String) [], RemoteException
-    + FullyQualifiedErrorId : NativeCommandError
- 
+$ tsc -b --noEmit
+（无输出，退出码 0）
 ```
 
-### 4) pnpm build:web
+### 4) `pnpm build:web`
 
 ```
-pnpm.exe : $ tsc -b && vite build
-At C:\Users\Administrator\AppData\Roaming\npm\pnpm.ps1:14 char:3
-+   & "$basedir/node_modules/pnpm/pnpm.exe"   $args
-+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : NotSpecified: ($ tsc -b && vite build:String) [], RemoteException
-    + FullyQualifiedErrorId : NativeCommandError
- 
 vite v6.4.5 building for production...
 transforming...
-✓ 66 modules transformed.
+✓ 90 modules transformed.
 rendering chunks...
 computing gzip size...
 dist/index.html                   2.09 kB │ gzip:   1.32 kB
 dist/assets/index-ufMAgdvt.css   64.97 kB │ gzip:  12.55 kB
-dist/assets/index-DbgVZp60.js   493.09 kB │ gzip: 152.57 kB
-✓ built in 988ms
+dist/assets/index-GkBxTW7I.js   502.04 kB │ gzip: 156.31 kB
+✓ built in 1.01s
 ```
 
-### 5) pnpm test
+### 5) `pnpm test`
 
 ```
-pnpm.exe : $ node --test tests/e2e.test.mjs
-At C:\Users\Administrator\AppData\Roaming\npm\pnpm.ps1:14 char:3
-+   & "$basedir/node_modules/pnpm/pnpm.exe"   $args
-+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : NotSpecified: ($ node --test tests/e2e.test.mjs:String) [], RemoteException
-    + FullyQualifiedErrorId : NativeCommandError
- 
+$ node --test tests/e2e.test.mjs tests/error-hints.test.mjs
 ▶ 前端主链路 E2E（离线、可重复、纳入 CI）
-  ✔ 未登录访问业务页被送回登录页 (1286.6872ms)
-  ✔ 带有效令牌访问业务页：恢复登录态，不被送回登录页 (275.2827ms)
-  ✔ 登录凭据错误：停留在登录页并显示服务端错误 (337.2787ms)
-  ✔ 登录 → 新建知识库 → 智能问答收到回答 (869.1527ms)
-  ✔ 页面渲染异常时显示兜底页而不是白屏，且能从兜底页恢复 (423.3704ms)
-✔ 前端主链路 E2E（离线、可重复、纳入 CI） (3542.2843ms)
-ℹ tests 5
-ℹ suites 1
-ℹ pass 5
+  ✔ 未登录访问业务页被送回登录页 (1346.2397ms)
+  ✔ 带有效令牌访问业务页：恢复登录态，不被送回登录页 (293.795ms)
+  ✔ 登录凭据错误：停留在登录页并显示服务端错误 (344.621ms)
+  ✔ 登录 → 新建知识库 → 智能问答收到回答 (906.247ms)
+  ✔ 页面渲染异常时显示兜底页而不是白屏，且能从兜底页恢复 (556.1651ms)
+✔ 前端主链路 E2E（离线、可重复、纳入 CI） (3855.1659ms)
+▶ 失败文案单一来源（P2-6）
+  ✔ 文案表结构完整：三段都有规则与兜底，id 唯一，正则都能编译 (0.6864ms)
+  ✔ 后端启动失败：六类原始串各命中对应规则，顺序为「先具体后兜底」 (0.4381ms)
+  ✔ 更新失败：四类原始串各命中对应提示，原始串也没有时用兜底 (0.2715ms)
+  ✔ 渲染进程读同一份表：src/shared/userFacingErrors.ts 直接 import 该 JSON (0.924ms)
+  ✔ 源码里没有第二份文案副本（src 与 electron 下只允许出现一次） (40.8088ms)
+✔ 失败文案单一来源（P2-6） (43.9988ms)
+ℹ tests 10
+ℹ suites 2
+ℹ pass 10
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 4140.3848
+ℹ duration_ms 4463.7839
 ```
+
+## 5. 合并后仍需注意的两点
+
+1. **CI 未重跑**：上述结果来自本机（Node 24 / pnpm 12），远端 GitHub Actions 的对应运行
+   在 PR 更新后由 CI 自身产出，**此处标「远端待验」**，不填推测结论。
+2. 合并只带来了**别人分支的代码与文档**，本轮自身改动仍是「归档 + 文档 + 脚本迁移」，
+   没有触碰 `frontend/src/**` 与 `backend/app/**` 的业务实现。

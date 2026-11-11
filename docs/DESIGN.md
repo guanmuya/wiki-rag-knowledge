@@ -202,6 +202,8 @@ Map 调用本身是 `TOPIC_PROMPT`：`max_topics = MAX_TOPICS = 12`、`temperatu
 
 实现上三处保守取舍：只处理「加列」，改类型、加约束、删列等破坏性变更不自动做（宁可启动报错让人工迁移，也不静默改坏数据）；按 SQLite 的 `ADD COLUMN` 限制生成 DDL（不能 UNIQUE、不能非空无默认值、默认值不能是表达式），`callable` 默认值如 `default=utcnow` 直接丢弃交给运行时；单列失败只 `log.warning` 不中断，返回实际补上的 `"表.列"` 列表供测试断言。
 
+**版本账本与回退（P1-8）。** 补列自愈能跑，但原先既不可追溯也不可回退：升级完不知道用户那个库到底是哪一版 schema，补错了也没有记录能说明怎么退。现在每步迁移都记进 `schema_migrations`（`app/migrations.py`）：`version`（基线 = 1，之后每补一列 +1）、`kind`、`name`、**执行的确切 DDL**、**可逆 DDL**、`applied_at`。老库第一次升级时账本是空的，先补记一行 `baseline`，再记之后的补列步骤，于是「这台机器补过什么」有据可查。`migrations.downgrade(bind, target)` 按版本逆序执行可逆 DDL（`ALTER TABLE … DROP COLUMN`，SQLite 3.35+）并删掉对应记录；**没有可逆 DDL 的步骤拒绝回退并抛 `MigrationError`**，不做「猜着删数据」的操作。账本写在独立表里（原始 SQL 建表），不进 `Base.metadata`，因此 `create_all()` 的语义不被它牵连；账本写不进去只告警，绝不让升级本身失败。仍不引入 alembic：桌面版不希望多一个外部工具依赖，而当前只有「加列」一种自动变更，账本这种最小实现已经覆盖「版本号 + 可追溯 + 可回退」。
+
 ### 4.5 写事务边界与事件循环（任务处理时为什么不能卡住整个应用）
 
 这条流水线跑在 **API 进程内部**的 worker 线程里，所以它做的任何「慢事」都可能被用户看见。
@@ -424,6 +426,20 @@ Message.content          回答正文，结论后带 [编号]
 **提问时的库过滤是白名单不是黑名单**。`chat._allowed_kbs()` 遍历请求的 `kb_ids` 逐个判定，无权限的进 `denied` 并附原因（「没有该知识库的访问权限」），而不是静默丢弃。`ask` 与 `search/preview` 都在 `denied` 非空时把它带回响应，前端弹 toast。理由很实际：用户选了三个库只搜到两个库的结果，不告知就会误判「另一个库没有这条资料」。
 
 **至少保留一个管理员**。`auth._ensure_admin_remains()` 在停用或降级管理员前统计其他活跃管理员，`count < 1` 时返回 400。`DELETE /api/users/{id}` 是软删除（置 `disabled`），且不能停用自己。`deps.audit()` 把 `user_id`、`username`、`action`、`target`、`detail` 写进 `AuditLog`，登录、建用户、改授权、重建索引、重试任务、探测供应商、切换 Embedding 都留痕。
+
+### 9.1 边界加固（P1-8）
+
+四处「原本以为做了、其实没做」的边界，现在都由后端兜住：
+
+**强制初始口令修改**。`User.must_change_password=true` 时后端只放行三条自助路径——`/api/auth/me`、`/api/auth/change-password`、`/api/auth/logout`，其余一律 403「请先修改初始密码」（`deps.PASSWORD_CHANGE_ALLOWED_PATHS` 是最短白名单）。以前这个字段只写库、只给前端看，绕过前端直接打 API 就能拿初始口令办事，等于管理员下发的初始口令长期有效。改密后仍然走 P1-6 的令牌版本递增，旧令牌立刻失效。
+
+**登录失败限流**。`services/login_guard.py` 在两个维度计数：账号维度默认 5 次 / 15 分钟、来源维度 20 次 / 15 分钟，达到阈值锁 15 分钟（`config.LOGIN_*` 可调）。锁定期间**连密码正确也返回 429**——否则限流只是把试错变慢，攻击者仍能拿到「密码对不对」的信号。计数只在进程内存里：登录是无会话的写路径，不该为它多一次写锁，且进程重启即清零正好让误锁可恢复；代价是多进程部署各进程独立计数、重启清零。失败与拦截都写审计（`login_failed` / `login_blocked`）。
+
+**上传内容与扩展名一致**。扩展名是用户可以随手改的，只按扩展名收文件等于让任意二进制进索引。`parser.magic_error()` 校验文件头：PDF 必须 `%PDF-`，docx/xlsx/pptx 必须是 OOXML 的 ZIP 容器（`PK\x03\x04`），纯文本扩展名（.txt/.md/.markdown/.log）拦「前 8KB 出现 NUL」的二进制内容。只做否认不做推断：认不出就按扩展名的预期报错，不改名、不猜格式；批量上传与「上传新版本」两条路径共用同一条规则。
+
+**密钥文件权限**。`os.chmod(0o600)` 在 Windows 上只改只读位、不设 ACL，等于什么也没做。现在按平台分开：POSIX 文件 0600 / 目录 0700；Windows 用系统自带 `icacls` 去掉 ACL 继承，只授权「当前账号 + Administrators（`*S-1-5-32-544`）+ SYSTEM（`*S-1-5-18`）」。不写成「只授当前账号」是刻意的：管理员与系统进程要能做备份/扫描，而把 Administrators 排除掉会让「换个账号运行桌面版」直接读不到密钥。失败只记告警不抛异常（读不到密钥比权限没收紧更糟），原因留在 `security.hardening_status()`，`/api/diagnostics/process` 可见；`WRK_HARDEN_SECRETS=0` 可整体关掉。
+
+**看门狗不再静默**。`services/watchdog.py` 原先满屏 `except Exception: pass`，日志轮转失败（Windows 上杀软/编辑器握着句柄就会失败）会让日志无限增长且无人知晓。现在所有分支都经过 `_ignore()`（debug 级，正常运行时近零成本），轮转失败额外一条 WARNING 并写进 `status()["log_rotation"]`（时间 + 原因），恢复正常后自动清空；`tests/test_watchdog_logging.py` 用 AST 检查防止 `except … : pass` 被加回来。
 
 ---
 

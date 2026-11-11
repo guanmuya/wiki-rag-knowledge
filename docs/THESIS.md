@@ -43,7 +43,7 @@
 
 ```
 Electron 33（外壳）  →  Python 3.13 + FastAPI（sidecar）  →  SQLite + 本地文件
-   窗口/菜单/日志          路由·检索·生成·任务队列              21 张表 + 原文副本
+   窗口/菜单/日志          路由·检索·生成·任务队列              23 张表 + 原文副本
 ```
 
 | 层 | 关键实现 | 职责边界 |
@@ -61,7 +61,8 @@ Electron 33（外壳）  →  Python 3.13 + FastAPI（sidecar）  →  SQLite + 
 
 ### 2.2 数据模型
 
-21 张表（`backend/app/models.py` 的 21 个 `__tablename__`），四组：
+23 张表（`backend/app/models.py` 的 22 个 `__tablename__` + `backend/app/migrations.py` 用原始 SQL 建的
+`schema_migrations` 账本），四组：
 
 | 组 | 表 | 关键字段 |
 | --- | --- | --- |
