@@ -34,6 +34,9 @@
   补齐 `LICENSE` / `CHANGELOG` / `CONTRIBUTING` / `.editorconfig`；清理文档与构建提示里写死的开发机路径
 - **删除一处纯重复副本**：`scripts/dev-only/legacy/frontend-ui_check.mjs`（当年 `frontend/ui_check.mjs` 的字节级重复副本，
   与现役 `scripts/dev-only/ui_check.mjs` 逻辑一致、无人引用），经确认后 `git rm`；历史截图**全部保留**，不做删除
+- **文档口径收尾**：`docs/FACTS.md` 的可调项条数按代码重数并订正（原值与它自己的算式对不上），
+  并补上可复现的数法与旧数字扫查登记；命令、输出与逐条命中见 `docs/evidence/wrk-count-2026-11-11.txt`。
+  本轮只改文档，`docs/archive/**` 与代码零改动
 
 ---
 

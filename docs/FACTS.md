@@ -32,15 +32,19 @@
 | Worker 并发 | **1** | `backend/app/config.py` 的 `WORKER_CONCURRENCY`（`WRK_WORKER_CONCURRENCY` 默认 `"1"`） | `2`（5 份文档） |
 | SQLite 写锁等待 | **三档 3s / 30s / 1s**（见 §1.1） | `backend/app/config.py` 的 `BUSY_TIMEOUT_INTERACTIVE` / `BUSY_TIMEOUT_WORKER` / `BUSY_TIMEOUT_PROGRESS` | 一刀切 `busy_timeout=15000`；DESIGN.md §4.5 又写 `3s` |
 | 拿不到锁的重试次数 | `5`（`WRK_LOCK_RETRY_ATTEMPTS`，兼容别名 `WRK_LOCK_RETRY`） | `backend/app/config.py` 的 `LOCK_RETRY_ATTEMPTS` | 未进文档 |
-| 可调项 | `config.py` 中 **41 个 `WRK_*`** 环境变量（另有若干由 `desktop_entry.py` / `security.py` / `answering.py` 读取） | `backend/app/config.py` | 本表旧口径 38 个；README §5 漏列 11 个（见 §1.2） |
-| 后端测试基线 | **707 passed, 1 skipped**（见 §2） | 合并 `origin/master` 后本机实跑，原始输出 `docs/evidence/pytest-baseline.txt`；CI 待验（§2.1） | 六份文档 8 个互不相同的数字 |
+| 可调项 | `config.py` 中 **43 个 `WRK_*`** 环境变量（另有若干由 `desktop_entry.py` / `security.py` / `answering.py` 读取） | `backend/app/config.py`；数法与复现命令见 §1.3 | 本表旧口径 38 个；批次三（P1-8）把它写成 41（算式给的是 38 + 5 = 43，属笔误，见下方注）；README §5 漏列 11 个（见 §1.2） |
+| 后端测试基线 | **707 passed, 1 skipped**（见 §2） | 合并 `origin/master` 后本机实跑，原始输出 `docs/evidence/pytest-baseline.txt`；CI 状态见 §2.1 | 六份文档 8 个互不相同的数字 |
 
-> 表里「当前值」一列在本轮（批次三 P1-8）逐条回查代码确认；D1–D7 的结论在代码里**仍然成立**
-> （`backend/app/config.py` 的 `WORKER_CONCURRENCY` 仍是 `1`、`BUSY_TIMEOUT_*` 仍是三档，
-> `backend/app/main.py` 的 `VERSION` 仍是 `1.0.17`）。
-> 两处旧口径本轮按代码订正：`models.py` 实际是 **22** 个 `__tablename__`（旧写 21，少算 1 张），
-> 加上 P1-8 新增的 `schema_migrations` 共 **23** 张；`config.py` 实际是 **41** 个 `WRK_*`
-> （旧写 38；本轮新增 4 个 `WRK_LOGIN_*` 与 `WRK_HARDEN_SECRETS`，见 §1.2）。
+> 表里「当前值」一列在批次三（P1-8）逐条回查代码确认，批次五（文档口径收尾）又按代码重数了
+> 可调项条数；D1–D7 的结论在代码里**仍然成立**（`backend/app/config.py` 的
+> `WORKER_CONCURRENCY` 仍是 `1`、`BUSY_TIMEOUT_*` 仍是三档，`backend/app/main.py` 的
+> `VERSION` 仍是 `1.0.17`）。
+> 两处旧口径按代码订正：`models.py` 实际是 **22** 个 `__tablename__`（旧写 21，少算 1 张），
+> 加上 P1-8 新增的 `schema_migrations` 共 **23** 张；`config.py` 实际是 **43** 个 `WRK_*`
+> （旧写 38；P1-8 新增 4 个 `WRK_LOGIN_*` 与 `WRK_HARDEN_SECRETS`，38 + 5 = 43，清单见 §1.2）。
+> **批次三写的 41 是算式笔误、不是后来又漏了两项**：它在同一段里写的是「38 + 5」，
+> 结果却落成 41，与 §1.2 的清单和代码都对不上；批次五用 §1.3 的命令重数得到 **43**，
+> 命令与输出记在 `docs/evidence/wrk-count-2026-11-11.txt`。其余文档从此不再复述这个条数。
 > `README.md` 目录树注释与 `docs/THESIS.md` §2.1 / §2.2 原本写着「21 张表」，已在批次四
 > （P2 仓库治理）按本节订正为 **23 张表**（`models.py` 的 22 个 + `migrations.py` 的
 > `schema_migrations`）；`THESIS.md` §4 是实验结果，按仓库约定不动。
@@ -58,6 +62,8 @@
 **`docs/DESIGN.md` 原先 §1.2 写 `15000` / `2`、§4.5 写 `3s`，两处已统一到本表口径。**
 
 ### 1.2 环境变量清单（D6 补齐的 11 项 + P1-8 新增 5 项）
+
+本节只列**当时补齐与新增**的部分，不是 `config.py` 的全部 `WRK_*`——43 项的完整清单与数法见 §1.3。
 
 | 环境变量 | 默认 | 对应 `config.py` 符号 |
 | --- | --- | --- |
@@ -87,12 +93,33 @@
 900 秒；锁定期间即使密码正确也返回 429（联调时别把它当登录失败排查，响应头带 `Retry-After`）。
 `WRK_HARDEN_SECRETS=0` 关掉密钥文件/目录的权限收紧（POSIX 0600/0700、Windows `icacls`），
 关掉不影响密钥本身可用，只是不再改权限。这 5 项都在 `backend/app/config.py`，与上表 11 项同源，
-因此计入 §1「可调项 41 个」。
+因此计入 §1「可调项 **43 个**」（数法与复现命令见 §1.3）。
 
 另需更正 README §5 的一句总述：`WRK_HOST` / `WRK_PORT` / `WRK_WATCH_STDIN` / `WRK_LOG_LEVEL`
 在 `backend/app/desktop_entry.py`，`WRK_PBKDF2_ITER` 在 `backend/app/security.py`，
 `WRK_SUGGESTION_LIMIT` / `WRK_SUGGESTION_RESOURCE_LIMIT` 在 `backend/app/services/answering.py`，
 `WRK_PACKAGED` 由 Electron 主进程注入——它们不在 `config.py` 里。
+
+### 1.3 可调项条数的数法（可复现）
+
+条数不靠人工点、也不信任何一份文档的现成数字，用下面这条命令数。仓库根目录执行
+（Python 3.13，无第三方依赖）：
+
+```bash
+python -c "import re,pathlib;print(len(set(re.findall(r'\bWRK_[A-Z0-9_]+\b', pathlib.Path('backend/app/config.py').read_text(encoding='utf-8')))))"
+```
+
+输出 **`43`**。两个口径交叉校验一致：只数 `os.getenv("WRK_...")` 的实参同样得 `43`，
+且两个集合完全重合——43 个名字**全部**真的被 `os.getenv` 读取，没有「只在注释里出现」的幽灵项。
+其中 `WRK_LOCK_RETRY` 是 `WRK_LOCK_RETRY_ATTEMPTS` 的兼容别名（同一处 `os.getenv` 的外层与内层，
+见 `config.py` 的 `LOCK_RETRY_ATTEMPTS`），按「一个环境变量名算一项」计入。
+
+**口径边界**：只数 `backend/app/config.py` 里的 `WRK_*`。`desktop_entry.py` / `security.py` /
+`answering.py` 读的那 8 个（上一段列出的 `WRK_HOST`、`WRK_PORT`、`WRK_WATCH_STDIN`、
+`WRK_LOG_LEVEL`、`WRK_PBKDF2_ITER`、`WRK_SUGGESTION_LIMIT`、`WRK_SUGGESTION_RESOURCE_LIMIT`、
+`WRK_PACKAGED`）**不计入** 43——它们在别的文件里，改动节奏与 `config.py` 不同。
+命令、输出、43 个名字的完整清单与两种数法的对照，都记在
+`docs/evidence/wrk-count-2026-11-11.txt`。
 
 ---
 
@@ -119,13 +146,15 @@
 | 当前基线 | **`707 passed, 1 skipped`** |
 | 本次实测 | 合并 `origin/master`（带入 P1-5 / P1-10）后的本分支工作区，`707 passed, 1 skipped in 243.49s (0:04:03)` |
 | 独立佐证 | 上一版 `673` 有 `docs/PR42_FIX_REPORT.md` §验收表的独立记录；本轮在它之上新增 34 条用例（`462 → 496` 个 `def test_`、`47 → 53` 个测试文件），`673 + 34 = 707` 与 §2.3 的分解数字自洽，可用该节的三条命令复核 |
-| CI 状态 | **待验**：产出本基线的合并提交还没有 CI 运行（PR 触发后按 §2.4 第 3 条用 artifact 覆盖本行与 §2.2） |
+| CI 状态 | **CI 已通过、artifact 未取**：产出本基线的那棵树随 PR #58 并入 `master` 后，`master@26503ec` 的 push 运行是 **CI #33（run `42947552959`）completed/success**，作业「后端测试 + 前端类型检查、构建与自动化测试」completed/success，五个检查步骤（全量后端测试、契约一致性、前端类型检查、前端 Web 构建、前端自动化测试）逐项 success。本机取不到该 run 的 `pytest-baseline` artifact，所以**本行不引用 CI 里的计数**，§2.2 的转录仍是本机实跑；能取到 artifact 时按 §2.4 第 3 条覆盖本行与 §2.2 |
 
-> **为什么这次记的是本机数字，而不是 CI artifact**：§2.4 第 3 条要求从 CI artifact 取数，
-> 但本次改动是**合并 `origin/master` 之后**的树（master 带进来 P1-5 / P1-10 的前端与契约校验改动），
-> 这棵树还没有任何 CI 运行，也就没有对应的 artifact。按「拿不到远端结果就写待验、并给出本机
-> 等价证据」的口径，这里先落本机实跑、把 CI 明确标为待验；PR 的 CI 跑完后按第 3 条用 artifact
-> 覆盖本行与 §2.2。
+> **为什么这里记的是本机数字，而不是 CI artifact**：§2.4 第 3 条要求从 CI artifact 取数，
+> 但这次落盘的本机实跑是**合并 `origin/master` 之后**的树（master 带进来 P1-5 / P1-10 的前端
+> 与契约校验改动），当时这棵树还没有任何 CI 运行、也就没有对应的 artifact。按「拿不到远端结果
+> 就写待验、并给出本机等价证据」的口径，先落本机实跑并把 CI 标为待验。
+> **2026-11-11 更新**：这棵树已随 PR #58 并入 `master`，`master@26503ec` 的 CI #33 全绿
+> （见上表「CI 状态」）；但本机取不到它的 artifact，所以 §2.2 仍以本机实跑为准，等能取到 artifact
+> 时再按第 3 条覆盖。
 >
 > 本机与 CI 在同一提交上的历史一致性可以支撑「本机等价证据」这个说法：上一版基线（`638`）时，
 > CI #14（run `42860672282`，job `129985607428`）的 artifact 与本机在同一提交 `350009c` 上的复跑
@@ -283,3 +312,37 @@
 - **不改产品代码**（`backend/app/**`、`frontend/**`）；本波只动文档与新增证据/归档文件。
 - 不清理写死的本机路径、`.dsh-kanban.json`、截图等 P2 项；这些仍在
   `docs/HEALTH_CHECK.md` §4.3 的清单里，可在答辩准备阶段并行处理。
+
+---
+
+## 6. 旧数字扫查（2026-11-11 收尾）
+
+批次五（文档口径收尾）在核准可调项条数的同时，把**已被取代的旧口径**在非归档文档里扫了一遍。
+判据两条：**当前事实**必须与本文件一致；**历史语境下的正确值**（当时的实测快照、当时的交付报告、
+归档证据）保持原样，只在本节登记。扫查命令、逐条命中与判断依据见
+`docs/evidence/wrk-count-2026-11-11.txt` §4。
+
+### 6.1 本轮已订正
+
+| 位置 | 旧值 | 现值 | 说明 |
+| --- | --- | --- | --- |
+| 本文件 §1「可调项」、§1.2 末段 | `41 个 WRK_*` | **43 个** | `38 + 5 = 43`；41 是批次三的算式笔误，§1.3 的命令可复现 |
+| `README.md` 目录树里测试目录的注释 | `53 个 test_*.py + 1 个 conftest.py` | 改为指向 §2，不复述条数 | 文件数属于 §2 的分解数字，按 §2.4 第 1、6 条只该出现在 §2 |
+
+### 6.2 扫到的旧数字，按「历史语境」保留
+
+| 位置 | 旧数字 | 为什么不动 |
+| --- | --- | --- |
+| `docs/HEALTH_CHECK.md` §2、§3.1、§3.2（D4 / D6）、§4.1（P0-3）、§5.3 | `583 passed`、`21 张表` / `21 个 __tablename__`、`38 个 WRK_*`、`42 个测试文件` | 体检当时（P0 批次）的实测与读数；§2.5 已声明属历史记录、不回改。它的价值恰恰是「当时是什么样」 |
+| `docs/PR42_FIX_REPORT.md` §三「逐项验证结果」及其后的合并复核 | `618 / 673 passed`、「四项检查」 | 该任务的点对点交付报告，记的是它自己那一轮的验收；§2.1 已把它当作上一版基线的独立佐证引用 |
+| `docs/archive/**`（含 `HANDOFF_HISTORY.md`） | `59 / 82 / 89 / 93 / 157 / 171 / 192 / 200 passed`、`WORKER_CONCURRENCY = 2`、`busy_timeout=15000` | 归档即历史证据；`docs/archive/README.md` 与 `HANDOFF_HISTORY.md` 文件头已声明「当时读数，不是当前值」 |
+| 本文件 §0、§2.3、§2.5 | `21 张`、`583`、`638`、`673` | 它们是「旧口径是什么、怎么被取代」的追溯记录；§2 正是全仓唯一允许出现基线数字的地方（§2.4 第 1 条） |
+
+### 6.3 复核结论
+
+- 除本文件自身与上表的「历史语境」外，仓库里**不再有**把 `583` / `638` / `673` 当作当前基线的表述，
+  也没有 `21 张表` / `38 个 WRK_` / `41 个 WRK_` 的现行口径。
+- `README.md`、`docs/DESIGN.md`、`docs/EXPERIMENT.md`、`docs/THESIS.md`、`docs/HANDOFF.md`、
+  `docs/API.md` 六份文档对版本、表数、并发、锁超时、测试基线一律只放链接，未复述数字；
+  `CHANGELOG.md` 与 `CONTRIBUTING.md` 同样只写指向（两者已复核为真）。
+- 本轮**只改文档**：`backend/**`、`frontend/**`、`.github/**` 零改动，`docs/archive/**` 零改动。

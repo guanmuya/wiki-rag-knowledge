@@ -92,6 +92,7 @@ PYTHONIOENCODING=utf-8 python backend/scripts/inspect_chunks.py
 | `docs/THESIS.md` | 论文可复用章节素材（§4 为实验方法与结果） |
 | `docs/results/` | 第一波实验原始数据、汇总表、数据字典与复现命令 |
 | `docs/evidence/pytest-baseline.txt` | 测试基线一次真实运行的完整 stdout |
+| `docs/evidence/` 下另两份 | `gates-2026-11-11.txt`：五项门禁本地实跑记录；`wrk-count-2026-11-11.txt`：`WRK_*` 可调项条数核准与旧数字扫查 |
 | `docs/AGENT_PLUGINS.md` / `docs/UPDATE.md` | 个人 Agent 插件规范 / 自动更新发版流程 |
 
 ---

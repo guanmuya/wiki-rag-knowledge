@@ -196,7 +196,7 @@ Wiki-Rag-Knowledge/
 │   │   │   └── cost.py           # 成本流水与聚合
 │   │   └── ...
 │   ├── scripts/                  # seed_demo seed_expanded inspect_chunks collect_metrics run_experiments
-│   ├── tests/                    # 53 个 test_*.py + 1 个 conftest.py；基线见 docs/FACTS.md §2
+│   ├── tests/                    # 后端测试（文件数、用例数与基线见 docs/FACTS.md §2）
 │   └── requirements.txt
 ├── frontend/
 │   ├── electron/main.cjs         # sidecar 生命周期、失败原因翻译、日志
