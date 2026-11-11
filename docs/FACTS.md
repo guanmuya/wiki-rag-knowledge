@@ -27,7 +27,7 @@
 
 | 项 | 当前值 | 代码依据（文件 + 符号名） | 体检前被写成 |
 | --- | --- | --- | --- |
-| 应用版本 | `1.0.18` | `backend/app/main.py` 的 `VERSION`；`frontend/package.json` 的 `version` | THESIS.md `1.0.0`、HANDOFF.md 首屏 `v1.0.10` |
+| 应用版本 | `1.0.19` | `backend/app/main.py` 的 `VERSION`；`frontend/package.json` 的 `version` | THESIS.md `1.0.0`、HANDOFF.md 首屏 `v1.0.10` |
 | 数据表数量 | **24 张**：`models.py` 声明 23 张 + `schema_migrations` 1 张 | `backend/app/models.py` 的 23 个 `__tablename__`；`backend/app/migrations.py` 的 `_CREATE_TABLE`（原始 SQL 建表，**不进** `Base.metadata`，所以 `create_all()` 不建它）。数法与输出见 `docs/evidence/table-count-2026-11-11.txt` | THESIS.md 19 张；本表旧口径 21 张（`models.py` 实际是 22 张，漏算 1 张，见下方注） |
 | Worker 并发 | **1** | `backend/app/config.py` 的 `WORKER_CONCURRENCY`（`WRK_WORKER_CONCURRENCY` 默认 `"1"`） | `2`（5 份文档） |
 | SQLite 写锁等待 | **三档 3s / 30s / 1s**（见 §1.1） | `backend/app/config.py` 的 `BUSY_TIMEOUT_INTERACTIVE` / `BUSY_TIMEOUT_WORKER` / `BUSY_TIMEOUT_PROGRESS` | 一刀切 `busy_timeout=15000`；DESIGN.md §4.5 又写 `3s` |
@@ -38,7 +38,7 @@
 > 表里「当前值」一列在批次三（P1-8）逐条回查代码确认，批次五（文档口径收尾）又按代码重数了
 > 可调项条数；D1–D7 的结论在代码里**仍然成立**（`backend/app/config.py` 的
 > `WORKER_CONCURRENCY` 仍是 `1`、`BUSY_TIMEOUT_*` 仍是三档，`backend/app/main.py` 的
-> `VERSION` 已随发版递增到 `1.0.18`，与 §1 表内「应用版本」一致）。
+> `VERSION` 已随发版递增到 `1.0.19`，与 §1 表内「应用版本」一致）。
 > 两处旧口径按代码订正：`models.py` 实际是 **22** 个 `__tablename__`（旧写 21，少算 1 张），
 > 加上 P1-8 新增的 `schema_migrations` 共 **23** 张；P1-11 又新增 `model_prices` 1 张，
 > 现为 **24 张**（§1 表内已更新，重数命令与输出见
@@ -146,7 +146,7 @@ python -c "import re,pathlib;print(len(set(re.findall(r'\bWRK_[A-Z0-9_]+\b', pat
 | 命令 | `python -m pytest backend/tests -q` |
 | 工作目录 | 仓库根目录 |
 | 权威环境（CI） | `windows-latest`、Python 3.13.x、依赖来自 `backend/requirements-dev.txt` + `backend/constraints.txt` |
-| 本次实测环境 | Windows 11（10.0.26200）、Python 3.13.11、pytest 9.2.0、全局解释器（当前 checkout 无 `.venv`） |
+| 本次实测环境 | Windows 11（10.0.26200）、Python 3.13.11、pytest 9.2.0、全局解释器（记录这次基线时 checkout 无 `.venv`；v1.0.19 发版门禁在重建的仓库根 `.venv` 上整跑，依赖同一套锁定文件，计数相同，见 `docs/evidence/release-v1.0.19-build.txt` §3） |
 | 数据隔离 | `backend/tests/conftest.py` 用独立临时目录并关闭 Worker 与预热，不污染 `data/` |
 | 当前基线 | **`775 passed, 1 skipped`** |
 | 本次实测 | 合并 `origin/master`（带入 P1-11 的用量入统计与模型参考价、`offline_llm` 离线夹具、个人 Agent 页面改造）并完成「个人 Agent 改用应用独立 Codex 配置」后的本分支工作区，`775 passed, 1 skipped in 208.54s (0:03:28)` |
@@ -410,3 +410,15 @@ P1-11 改动 `backend/**`，同时让两个口径发生变化：数据表 `23 �
 的基线数字（分解数字按 §2.4 第 6 条一起重算），并把 `docs/evidence/pytest-baseline.txt`
 换成这次实跑的原文。数据表数量、`WRK_*` 条数等其它口径本轮未变，§6.4 的
 `707 → 754` 与 `23 → 24 张表` 记录保持原样，属历史语境。
+
+### 6.6 v1.0.19 发版（2026-11-11）追加订正
+
+本轮只做发版：版本号 `1.0.18 → 1.0.19`，本文件只订正 §1「应用版本」一行与紧随其后的注记
+（`VERSION` 递增到 `1.0.19`）。**其余口径一律未变**——数据表仍是 **24 张**、`WRK_*` 仍是 **43 个**、
+后端测试基线仍是 **775 passed, 1 skipped**（§2），因此 §2 的分解数字与本节的 §6.4 / §6.5
+都不需要重算。`docs/RELEASE_NOTES_v1.0.18.md`、`docs/evidence/release-v1.0.18-*.txt` 与
+`docs/archive/**` 属历史记录，不回改；本版新增的交付说明与构建记录分别是
+`docs/RELEASE_NOTES_v1.0.19.md` 与 `docs/evidence/release-v1.0.19-build.txt`。
+
+发版门禁在本树实跑过一遍五项检查，后端仍是 **`775 passed, 1 skipped`**（`265.29s`，与本节的
+记录计数完全相同，只是耗时不同），因此 §2.1、§2.2 记的那次基线运行**原样保留**、未按本轮重写。

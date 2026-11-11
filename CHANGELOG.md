@@ -10,6 +10,54 @@
 
 ---
 
+## [1.0.19] - 2026-11-11
+
+> 本版区间是 `v1.0.18` 之后合入 `master` 的部分，用 `git log v1.0.18..HEAD` 可核对；
+> `v1.0.19` tag 由平台在合并落地后打在 `master` 的合并提交上，本节不预设 tag 存在。
+> 测试计数不在本文件复述，见 `docs/FACTS.md` §2。
+
+### 新增
+
+- **管理员用量页重做**：六张指标卡、可切换的趋势图（调用次数 / Token / 估算费用）、
+  按来源与核心拆分的汇总、单价设置弹窗、页脚口径说明；页面拆成
+  `UsageMetrics` / `UsageTrend` / `UsageBreakdown` / `PricingEditor` 与共用的格式化函数，
+  刷新期间保留旧数据不清屏
+- **个人 Agent 用量进入统计**：`/api/usage` 把个人 Agent 单列成一个来源、并按核心拆分；
+  问答落库时补记所用模型，无法计价的用量单独列出，不混进总额
+- **模型参考价目录与单价覆盖**：内置一份带来源链接与查证日期的参考价（`docs/PRICING.md`），
+  新增 `model_prices` 表与 `/api/settings/pricing` 三个接口（`GET` 列表、`PUT` 按模型覆盖、
+  `DELETE` 恢复内置价）；页面上的金额一律标注「按单价估算」，不冒充账单
+- **测试**：新增 `offline_llm` 离线夹具；新增用量页与「个人 Agent 页不再出现知识库入口」的回归测试
+
+### 修复
+
+- **个人 Agent 的 Codex 核心改用应用独立配置目录**（`CODEX_HOME`）：不再继承用户 `~/.codex`
+  里的提示词与个人化配置，skills 以只读方式链接进来
+- **提示词压成单行发送**：`codex exec` 只保留首行，此前多行提示会被截断
+- **登录锁定偶发多报 1 秒 `Retry-After`**（浮点尾巴取整）
+- **两条知识库 Agent 用例不再依赖真实 DNS**：原先真实出网调用吃掉 `_wait_run()` 的 15 秒预算，
+  在 DNS 慢的机器上稳定失败；等待时长未改，只换夹具
+
+### 变更
+
+- **个人 Agent 下线知识库核心**：个人 Agent 页去掉知识库入口与检索文案，创建 / 更新会话时
+  不再传 `kb_ids`；已存在的知识库会话仍可打开（核心名按 `core_label` 显示），并可直接切换到 CLI 核心
+
+### 发布
+
+- 版本号递增到 `1.0.19`（`backend/app/main.py` 的 `VERSION`、`frontend/package.json` 的 `version`、
+  `docs/FACTS.md` §1 三处同步）；`README.md`、`docs/HANDOFF.md`、`docs/THESIS.md` 里写当前版本的那几句
+  同步改数字（历史快照不动；`docs/screenshots/README.md` 只订正「哪两张图已过时」的说明，图片本身未动）
+- 产出 Windows NSIS 安装包 `wiki-rag-knowledge-1.0.19-x64-setup.exe` 与更新源三件套
+  （`latest.yml` + 安装包 + `.blockmap`）；产物大小、`latest.yml` 原文、安装包 sha512 与五项门禁的
+  实跑输出见 `docs/evidence/release-v1.0.19-build.txt`
+- 交付说明（Release 正文草稿 + 上传与校验命令）见 [`docs/RELEASE_NOTES_v1.0.19.md`](docs/RELEASE_NOTES_v1.0.19.md)：
+  Release 资产在 `master` 合并、tag `v1.0.19` 打上之后再上传，本版不预先建 tag
+- 安装包**没有代码签名证书**，Windows 首次安装会弹 SmartScreen「未知发布者」；
+  风险与后续步骤仍是 `docs/UPDATE.md` §6 的书面记录，未变
+
+---
+
 ## [1.0.18] - 2026-11-11
 
 > 本版是**发版版**：只递增版本号（`backend/app/main.py` 的 `VERSION`、`frontend/package.json`

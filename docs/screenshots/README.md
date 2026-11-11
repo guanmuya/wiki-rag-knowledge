@@ -8,7 +8,7 @@
 | 项 | 值 |
 | --- | --- |
 | 拍摄时间 | 2026-11-11 |
-| 对应版本 | 拍摄于 `1.0.17`（`backend/app/main.py` 的 `VERSION`、`frontend/package.json` 的 `version`）；`1.0.18` 只递增版本号与打包，**界面零改动**，这批图仍是当前界面 |
+| 对应版本 | 拍摄于 `1.0.17`（`backend/app/main.py` 的 `VERSION`、`frontend/package.json` 的 `version`）；`1.0.18` 只递增版本号与打包，**界面零改动**；`1.0.19` 重做了管理员用量页（`13-usage.png`）并在个人 Agent 页去掉知识库入口（`15-agent.png`），**这两张已与当前界面不一致、待重拍**，其余 13 张仍准确 |
 | 数据 | `backend/scripts/seed_demo.py` 灌的 3 个演示知识库（人事制度库 / 客户支持库 / 产品与销售库） |
 | 环境 | 本机开发实例：`uvicorn` 后端 + Vite 前端（`127.0.0.1`），Chromium 无头浏览器 |
 | 视口 | 1440×900，`zh-CN`，浅色主题，浏览器缩放 100% |
@@ -46,9 +46,9 @@ $env:UI_PASS='<管理员口令>'; node ../scripts/dev-only/capture-ui.mjs
 | `current/10-tasks.png` | 任务中心：任务阶段、进度与失败语义 | 任务队列与失败语义章节 |
 | `current/11-users.png` | 用户管理：账号、角色、库级授权 | 权限模型章节 |
 | `current/12-models.png` | 模型设置：按用途分组的三种协议配置（离线态无真实模型条目） | 模型协议适配章节 |
-| `current/13-usage.png` | 用量概览：调用次数与成本归因 | 成本核算章节 |
+| `current/13-usage.png` | 用量概览：调用次数与成本归因（**旧版用量页，v1.0.18 及以前；v1.0.19 已重做，待重拍**） | 成本核算章节 |
 | `current/14-about.png` | 关于页：版本、后端诊断、更新卡片 | 交付与运维章节 |
-| `current/15-agent.png` | 个人 Agent：核心与插件、运行环境探测 | 个人 Agent 章节 |
+| `current/15-agent.png` | 个人 Agent：核心与插件、运行环境探测（**旧版界面，v1.0.18 及以前；v1.0.19 已去掉知识库入口，待重拍**） | 个人 Agent 章节 |
 
 ## 3. 正文引用约定
 
