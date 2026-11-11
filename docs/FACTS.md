@@ -149,7 +149,7 @@ python -c "import re,pathlib;print(len(set(re.findall(r'\bWRK_[A-Z0-9_]+\b', pat
 | 本次实测环境 | Windows 11（10.0.26200）、Python 3.13.11、pytest 9.2.0、全局解释器（当前 checkout 无 `.venv`） |
 | 数据隔离 | `backend/tests/conftest.py` 用独立临时目录并关闭 Worker 与预热，不污染 `data/` |
 | 当前基线 | **`754 passed, 1 skipped`** |
-| 本次实测 | P1-11（个人 Agent 用量入统计 + 模型参考价）分支工作区，`754 passed, 1 skipped in 231.24s (0:03:51)` |
+| 本次实测 | 合并 `origin/master`（带入个人 Agent 页面改造与 `test_agent_runtime` 的断网夹具）后的本分支工作区，`754 passed, 1 skipped in 212.82s (0:03:32)` |
 | 独立佐证 | 上一版 `707` 的分解可用 §2.3 的三条命令复核；本轮在它之上新增 25 个 `def test_`（`496 → 521`）、2 个测试文件（`53 → 55`）、3 个 `parametrize`（`80 → 83`），展开后 `707 + 47 = 754`，与 §2.3 的分解数字自洽；分组实跑记录见 `docs/evidence/pricing-gates-2026-11-11.txt` |
 | CI 状态 | **待验（本轮分支尚未跑 CI）**：上一版基线（`707`）那棵树随 PR #58 并入 `master` 后曾是 CI #33（run `42947552959`）全绿，五个检查步骤逐项 success——那是**上一棵树**的记录。本轮 P1-11 改动了 `backend/**`、`frontend/src/**`、`docs/**`，按 §2.4 第 3 条的例外处理：先记本机实跑，CI artifact 出来后覆盖本行与 §2.2。本机的五项门禁（后端全量 + 契约 + 类型检查 + Web 构建 + 前端自动化测试）均已通过，输出见 `docs/evidence/pricing-gates-2026-11-11.txt` |
 
@@ -217,8 +217,8 @@ python -c "import re,pathlib;print(len(set(re.findall(r'\bWRK_[A-Z0-9_]+\b', pat
   `pytest.importorskip("reportlab", reason="需要 reportlab 生成 PDF 夹具")`；本机与 CI 都未安装
   可选的 `reportlab`，该用例被跳过。用 `python -m pytest backend/tests -q -rs` 复核可见
   `SKIPPED [1] backend/tests/test_tables.py:319`。**它是可选依赖缺失，不是漏测，也不是新增 skip。**
-- **耗时不是验收指标**：本机绿跑的耗时随机器负载变化（本轮全量 `231.24 s`，上一轮 `243.49 s`）；
-  **passed / skipped 计数稳定为 754 / 1**。负载高时另出现过与本次改动无关的偶发
+- **耗时不是验收指标**：本机绿跑的耗时随机器负载变化（本轮全量 `212.82 s`，合并 `origin/master`
+  之前是 `231.24 s`）；**passed / skipped 计数稳定为 754 / 1**。负载高时另出现过与本次改动无关的偶发
   （`test_agent_runtime` / `test_freeze_during_task`，单独复跑均通过）；其中
   `test_agent_runtime` 那次的根因（用例向 `example.test` 发真实模型请求、被 DNS 拖满 15 秒）
   已随合并 `origin/master` 的 `offline_llm` 夹具修掉，见 §2.5。

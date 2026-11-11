@@ -64,9 +64,45 @@ $ pnpm test
    （本机 20 万次采样中约 25% 命中）。本轮顺手修掉（`_retry_after()` + 1 微秒 epsilon），
    并补 `test_retry_after_rounds_up_without_float_noise`；该文件随后 7 passed。
 2. `test_agent_runtime.py::test_kb_session_flow` 在两次全量跑里失败 1 次（去掉 1 次失败后
-   复跑全量即 754 passed）。与 `docs/FACTS.md` §2.5 记录的 `_wait_run()` 15 秒超时偶发同类，
-   属负载相关，未被本次改动触碰；单文件复跑 26 passed。
+   复跑全量即 754 passed）；单文件复跑 26 passed。根因**不在等待上限**：这些用例会向假域名
+   `https://example.test` 发一次真实模型请求，本机解析要 11 秒，一次出网就吃掉 `_wait_run()`
+   的 15 秒预算。`origin/master` 已用 `offline_llm` 夹具从测试侧断网修掉（见
+   `docs/evidence/agent-runtime-offline.txt`），本分支合入该修复后不再依赖真实 DNS。
 
 五、结论
 --------
 后端全量、前端四项门禁全绿；新增功能对应的用例全部通过，未新增 skip。
+
+六、合并 origin/master 后的复跑（同日，最终树）
+----------------------------------------------
+`origin/master` 在本分支成形后带进来两件事：个人 Agent 页面去掉知识库入口
+（`frontend/src/pages/AgentPage.tsx` 等，含新增前端用例 `tests/agent-no-kb.test.mjs`
+与 `package.json` 的 test 脚本）、以及 `test_agent_runtime` 的断网夹具
+（`offline_llm`，根因见 `docs/evidence/agent-runtime-offline.txt`）。
+`git merge origin/master` 只在 `docs/FACTS.md` §2.5 有冲突，已合并两侧内容后提交；
+以下是在**合并后的树**上重跑的五项门禁：
+
+$ python -m pytest backend/tests -q
+754 passed, 1 skipped in 212.82s (0:03:32)
+
+$ cd frontend && pnpm check:contract
+契约校验通过（18 组）：[路由] 后端 80 条路由，docs/API.md 已覆盖
+
+$ pnpm typecheck
+（无输出，退出码 0）
+
+$ pnpm build:web
+dist/index.html                   2.09 kB │ gzip:   1.32 kB
+dist/assets/index-ufMAgdvt.css   64.97 kB │ gzip:  12.55 kB
+dist/assets/index-DsN9EmKd.js   500.72 kB │ gzip: 155.94 kB
+✓ built in 1.24s
+
+$ pnpm test
+ℹ tests 15
+ℹ pass 15
+ℹ fail 0
+（原 10 项 + master 带进来的 agent-no-kb 5 项）
+
+计数与合并前一致（后端 754 / 1，跳过的仍是缺 `reportlab` 的那条），
+没有因为合并新增或丢失用例；耗时差异只反映机器负载。
+
