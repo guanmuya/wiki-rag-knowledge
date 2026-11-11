@@ -1,4 +1,4 @@
-/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
+﻿/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
 
 /* ---------------------------------------------------------------- 4 按钮 */
 .btn {
@@ -19,38 +19,38 @@
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease,
     box-shadow 0.15s ease, transform 0.05s ease;
 }
-.btn:hover { border-color: #c3c8d6; color: var(--c-text); background: #fcfcfe; }
+.btn:hover { border-color: var(--c-border-hover); color: var(--c-text); background: var(--c-hover-soft); }
 .btn:active { transform: translateY(0.5px); }
 .btn:disabled, .btn[disabled] { opacity: 0.55; cursor: not-allowed; }
 .btn:disabled:hover { border-color: var(--c-border-strong); background: var(--c-surface); }
-.btn-primary:disabled:hover { border-color: var(--c-primary); background: var(--c-primary); color: #fff; }
-.btn-danger:disabled:hover { border-color: var(--c-danger); background: var(--c-danger); color: #fff; }
+.btn-primary:disabled:hover { border-color: var(--c-primary); background: var(--c-primary); color: var(--c-on-accent); }
+.btn-danger:disabled:hover { border-color: var(--c-danger); background: var(--c-danger); color: var(--c-on-accent); }
 
 .btn-primary {
   background: var(--c-primary);
   border-color: var(--c-primary);
-  color: #fff;
+  color: var(--c-on-accent);
   box-shadow: 0 1px 2px rgba(59, 130, 246, 0.28);
 }
 .btn-primary:hover {
   background: var(--c-primary-hover);
   border-color: var(--c-primary-hover);
-  color: #fff;
+  color: var(--c-on-accent);
 }
 .btn-ghost {
   background: transparent;
   border-color: transparent;
   color: var(--c-text-secondary);
 }
-.btn-ghost:hover { background: #f2f3f8; border-color: transparent; color: var(--c-text); }
+.btn-ghost:hover { background: var(--c-hover); border-color: transparent; color: var(--c-text); }
 
 .btn-danger {
   background: var(--c-danger);
   border-color: var(--c-danger);
-  color: #fff;
+  color: var(--c-on-accent);
   box-shadow: 0 1px 2px rgba(207, 59, 59, 0.24);
 }
-.btn-danger:hover { background: #c81e22; border-color: #c81e22; color: #fff; }
+.btn-danger:hover { background: var(--c-danger-hover); border-color: var(--c-danger-hover); color: var(--c-on-accent); }
 
 .btn-link {
   border: none;
@@ -80,7 +80,7 @@
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
-.icon-btn:hover { background: #f2f3f8; color: var(--c-text); }
+.icon-btn:hover { background: var(--c-hover); color: var(--c-text); }
 
 .actions { text-align: right; }
 .table-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
@@ -113,8 +113,8 @@
   transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
 .textarea { height: auto; min-height: 92px; padding: 9px 12px; line-height: 1.6; resize: vertical; }
-.input::placeholder, .textarea::placeholder { color: #a7adbd; }
-.input:hover, .select:hover, .textarea:hover { border-color: #c3c8d6; }
+.input::placeholder, .textarea::placeholder { color: var(--c-placeholder); }
+.input:hover, .select:hover, .textarea:hover { border-color: var(--c-border-hover); }
 .input:focus, .select:focus, .textarea:focus {
   border-color: var(--c-primary);
   box-shadow: var(--ring);
@@ -150,7 +150,7 @@
   width: 34px;
   height: 20px;
   border-radius: 999px;
-  background: #d9dde8;
+  background: var(--c-track);
   border: none;
   cursor: pointer;
   transition: background 0.18s ease;
@@ -174,7 +174,7 @@
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--c-on-accent);
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.2);
   transition: transform 0.18s ease;
 }
@@ -204,8 +204,8 @@
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.01em;
-  background: #f2f3f8;
-  color: #5b6274;
+  background: var(--c-hover);
+  color: var(--c-neutral-ink);
   border: 1px solid transparent;
   white-space: nowrap;
 }
@@ -214,7 +214,7 @@
 .badge-danger { background: var(--c-danger-soft); color: var(--c-danger); }
 .badge-partial { background: var(--c-partial-soft); color: var(--c-partial); }
 .badge-info { background: var(--c-info-soft); color: var(--c-info); }
-.badge-muted { background: #f2f3f8; color: #5b6274; }
+.badge-muted { background: var(--c-hover); color: var(--c-neutral-ink); }
 
 .dot {
   width: 6px;
@@ -240,7 +240,7 @@
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
-.chip:hover { border-color: #c9cee0; background: #fbfbff; color: var(--c-text); }
+.chip:hover { border-color: var(--c-border-hover); background: var(--c-hover-soft); color: var(--c-text); }
 
 .lv {
   font-size: 10px;
@@ -258,7 +258,7 @@
   flex: 0 0 20px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.16);
-  color: #fff;
+  color: var(--c-on-accent);
   display: grid;
   place-items: center;
   font-size: 11px;

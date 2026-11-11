@@ -7,17 +7,19 @@
   grid-template-rows: minmax(0, 1fr);
   flex: 1;
   min-height: 0;
-  background: var(--c-surface);
+  background: var(--canvas-bg);
 }
-/* 右侧会话区收成圆角描边卡片：原先是一整块贴着窗口与侧栏边缘的方形白板。
-   外层沿用全局点阵画布，让圆角卡片落在点阵白底上，和其余内容页一致。 */
-.chat-shell:not(.agent-shell) { background: var(--canvas-bg); }
+/* 会话区收成圆角描边卡片：原先是一整块贴着窗口与侧栏边缘的方形白板，
+   而且只有「智能问答」这样处理、个人 Agent 被 :not(.agent-shell) 排除在外，
+   两个整屏页因此像两套界面。现在两者共用同一张浮层卡片，落在全局点阵画布上，
+   与其余卡片式内容页一致。侧栏与顶栏一样是贴边导轨：统一纯白底，
+   不再单独铺一层灰底。 */
 .chat-sidebar {
   display: flex;
   flex-direction: column;
   min-height: 0;
   border-right: 1px solid var(--c-border);
-  background: var(--c-surface-alt);
+  background: var(--c-surface);
 }
 .chat-sidebar-head { display: flex; align-items: center; gap: 6px; padding: 12px; border-bottom: 1px solid var(--c-hairline); }
 .chat-sidebar-close { flex: 0 0 30px; }
@@ -32,7 +34,7 @@
   color: var(--c-text-secondary);
   transition: background 0.14s ease, color 0.14s ease;
 }
-.conv-item:hover { background: #f0f1f6; color: var(--c-text); }
+.conv-item:hover { background: var(--c-hover); color: var(--c-text); }
 .conv-item.active { background: var(--c-primary-soft); color: var(--c-primary); font-weight: 600; }
 .conv-title {
   flex: 1;
@@ -88,7 +90,7 @@
 }
 .chat-conv-item:hover { border-color: var(--c-border-strong); box-shadow: var(--shadow-sm); }
 .chat-conv-item.active {
-  border-color: #b7d0f5;
+  border-color: var(--c-primary-line);
   background: var(--c-primary-soft);
   box-shadow: inset 3px 0 0 var(--c-primary);
 }
@@ -143,10 +145,10 @@
 }
 
 .chat-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.chat-shell:not(.agent-shell) .chat-main {
+.chat-shell .chat-main {
   margin: 12px;
   border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-card);
   background: var(--c-surface);
   box-shadow: var(--shadow-xs);
   overflow: hidden;
@@ -184,17 +186,17 @@
   background: var(--c-primary-soft);
   color: var(--c-primary);
 }
-.msg-user .msg-avatar { background: #eef0f5; color: #4b5265; }
+.msg-user .msg-avatar { background: var(--c-hover); color: var(--c-neutral-ink); }
 .msg-main { min-width: 0; flex: 1; display: flex; flex-direction: column; }
 .msg-user .msg-main { align-items: flex-end; }
 .msg-bubble { font-size: 13.5px; line-height: 1.72; color: var(--c-text); max-width: 100%; }
 .msg-user .msg-bubble {
   max-width: 76%;
   background: var(--c-primary-soft);
-  border: 1px solid #d8e7ff;
+  border: 1px solid var(--c-primary-soft-strong);
   border-radius: 14px 14px 4px 14px;
   padding: 9px 14px;
-  color: #17324f;
+  color: var(--c-primary-ink);
 }
 .msg-meta {
   display: flex;
@@ -209,7 +211,7 @@
 /* 生成失败/被中断的回答：低饱和提示块，别让一行错误提示看起来像正文回答 */
 .msg-bubble.msg-failed {
   background: var(--c-danger-soft);
-  border: 1px solid #f3d3d3;
+  border: 1px solid var(--c-danger-line);
   border-radius: 10px;
   padding: 9px 12px;
   color: var(--c-danger);
@@ -229,7 +231,7 @@
   gap: 8px;
   padding: 7px 7px 7px 14px;
   border: 1px solid var(--c-border-strong);
-  border-radius: 14px;
+  border-radius: var(--radius-card);
   background: var(--c-surface);
   box-shadow: var(--shadow-xs);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -250,7 +252,7 @@
   line-height: 1.6;
   color: var(--c-text);
 }
-.composer-input::placeholder { color: #a7adbd; }
+.composer-input::placeholder { color: var(--c-placeholder); }
 .composer-hint {
   max-width: 860px;
   margin: 8px auto 0;
@@ -268,9 +270,9 @@
   gap: 10px;
   padding: 10px 12px;
   border-radius: var(--radius);
-  border: 1px solid #fde68a;
-  background: #fffbeb;
-  color: #92400e;
+  border: 1px solid var(--c-warn-line);
+  background: var(--c-warn-bg);
+  color: var(--c-warn-ink);
   font-size: 12.5px;
   line-height: 1.6;
   margin: 8px 0;
@@ -315,7 +317,7 @@
 .evidence-quote {
   margin-top: 6px;
   padding: 6px 10px;
-  border-left: 2px solid #cfe3fb;
+  border-left: 2px solid var(--c-primary-line);
   color: var(--c-text-secondary);
   font-size: 11.5px;
   line-height: 1.6;
@@ -440,7 +442,7 @@
   border: 1px solid var(--c-hairline);
   border-radius: 6px;
   padding: 2px 6px;
-  color: #33506e;
+  color: var(--c-code-inline-ink);
   word-break: break-all;
 }
 

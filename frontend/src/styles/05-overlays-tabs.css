@@ -14,9 +14,9 @@
 }
 .modal {
   background: var(--c-surface);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-card);
   box-shadow: var(--shadow-lg);
-  border: 1px solid rgba(255, 255, 255, 0.6);
+  border: 1px solid var(--c-border);
   max-width: 100%;
   max-height: calc(100vh - 48px);
   display: flex;
@@ -29,19 +29,19 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 15px 20px;
+  padding: var(--space-card-head) 20px;
   border-bottom: 1px solid var(--c-hairline);
 }
 .modal-head h3 { font-size: 15px; }
-.modal-body { padding: 20px; overflow-y: auto; }
+.modal-body { padding: var(--space-card); overflow-y: auto; }
 .modal-foot {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 13px 20px;
+  padding: var(--space-card-head) 20px;
   border-top: 1px solid var(--c-hairline);
-  background: var(--c-surface-alt);
-  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+  background: transparent;
+  border-radius: 0 0 var(--radius-card) var(--radius-card);
 }
 .confirm-text { font-size: 13px; color: var(--c-text-secondary); line-height: 1.7; }
 
@@ -59,16 +59,16 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  background: #1b1f2c;
-  color: #f3f4f8;
+  background: var(--c-toast-bg);
+  color: var(--c-toast-ink);
   border-radius: 10px;
   padding: 10px 14px;
   font-size: 12.5px;
   box-shadow: var(--shadow-md);
   animation: toast-in 0.18s ease-out;
 }
-.toast-dot { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; flex: 0 0 6px; }
-.toast-error .toast-dot { background: #dc4c4c; }
+.toast-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-success); flex: 0 0 6px; }
+.toast-error .toast-dot { background: var(--c-danger); }
 .toast-text { line-height: 1.5; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
 
@@ -127,26 +127,28 @@
    卡片右端因此看起来像一块带滚轮的方块。卡片里的页签不需要横向滚动。 */
 .card > .tabs { background: transparent; overflow: visible; }
 
-/* 卡片 / 表格视图切换：页头里的分段控件。
+/* 分段控件（卡片 / 表格视图切换、用量页时间范围与图表切换）。
+   这里只保留一套实现：.view-switch 与用量页的 .usage-segment 共用同一口径，
+   不再各自写一遍「凹槽 + 白底激活块」，避免两处圆角 / 高度 / 内边距各差一点。
    不复用 .tabs —— 页签容器带 overflow-x: auto，放在这里会挤出横竖两条滚动条，
    激活项的下划线也会被裁掉，看起来像一块没对齐的白色方块。 */
-.view-switch {
+.view-switch, .usage-segment {
   display: inline-flex;
   align-items: center;
   gap: 2px;
   padding: 3px;
   border: 1px solid var(--c-border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--c-surface-sunken);
 }
-.view-switch-item {
+.view-switch-item, .usage-segment button {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   height: 26px;
   padding: 0 10px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-xs);
   background: transparent;
   color: var(--c-text-secondary);
   font-size: 12.5px;
@@ -157,16 +159,21 @@
   transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 .view-switch-item svg { display: block; flex: 0 0 auto; }
-.view-switch-item:not(.active):hover {
+.view-switch-item:not(.active):hover, .usage-segment button:not(.selected):hover {
   background: rgba(255, 255, 255, 0.72);
   color: var(--c-text);
 }
-.view-switch-item.active {
+.view-switch-item.active, .usage-segment button.selected {
   background: var(--c-surface);
   color: var(--c-primary);
   font-weight: 600;
   box-shadow: var(--shadow-xs);
 }
-.view-switch-item:focus-visible { box-shadow: var(--ring); color: var(--c-text); }
-.view-switch-item.active:focus-visible { color: var(--c-primary); }
+.view-switch-item:focus-visible, .usage-segment button:focus-visible {
+  box-shadow: var(--ring);
+  color: var(--c-text);
+}
+.view-switch-item.active:focus-visible, .usage-segment button.selected:focus-visible {
+  color: var(--c-primary);
+}
 

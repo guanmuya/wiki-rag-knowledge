@@ -1,4 +1,4 @@
-/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
+﻿/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
 
 /* ---------------------------------------------------------------- 21 设置 / 用户 / 模型 */
 .embed-status-grid {
@@ -22,17 +22,17 @@
    否则会破坏 .table thead th 相对视口的 sticky 吸顶（见 9 表格的注释）。 */
 .model-group {
   border: 1px solid var(--c-border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-card);
   background: var(--c-surface);
 }
-.model-group + .model-group { margin-top: 16px; }
+.model-group + .model-group { margin-top: var(--gap-grid); }
 .model-group-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   min-height: 48px;
-  padding: 10px 14px;
+  padding: var(--space-card-head) 18px;
   border-bottom: 1px solid var(--c-hairline);
 }
 .model-group.is-collapsed .model-group-title { border-bottom: none; }
@@ -92,15 +92,15 @@
 /* 展开时表格是卡片下半部分：去掉自己的外框，只留底部圆角。 */
 .model-group .table-wrap {
   border: none;
-  border-radius: 0 0 var(--radius) var(--radius);
+  border-radius: 0 0 var(--radius-card) var(--radius-card);
 }
 .model-group .table-wrap .table thead tr:first-child th:first-child,
 .model-group .table-wrap .table thead tr:first-child th:last-child {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
 }
-.model-group .table tbody tr:last-child td:first-child { border-bottom-left-radius: calc(var(--radius) - 1px); }
-.model-group .table tbody tr:last-child td:last-child { border-bottom-right-radius: calc(var(--radius) - 1px); }
+.model-group .table tbody tr:last-child td:first-child { border-bottom-left-radius: calc(var(--radius-card) - 1px); }
+.model-group .table tbody tr:last-child td:last-child { border-bottom-right-radius: calc(var(--radius-card) - 1px); }
 /* 三个用途各一张表：固定布局 + 同一套 colgroup 宽度，跨表的列头才会纵向对齐。
    固定布局不再按内容撑列，长模型名/长测试信息靠换行兜住。
    末尾几列按视口宽度取 clamp：窗口从 1440 收到最小 1100 时它们一起收窄，
@@ -150,10 +150,10 @@
   gap: 12px;
   padding: 10px 14px;
   margin-bottom: 16px;
-  border-radius: var(--radius-lg);
-  border: 1px solid #d5e5fb;
-  background: #eef5ff;
-  color: #2c4a6b;
+  border-radius: var(--radius-card);
+  border: 1px solid var(--c-info-line);
+  background: var(--c-info-bg);
+  color: var(--c-info-ink);
 }
 .offline-banner-icon {
   width: 26px;
@@ -162,13 +162,13 @@
   border-radius: 8px;
   display: grid;
   place-items: center;
-  background: #dcebff;
+  background: var(--c-info-icon-bg);
   color: var(--c-primary);
   font-size: 13px;
 }
 .offline-banner-body { min-width: 0; flex: 1; }
 .offline-banner-body strong { font-size: 12.5px; font-weight: 650; display: block; }
-.offline-banner-detail { font-size: 11.5px; color: #5c7896; line-height: 1.55; }
+.offline-banner-detail { font-size: 11.5px; color: var(--c-info-ink-soft); line-height: 1.55; }
 .offline-banner-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 
 /* ---------------------------------------------------------------- 23 响应式 */

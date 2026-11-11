@@ -46,12 +46,65 @@
   --c-info: #1f6fb2;
   --c-info-soft: #eaf4fc;
 
+  /* 语义补充层：把各分片里散落的近似色收敛到同一套口径。
+     取值沿用既有主色 / 状态色，只补「底色 / 描边 / 文字」与交互态，
+     页面样式一律引用变量，不再直接写十六进制色值。 */
+  /* 中性交互面 */
+  --c-hover: #f2f3f8;        /* 中性悬停底：按钮 / 列表项 / 会话项 */
+  --c-hover-soft: #fafbff;   /* 极浅蓝悬停底：表格行 / 可点击卡片 */
+  --c-placeholder: #a7adbd;
+  --c-icon-muted: #9aa1b4;
+  --c-neutral-ink: #5b6274;  /* 中性徽标文字 */
+  --c-border-hover: #c3c8d6;
+  --c-track: #d9dde8;        /* 开关滑道 */
+  --c-scroll-thumb: #d3d7e2;
+  --c-scroll-thumb-hover: #b9bfcf;
+  --c-on-accent: #ffffff;     /* 有色按钮 / 开关滑块上的反色文字与图形 */
+
+  /* 主色的浅描边与深墨：气泡 / 引用 / 品牌块 */
+  --c-primary-line: #c9dcf5;
+  --c-primary-ink: #17324f;
+  --c-primary-tint: #8fb3f2;  /* 图表序列用的中蓝，主色的浅饱和变体 */
+
+  /* 提示条三件套：info 说明、warn 警告、danger 错误 */
+  --c-info-bg: #f0f6ff;
+  --c-info-line: #d5e5fb;
+  --c-info-ink: #2c4a6b;
+  --c-info-ink-soft: #5c7896;
+  --c-info-icon-bg: #dcebff;
+  --c-warn-bg: #fffbeb;
+  --c-warn-line: #fde68a;
+  --c-warn-ink: #92400e;
+  --c-danger-hover: #c81e22;
+  --c-danger-line: #f3d3d3;
+  --c-danger-ink: #8f2d2d;
+
+  /* 深色面：代码块 / 日志 / 浮层通知 */
+  --c-code-bg: #12141c;
+  --c-code-ink: #d7dbe8;
+  --c-toast-bg: #1b1f2c;
+  --c-toast-ink: #f3f4f8;
+  --c-code-inline-ink: #33506e;
+
+  /* 登录页品牌左栏 */
+  --c-brand-bg: #e8f2ff;
+  --c-brand-ink: #12304f;
+  --c-brand-ink-deep: #0f2744;
+  --c-brand-ink-soft: #3d5a78;
+
   /* 圆角 / 阴影 */
   --radius-xs: 6px;
   --radius-sm: 8px;
   --radius: 10px;
   --radius-lg: 14px;
   --radius-xl: 18px;
+
+  /* 组件口径：顶层容器共用一套圆角 / 内边距 / 栅格间距 */
+  --radius-card: var(--radius-lg);
+  --space-card: 20px;
+  --space-card-head: 13px;
+  --gap-grid: 16px;
+  --gap-stack: 18px;
 
   --shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.04);
   --shadow-sm: 0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.03);
@@ -124,17 +177,17 @@ code {
   border: 1px solid var(--c-hairline);
   border-radius: 5px;
   padding: 1px 5px;
-  color: #33506e;
+  color: var(--c-code-inline-ink);
 }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb {
-  background: #d3d7e2;
+  background: var(--c-scroll-thumb);
   border-radius: 8px;
   border: 3px solid transparent;
   background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover { background: #b9bfcf; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--c-scroll-thumb-hover); background-clip: content-box; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* 工具类 */
