@@ -12,9 +12,12 @@ if [ -z "${PNPM_JS}" ]; then
   if command -v pnpm >/dev/null 2>&1; then
     exec pnpm dev "$@"
   fi
-  # 回退到 DSH 运行时自带的 pnpm
-  PNPM_JS="C:/Users/Administrator/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/pnpm/bin/pnpm.mjs"
-  NODE_BIN="C:/Users/Administrator/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/node/bin/node.exe"
+  if command -v corepack >/dev/null 2>&1; then
+    exec corepack pnpm dev "$@"
+  fi
+  echo "未找到 pnpm：先装 pnpm 9（corepack enable / npm i -g pnpm@9），" >&2
+  echo "或用 npx --yes pnpm@9 dev 启动；也可用 PNPM_JS=<pnpm.mjs 路径> 指定。" >&2
+  exit 1
 fi
 
 exec "$NODE_BIN" "$PNPM_JS" dev "$@"

@@ -1,12 +1,12 @@
 // 真实浏览器验收：登录 → 各页面截图 → 提问 → 检查证据与路由展示。
-// 用法：node scripts/ui_check.mjs [--base http://localhost:5173]
+// 用法：node scripts/dev-only/ui_check.mjs [--base http://localhost:5173]
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const OUT = resolve(HERE, '..', 'docs', 'screenshots');
+const OUT = resolve(HERE, '..', '..', '.tmp-verify', 'shots');   // 仅开发排障用，截图不入库
 mkdirSync(OUT, { recursive: true });
 
 const BASE = process.env.UI_BASE || 'http://localhost:5173';
@@ -32,7 +32,7 @@ function watch(page, tag) {
 const shot = async (page, name) => {
   await page.waitForTimeout(700);
   await page.screenshot({ path: resolve(OUT, `${name}.png`), fullPage: false });
-  console.log(`  截图 docs/screenshots/${name}.png`);
+  console.log(`  截图 .tmp-verify/shots/${name}.png`);
 };
 
 const run = async () => {

@@ -1,6 +1,6 @@
 """复现「任务处理中整个软件卡住」：直接驱动已安装的打包后端 exe。
 
-用法：python scripts/diag/repro_freeze_exe.py [exe路径]
+用法：python scripts/dev-only/diag/repro_freeze_exe.py [exe路径]
 会在临时数据目录里建库、上传一份大 Markdown，然后以 100ms 间隔探测
 GET /api/kbs（纯读接口），记录每次的耗时；同时看后端的 lock-watchdog 日志。
 """
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -18,8 +19,9 @@ from pathlib import Path
 
 import httpx
 
-EXE = sys.argv[1] if len(sys.argv) > 1 else r"E:\Programs\wiki-rag-desktop\resources\backend\wrk-backend.exe"
-PASSWORD = "repro-pass-123456"
+DEFAULT_EXE = Path(__file__).resolve().parents[3] / "frontend" / "build" / "backend" / "wrk-backend.exe"
+EXE = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("WRK_BACKEND_EXE", str(DEFAULT_EXE))
+PASSWORD = secrets.token_urlsafe(18)   # 每次运行现生成，随子进程 env 传入
 PROBE_TIMEOUT = 3.0
 
 

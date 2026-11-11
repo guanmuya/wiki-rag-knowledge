@@ -1,6 +1,6 @@
 """对运行中的服务做一次真实端到端验收（不依赖 TestClient）。
 
-用法：python scripts/live_check.py [--base http://127.0.0.1:8000]
+用法：python scripts/dev-only/live_check.py [--base http://127.0.0.1:8000]
 密码取环境变量 WRK_ADMIN_PASSWORD，默认从 data/secrets 无、需显式传入。
 """
 from __future__ import annotations

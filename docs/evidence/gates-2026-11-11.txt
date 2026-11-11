@@ -1,0 +1,130 @@
+# 五项门禁本地实跑记录（2026-11-11）
+
+对应体检清单 `docs/HEALTH_CHECK.md` §4.3 的 **P2 批次（P2-1 … P2-5）**：
+本轮只做仓库治理与归档，不改业务代码，因此要求「五项门禁在本地全部实跑通过」，
+用同一套命令证明治理动作没有碰坏构建与测试。
+
+## 1. 环境
+
+| 项 | 本地实跑 | CI（`.github/workflows/ci.yml`） |
+| --- | --- | --- |
+| 系统 | Windows 11 专业版 | `windows-latest` |
+| Python | 3.13.11 | 3.13 |
+| Node | 24.18.0 | 22 |
+| pnpm | 12.3.4 | 9 |
+
+> 本地 Node / pnpm 版本高于 CI，属于「本地更严」的方向；若 CI 出现只有本地没有的差异，
+> 以 CI 的 Node 22 + pnpm 9 为准，命令本身与下表一致。
+
+基线提交：`3187fd2`（本轮改动基于该提交）。
+
+## 2. 逐项结果
+
+| # | 命令（仓库根目录） | 结果 |
+| --- | --- | --- |
+| 1 | `python -m pytest backend/tests -q` | `673 passed, 1 skipped in 192.65s` |
+| 2 | `cd frontend && pnpm check:contract` | 通过：请求体 4 组、枚举 5 组、路由 77 条全覆盖、桌面桥 2 项一致 |
+| 3 | `cd frontend && pnpm typecheck` | 通过：`tsc -b --noEmit`，退出码 0 |
+| 4 | `cd frontend && pnpm build:web` | 通过：`vite v6.4.5`，66 modules，`dist/assets/index-*.js 493.09 kB` |
+| 5 | `cd frontend && pnpm test` | 通过：`tests 5 / pass 5 / fail 0`（离线 E2E，约 4s） |
+
+第 1 项与 `docs/FACTS.md` §2 的基线口径完全一致（`673 passed, 1 skipped`），
+说明本轮归档没有让任何测试失效或跳过。第 1 项的全量 stdout 未另存
+（基线全文见 [`pytest-baseline.txt`](pytest-baseline.txt)），其余四项的真实输出见下节。
+
+## 3. 第 2–5 项的真实输出
+
+> 说明：每段开头的 `pnpm.exe : $ ...` 与 `+ CategoryInfo ... RemoteException` 是
+> Windows PowerShell 把 pnpm 自己回显的命令行（走 stderr）当成错误记录显示，**不是失败**。
+> 四条命令的退出码都是 0（见 §2 表）。
+
+
+### 2) pnpm check:contract
+
+```
+pnpm.exe : $ node scripts/check-api-contract.mjs
+At C:\Users\Administrator\AppData\Roaming\npm\pnpm.ps1:14 char:3
++   & "$basedir/node_modules/pnpm/pnpm.exe"   $args
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ($ node scripts/check-api-contract.mjs:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+契约校验通过（17 组）：
+  - [请求体] SetupStatus ↔ SetupStatusOut（4 字段）
+  - [请求体] SetupAdminPayload ↔ SetupAdminIn（4 字段）
+  - [请求体] CreateUserPayload ↔ UserCreateIn（5 字段）
+  - [请求体] UpdateUserPayload ↔ UserUpdateIn（3 字段）
+  - [请求体] ProviderPayload ↔ ProviderIn（5 字段）
+  - [请求体] ModelPayload ↔ ModelIn（8 字段）
+  - [请求体] ModelImportItem ↔ ModelImportItemIn（3 字段）
+  - [请求体] AgentSessionPayload ↔ AgentSessionIn（5 字段）
+  - [枚举] Role ↔ UserCreateIn.role（2 取值）
+  - [枚举] UserStatus ↔ UserUpdateIn.status（2 取值）
+  - [枚举] KbMode ↔ KbCreateIn.mode（2 取值）
+  - [枚举] GrantLevel ↔ GrantIn.level（2 取值）
+  - [枚举] ModelPurpose ↔ ModelIn.purpose（3 取值）
+  - [枚举] ProviderProtocol ↔ ProviderIn.protocol（3 取值）
+  - [路由] 后端 77 条路由，docs/API.md 已覆盖
+  - [桌面桥] preload.cjs ↔ DesktopBridge（11 个键）
+  - [桌面桥] main.cjs 的 wrk:info ↔ DesktopInfo（14 个字段）
+```
+
+### 3) pnpm typecheck
+
+```
+pnpm.exe : $ tsc -b --noEmit
+At C:\Users\Administrator\AppData\Roaming\npm\pnpm.ps1:14 char:3
++   & "$basedir/node_modules/pnpm/pnpm.exe"   $args
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ($ tsc -b --noEmit:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+```
+
+### 4) pnpm build:web
+
+```
+pnpm.exe : $ tsc -b && vite build
+At C:\Users\Administrator\AppData\Roaming\npm\pnpm.ps1:14 char:3
++   & "$basedir/node_modules/pnpm/pnpm.exe"   $args
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ($ tsc -b && vite build:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+vite v6.4.5 building for production...
+transforming...
+✓ 66 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   2.09 kB │ gzip:   1.32 kB
+dist/assets/index-ufMAgdvt.css   64.97 kB │ gzip:  12.55 kB
+dist/assets/index-DbgVZp60.js   493.09 kB │ gzip: 152.57 kB
+✓ built in 988ms
+```
+
+### 5) pnpm test
+
+```
+pnpm.exe : $ node --test tests/e2e.test.mjs
+At C:\Users\Administrator\AppData\Roaming\npm\pnpm.ps1:14 char:3
++   & "$basedir/node_modules/pnpm/pnpm.exe"   $args
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ($ node --test tests/e2e.test.mjs:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+▶ 前端主链路 E2E（离线、可重复、纳入 CI）
+  ✔ 未登录访问业务页被送回登录页 (1286.6872ms)
+  ✔ 带有效令牌访问业务页：恢复登录态，不被送回登录页 (275.2827ms)
+  ✔ 登录凭据错误：停留在登录页并显示服务端错误 (337.2787ms)
+  ✔ 登录 → 新建知识库 → 智能问答收到回答 (869.1527ms)
+  ✔ 页面渲染异常时显示兜底页而不是白屏，且能从兜底页恢复 (423.3704ms)
+✔ 前端主链路 E2E（离线、可重复、纳入 CI） (3542.2843ms)
+ℹ tests 5
+ℹ suites 1
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4140.3848
+```

@@ -431,7 +431,8 @@ return ""
 ### 5.1 环境准备
 
 ```bash
-cd F:/GItHub_Code/Wiki-Rag-Knowledge
+# 在仓库根目录执行（clone 到哪都行，下文用 <仓库根> 表示该目录）
+cd <仓库根>                # Windows PowerShell 等价：Set-Location <仓库根>
 
 # 0) 确认代码静止、测试全绿（基线口径见 docs/FACTS.md §2，全仓唯一记录）
 cd backend && PYTHONIOENCODING=utf-8 ../.venv/Scripts/python.exe -m pytest tests/ -q && cd ..
@@ -518,7 +519,8 @@ curl -s "http://127.0.0.1:$PORT/api/kbs/1/cost" -H "Authorization: Bearer $TOKEN
 ### 5.7 分块实测（表格与 overlap 实验）
 
 ```bash
-cd F:/GItHub_Code/Wiki-Rag-Knowledge
+# 仓库根目录执行（Windows PowerShell 等价：Set-Location <仓库根>）
+cd <仓库根>
 PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe backend/scripts/inspect_chunks.py
 ```
 

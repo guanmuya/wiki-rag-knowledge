@@ -205,7 +205,11 @@ Wiki-Rag-Knowledge/
 │   └── electron-builder.yml      # NSIS 配置
 ├── demo_data/                    # 3 篇演示文档 + fixtures（表格压力样本）
 ├── docs/                         # DESIGN.md API.md EXPERIMENT.md HANDOFF.md
-├── scripts/                      # dev.sh start_backend.sh start_frontend.sh 等
+│   ├── screenshots/current/      # 「当前版本」界面图，供论文/设计说明引用（见 screenshots/README.md）
+│   └── archive/                  # 历史档案：旧看板、历史交接快照、历史 before/after 截图（见 archive/README.md）
+├── scripts/                      # 长期维护的入口脚本：dev.sh start_backend.sh start_frontend.sh make_fixtures.py …
+│   └── dev-only/                 # 一次性排障与人工验收脚本（不进 CI、不属于交付物，见 dev-only/README.md）
+├── LICENSE  CHANGELOG.md  CONTRIBUTING.md  .editorconfig
 └── data/                         # 运行时生成（git 忽略）
 ```
 
@@ -471,4 +475,10 @@ git 里是删除状态。
 | [docs/THESIS.md](docs/THESIS.md) | 论文可复用章节素材：设计、关键实现、实验方法与结果、创新点与局限 |
 | [docs/HANDOFF.md](docs/HANDOFF.md) | 交接说明：v1.0.17 当前状态首屏、已知遗留、如何验证 |
 | [docs/archive/HANDOFF_HISTORY.md](docs/archive/HANDOFF_HISTORY.md) | 历史快照归档（v1.0.0 → v1.0.10，历史读数，非当前事实） |
+| [docs/archive/README.md](docs/archive/README.md) | 归档索引：旧看板、历史截图、历史交接快照，以及「为什么不删除」 |
+| [docs/screenshots/README.md](docs/screenshots/README.md) | 界面图索引：当前版本配图清单、拍摄口径、历史对比图去哪了 |
 | [docs/evidence/pytest-baseline.txt](docs/evidence/pytest-baseline.txt) | 测试基线一次真实运行的完整 stdout |
+| [docs/evidence/gates-2026-11-11.txt](docs/evidence/gates-2026-11-11.txt) | 五项门禁在本地一次全绿实跑的记录（环境、命令、退出码、真实输出） |
+| [CHANGELOG.md](CHANGELOG.md) | 变更记录：v1.0.0 → v1.0.17 的关键变化（数字口径仍以 `docs/FACTS.md` 为准） |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 协作约定：环境准备、五项门禁、提交格式、目录与归档规则、密钥纪律 |
+| [LICENSE](LICENSE) | 许可证（MIT） |

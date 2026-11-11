@@ -44,15 +44,15 @@
   验证结束后不清理自己拉起的进程（排查现场时用）。默认清理。
 
 .EXAMPLE
-  pwsh -File scripts/verify/no-orphan.ps1
+  pwsh -File scripts/dev-only/verify/no-orphan.ps1
   只做静态检查：打印当前残留 + 代码里几个关键点是否还在。
 
 .EXAMPLE
-  pwsh -File scripts/verify/no-orphan.ps1 -StartApp
+  pwsh -File scripts/dev-only/verify/no-orphan.ps1 -StartApp
   拉起安装版 → 强杀 Electron → 断言 3s 内没有 wrk-backend.exe。
 
 .EXAMPLE
-  pwsh -File scripts/verify/no-orphan.ps1 -StartApp -Exe ".\frontend\release\win-unpacked\企业知识库.exe" -TimeoutSec 5
+  pwsh -File scripts/dev-only/verify/no-orphan.ps1 -StartApp -Exe ".\frontend\release\win-unpacked\企业知识库.exe" -TimeoutSec 5
   用免安装目录里的产物验证，容忍 5 秒。
 
 .NOTES
@@ -70,7 +70,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$RepoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 $BackendName = 'wrk-backend.exe'
 
 $script:Results = New-Object System.Collections.Generic.List[object]
@@ -201,7 +201,7 @@ function Resolve-AppExe {
         if ($candidate -and (Test-Path $candidate)) { return (Resolve-Path $candidate).Path }
     }
     throw ("没找到应用可执行文件。请用 -Exe 指定，例如：`n" +
-        "  pwsh -File scripts/verify/no-orphan.ps1 -StartApp -Exe `".\frontend\release\win-unpacked\企业知识库.exe`"")
+        "  pwsh -File scripts/dev-only/verify/no-orphan.ps1 -StartApp -Exe `".\frontend\release\win-unpacked\企业知识库.exe`"")
 }
 
 function Wait-BackendGone {
@@ -370,7 +370,7 @@ else {
     Write-Host "`n== 说明 ==" -ForegroundColor Cyan
     Write-Host '  这次只做了静态检查（没有启动应用）。' -ForegroundColor DarkGray
     Write-Host '  要验证「关闭应用后后端真的自毁」，加 -StartApp：' -ForegroundColor DarkGray
-    Write-Host '    pwsh -File scripts/verify/no-orphan.ps1 -StartApp' -ForegroundColor DarkGray
+    Write-Host '    pwsh -File scripts/dev-only/verify/no-orphan.ps1 -StartApp' -ForegroundColor DarkGray
     Write-Host ("  它会拉起安装版 → 只强杀 Electron 主进程 → 断言 {0}s 内 {1} 消失。" -f $TimeoutSec, $BackendName) -ForegroundColor DarkGray
     Write-Host '  注意：会真的启动/结束一次应用；请先关掉正在用的应用实例。' -ForegroundColor DarkGray
 }

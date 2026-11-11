@@ -16,7 +16,7 @@ from pathlib import Path
 
 import httpx
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]   # scripts/dev-only/verify/… → 仓库根
 EXE = ROOT / "frontend" / "build" / "backend" / "wrk-backend.exe"
 
 tmp = Path(tempfile.mkdtemp(prefix="wrk_exe_"))

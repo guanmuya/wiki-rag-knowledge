@@ -1,7 +1,7 @@
 """验收脚本：任务处理期间，整个应用必须保持响应（v1.0.10 卡死缺陷的回归）。
 
 用法：
-    python scripts/verify/freeze_check.py [exe路径]
+    python scripts/dev-only/verify/freeze_check.py [exe路径]
 
 做的事：
 1. 用临时数据目录拉起后端（打包 exe 或任意可执行 sidecar）；
@@ -30,7 +30,7 @@ from pathlib import Path
 import httpx
 
 EXE = sys.argv[1] if len(sys.argv) > 1 else str(
-    Path(__file__).resolve().parents[2] / "frontend" / "build" / "backend" / "wrk-backend.exe")
+    Path(__file__).resolve().parents[3] / "frontend" / "build" / "backend" / "wrk-backend.exe")
 PASSWORD = "repro-pass-123456"
 SLOW_MS = 1000.0
 PROBE_TIMEOUT = 5.0

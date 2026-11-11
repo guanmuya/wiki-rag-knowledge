@@ -17,17 +17,17 @@ _diag_lock3.py，已删除）：
 用法（Windows，venv 里的 python）：
 
     # 1) 默认：只读复制桌面版真实库到 .tmp-diag，跑 1 个任务并盯写锁
-    python scripts/diag/lock_probe.py --tasks 1 --dump-stacks
+    python scripts/dev-only/diag/lock_probe.py --tasks 1 --dump-stacks
 
     # 2) 只监控某个库（不排任务），持续 60 秒
-    python scripts/diag/lock_probe.py --db .tmp-diag/db/app.sqlite3 --watch --duration 60
+    python scripts/dev-only/diag/lock_probe.py --db .tmp-diag/db/app.sqlite3 --watch --duration 60
 
     # 3) 跨进程写锁：开两个终端，各自跑一份（共享 .tmp-diag 的同一份库）
-    python scripts/diag/lock_probe.py --db .tmp-diag/db/app.sqlite3 --tasks 1 --tag p1
-    python scripts/diag/lock_probe.py --db .tmp-diag/db/app.sqlite3 --tasks 1 --tag p2
+    python scripts/dev-only/diag/lock_probe.py --db .tmp-diag/db/app.sqlite3 --tasks 1 --tag p1
+    python scripts/dev-only/diag/lock_probe.py --db .tmp-diag/db/app.sqlite3 --tasks 1 --tag p2
 
     # 4) 指定源数据目录（仍然只读复制，绝不写原库）
-    python scripts/diag/lock_probe.py --copy-from "%APPDATA%\\wiki-rag-desktop\\data" --tasks 2
+    python scripts/dev-only/diag/lock_probe.py --copy-from "%APPDATA%\\wiki-rag-desktop\\data" --tasks 2
 
 安全约束（重要）：
 - **绝不对桌面版真实数据目录做写操作**。不给 `--db` 也不给 `--copy-from` 时，
@@ -53,7 +53,7 @@ import time
 import traceback
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]          # scripts/diag/lock_probe.py → 仓库根
+ROOT = Path(__file__).resolve().parents[3]          # scripts/dev-only/diag/lock_probe.py → 仓库根
 BACKEND = ROOT / "backend"
 TMP = ROOT / ".tmp-diag"
 
@@ -372,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
     if not monitor.events:
         print("  没抓到写锁阻塞：这条路径上的写事务是短的。")
     else:
-        print("  抓到了写锁阻塞：用 --dump-stacks 看持锁线程，或配合 scripts/verify/no-orphan.ps1"
+        print("  抓到了写锁阻塞：用 --dump-stacks 看持锁线程，或配合 scripts/dev-only/verify/no-orphan.ps1"
               " 排查是否有孤儿 sidecar 在抢锁。")
     return 1 if monitor.events else 0
 

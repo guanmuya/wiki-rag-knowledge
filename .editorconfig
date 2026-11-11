@@ -1,0 +1,37 @@
+# EditorConfig 是跨编辑器的最小统一约定：https://editorconfig.org
+# 目的是让 VS Code / PyCharm / Vim 在任何机器上都用同一套换行、缩进与编码，
+# 从而避免「一次提交里混进上百行空白差异」。它不替代 lint、也不参与构建。
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Python：PEP 8 用 4 空格；后端与脚本都适用
+[*.py]
+indent_size = 4
+
+# Markdown：行尾两个空格是有意义的手动换行，不能删
+[*.md]
+trim_trailing_whitespace = false
+
+# Windows 专用脚本与批处理沿用 CRLF，避免 cmd.exe / PowerShell 解析异常
+[*.{bat,cmd,ps1}]
+end_of_line = crlf
+
+# 安装脚本（NSIS）与 Makefile 必须用 Tab 缩进
+[*.{nsh,nsi}]
+indent_style = tab
+
+[Makefile]
+indent_style = tab
+
+# 依赖锁文件由工具生成，不参与手工排版
+[**/pnpm-lock.yaml]
+indent_size = 2
+insert_final_newline = true
