@@ -108,6 +108,7 @@
 | POST | `/api/documents/{id}/versions` | multipart `file` 上传新版本 → `{version_id,task_id}` |
 | GET | `/api/documents/{id}/download?version_id=` | 原文件下载（后端校验权限） |
 | GET | `/api/documents/{id}/chunks?page=` | 分块预览（含 locator/heading/向量维度） |
+| POST | `/api/documents/{id}/reindex` | manage。重试这份文档的入库（解析 → 分块 → 索引）：找到该文档最新版本对应的那条入库任务**原地重排**，没有任务记录（历史数据）才补建一条 → `{task_id, version_id, reused, retry_count}`。同一份文档始终只有一条任务记录，点多少次都不会堆积；还没有任何版本时 400（`routers/kbs.py` 的 `reindex_document()`） |
 | DELETE | `/api/documents/{id}` | 删除文档及其分块；Wiki 库触发重建任务。切换模式触发的首次 Wiki 生成排队或运行期间返回 409，待任务结束后可重试。 |
 | GET | `/api/tasks?status=&kb_id=&include_running=` | 任务列表（轮询用）；`include_running=true` 额外包含符合筛选条件的运行中任务 |
 | GET | `/api/tasks/{id}` | 单任务详情 |
@@ -329,6 +330,10 @@
 
 ## 7.2 已记录用量概览（admin）
 
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/usage?days=` | admin。`days` ∈ `7` \| `30`（默认）\| `0`（全部），其他值 422 → `{period_days, timezone, totals, daily, by_source}`（`routers/usage.py` 的 `get_usage()`，汇总口径见本节下文） |
+
 `GET /api/usage?days=30` 汇总全局已记录用量，仅管理员可访问。`days` 可为 `7`、`30`（默认）或 `0`（全部），其他值返回 422。7/30 天以 UTC 当日为末日，按 UTC 日期补齐无记录的日期。
 
 响应为 `{period_days, timezone, totals, daily, by_source}`；`timezone` 为 `UTC`，`daily` 是带 `date` 的每日汇总，`by_source` 的 `source` 为 `processing`（知识库处理）或 `chat`（问答）。各汇总包含 `calls`、`live_calls`、`offline_calls`、`chat_calls`、`embed_calls`、`vision_calls`、`prompt_tokens`、`completion_tokens`、`embed_tokens`、`total_tokens`、`latency_ms` 和 `record_count`。`total_tokens` 为前三类 Token 之和。
@@ -394,3 +399,68 @@ v1 全部要求管理员令牌；CLI 核心以应用进程身份执行本机命�
 - 改密 / 登出成功后旧 token 已失效，须丢弃本地令牌并重新登录，不能继续带旧 token 调接口。
 - 任务进度用 2 秒轮询 `GET /api/tasks?status=queued,running`。
 - 问答页左栏会话、顶部知识库多选、右栏证据卡片可折叠查看原文依据。
+
+### 9.1 请求只有一个出口（P1-10）
+
+`frontend/src/api.ts` 的 `send()` 是全站唯一的 `fetch` 出口：注入 `Bearer` 令牌、超时控制、
+401 清登录态、403 弹提示、`503` / `database is locked` 翻译成「后端忙」，**只在这一处实现**。
+四个调用面都走它，新增接口不再需要重复这套判断：
+
+| 入口 | 用途 | 与 `send()` 的关系 |
+| --- | --- | --- |
+| `request<T>()` | 普通 JSON 接口 | `send()` + 解析 JSON（204/空体返回 `undefined`） |
+| `requestBlob()` | 文件下载 | `send()` + 取 `Blob` |
+| `chatApi.askStream()` | SSE 流式问答 | `send()`（`timeoutMs: 0`，由调用方 `signal` 中止）+ 自行解析 SSE |
+| `probeBackend()` | 探活（免登录） | `send()` + `silent401/silent403/silentBusy`，失败返回结构化结果而不抛异常 |
+
+失败统一是 `ApiError`，其 `kind`（`http` / `timeout` / `offline` / `busy`）是界面选文案的依据，
+界面**不应该**去匹配错误字符串。
+
+### 9.2 错误兜底（P1-10）
+
+| 层级 | 组件 | 接住什么 |
+| --- | --- | --- |
+| 接口层 | `ApiError` + 各页 `ErrorState` | 请求失败、超时、后端忙、离线：可重试，不清空已有数据 |
+| 页面层 | `Layout` 里的 `ErrorBoundary`（`key=pathname`） | 单个页面**渲染期**抛错：只在内容区显示兜底页，侧边栏仍在，换页面即自动复位 |
+| 应用层 | `main.tsx` 根部的 `ErrorBoundary` | `BackendGate`、`AuthProvider` 等更外层抛错：保证任何情况下不白屏 |
+
+React 错误边界只接渲染期异常，不接事件处理器 / 异步回调 / SSE 里的错误——那些仍由上面第一层处理，
+两者互补。兜底页给「重试 / 回到首页 / 重新加载应用」三个出口，并把堆栈折叠在「查看详情」里。
+
+## 10. 契约同步与校验（P1-5）
+
+前后端跨语言、又都手写类型，字段一改就容易两边对不上。本节规定**唯一的事实源**与**唯一的检查入口**。
+
+### 10.1 事实源
+
+| 契约面 | 事实源 | 前端的对端 |
+| --- | --- | --- |
+| 路由路径与方法 | `backend/app/routers/*.py` 的 `@router.<method>()` 装饰器 | 本文各节表格 + `frontend/src/api.ts` |
+| 请求体字段与枚举 | `backend/app/schemas.py`、`backend/app/routers/setup.py` 的 Pydantic 模型 | `frontend/src/types.ts` 的载荷接口与联合类型 |
+| 桌面 IPC 暴露面 | `frontend/electron/preload.cjs` 的 `contextBridge` 键 | `frontend/src/types.ts` 的 `DesktopBridge` |
+| 响应体 | `backend/app/serializers.py` 的拼装函数（不是 Pydantic 出参模型） | 见 10.2 为何不参与校验 |
+
+### 10.2 为什么是「校验」而不是「生成」
+
+本项目响应体由 `serializers.py` 拼 dict，FastAPI 生成的 OpenAPI 里这些响应是空壳 `{}`，
+据它 codegen 只能产出一堆空类型，反而给假安全感。而真正会在运行时 422 的是**请求体**，
+它恰好是规整的 Pydantic 模型。所以做法是：把请求体模型当事实源，与前端手写类型做**比对**，
+既能真拦住漂移，又不需要改后端、不引入任何新依赖。
+
+### 10.3 校验器
+
+`frontend/scripts/check-api-contract.mjs`，命令 `pnpm check:contract`（CI 的第 2 项检查，失败即阻断合并）。
+只读四组，任一不过退出码 1：
+
+1. **请求体字段**：前端多出后端不认的字段（死字段 / 拼错）→ 报错；后端必填但前端漏写或写成可选 → 报错（会 422）。
+2. **枚举取值**：`Role` / `UserStatus` / `KbMode` / `GrantLevel` / `ModelPurpose` / `ProviderProtocol`
+   的字面量联合 ↔ 后端对应 `Literal[...]`，两边取值必须完全一致。
+3. **路由覆盖**：后端每条路由都要在本文有契约行（路径参数名 `{id}` / `{pid}` 会被抹平后再比对）。
+4. **桌面桥**（两层）：`preload.cjs` 暴露的键 ↔ `types.ts` 的 `DesktopBridge`；
+   `main.cjs` 里 `ipcMain.handle('wrk:info')` 返回的字段 ↔ `types.ts` 的 `DesktopInfo`。
+   双向都不许缺——P1-10 记录的三处漂移（漏 `getFailure`、`openPath` 漏 `'install'`、
+   `getInfo` 只声明了 4 个字段而主进程返回 14 个）正是这一层。
+
+新增接口时，除了写代码与本文表格，还要在脚本顶部的 `PAYLOAD_MODELS` / `UNION_LITERALS`
+映射表里登记新的一行，否则它不受保护。
+

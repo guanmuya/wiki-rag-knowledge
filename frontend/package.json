@@ -14,6 +14,7 @@
     "pack": "node scripts/build.mjs --pack",
     "start": "electron .",
     "typecheck": "tsc -b --noEmit",
+    "check:contract": "node scripts/check-api-contract.mjs",
     "test": "node --test tests/e2e.test.mjs"
   },
   "dependencies": {

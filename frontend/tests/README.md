@@ -18,6 +18,10 @@ pnpm test
 `pnpm test` 即 `node --test tests/e2e.test.mjs`。
 CI（`.github/workflows/ci.yml`）在 `windows-latest` 上跑同一条命令，失败即阻断合并。
 
+前端另外还有一项**不在这里**的 CI 检查：`pnpm check:contract`
+（`frontend/scripts/check-api-contract.mjs`，前后端契约一致性）。
+它不是浏览器测试，只静态比对 `types.ts` / `docs/API.md` 与后端模型，见 `docs/API.md` §10。
+
 不需要先启动后端，也不需要手工起 Vite：测试进程内用 `vite.createServer`
 在固定端口 `15173`（`strictPort: true`）启动 dev server，测试结束后自动关闭；
 可用环境变量 `E2E_PORT` 改端口。需要本机装有 Playwright 的 Chromium：
@@ -61,11 +65,15 @@ pnpm exec playwright install chromium
 | 带有效令牌访问业务页：恢复登录态，不被送回登录页 | `AuthProvider` 用 `/api/auth/me` 恢复登录态，`#/kbs` 不被重定向、管理员可见「新建知识库」、期间没有重新登录请求 |
 | 登录凭据错误：停留在登录页并显示服务端错误 | 401 后 `.login-error` 展示后端 detail、URL 不变、登录请求确实发出且用户名正确 |
 | 登录 → 新建知识库 → 智能问答收到回答 | 登录后跳 `#/kbs`；建库请求真的发出且列表刷新出新库；提问走 `/ask/stream` 且带 `Bearer` token、问题文本正确；确定性回答渲染在 `.chat-thread` |
+| 页面渲染异常时显示兜底页而不是白屏 | mock 持续下发结构损坏的知识库（`name` 是对象），真实 React 渲染时真的抛错；断言出现 `ErrorBoundary` 兜底页（标题「界面出了点问题」+ 重试/回到首页入口）、`#root` 不是空串；随后把 mock 恢复正常并点「回到首页」，断言 boundary 复位、列表重新渲染（体检清单 P1-10 的验收项） |
 
 主链路用例覆盖体检清单建议的「登录 → 建库 → 上传 → 问答」中的
 **登录 → 建库 → 问答** 部分。上传依赖 multipart 文件选择与入库任务，
 当前离线 mock 不模拟入库流水线，暂未纳入自动化用例；
 这一段的验收仍由 `frontend/scripts/verify-*` 人工辅助完成。
+
+错误兜底用例只触发**渲染期**异常；事件处理器与异步回调里的错误不走 React 错误边界，
+由各页面的 `ApiError` / `ErrorState` 处理，见 `docs/API.md` §9.2。
 
 ---
 

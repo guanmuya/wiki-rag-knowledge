@@ -1,4 +1,16 @@
-// 与 docs/API.md 对齐的类型定义。字段名以后端契约为准。
+// 前后端契约的前端一侧（字段名以后端为准）。
+//
+// 事实源（不是「凭记忆手写」）：
+//   - 路由与方法：`backend/app/routers/*.py` 的 `@router.<method>()` 装饰器，契约文档 docs/API.md
+//   - 请求体字段与枚举：`backend/app/schemas.py`、`backend/app/routers/setup.py` 的 Pydantic 模型
+//   - 桌面 IPC：`frontend/electron/preload.cjs` 的 contextBridge 暴露面
+//
+// 为什么没有 codegen：响应体由 `backend/app/serializers.py` 拼 dict，FastAPI 生成的 OpenAPI
+// 里是空壳 `{}`，据此生成只会得到一堆空类型。改为「生成不了就校验」——`pnpm check:contract`
+// （`frontend/scripts/check-api-contract.mjs`）把上面三处与本文比对，字段增删、枚举改动、
+// preload 暴露面变化都会让 CI 失败。约定见 docs/API.md §10。
+//
+// 改这里的规则：字段名与后端完全一致（不要驼峰化）；后端必填的字段不要写成可选。
 
 export type Role = 'admin' | 'employee'
 export type UserStatus = 'active' | 'disabled'
@@ -132,12 +144,85 @@ export interface HealthInfo {
   version: string
 }
 
-/** 桌面端 preload 注入的只读信息（浏览器模式下不存在）。 */
+/**
+ * 桌面端 `wrk:info`（`electron/main.cjs`）返回的运行信息（浏览器模式下不存在）。
+ *
+ * 前 4 个是业务必需字段；其余是「关于页 / 后端诊断」用的展示字段，
+ * 旧版主进程不返回，因此全部可选。字段与主进程实际返回的键由
+ * `frontend/scripts/check-api-contract.mjs` 比对锁定，避免再次出现
+ * 「主进程给了、前端没声明、调用处只能用 `as unknown as` 强转」的漂移（体检清单 P1-10）。
+ */
 export interface DesktopInfo {
   apiBase: string
   version: string
   backendVersion: string
   dataDir: string
+  /** 后端 sidecar 进程号；sidecar 未就绪时为 null（旧版主进程不返回） */
+  backendPid?: number | null
+  installDir?: string
+  installDirExe?: string
+  logDir?: string
+  electronVersion?: string
+  chromeVersion?: string
+  nodeVersion?: string
+  platform?: string
+  isPackaged?: boolean
+  isDev?: boolean
+}
+
+/** `openPath(kind)` 支持的目录类别；`install` 是打包版安装目录。 */
+export type OpenPathKind = 'data' | 'logs' | 'install'
+
+/**
+ * 主进程给的启动失败说明。
+ *
+ * `electron/main.cjs` 里有一张同样的映射表（退出码 / errno → 人话），
+ * 那边是权威来源：只有主进程知道退出码、命令行、工作目录。
+ * 前端这里不重复判断，只负责展示；拿不到时才用本地兜底文案。
+ */
+export interface StartupFailure {
+  id: string
+  title: string
+  action: string
+  detail: string
+}
+
+/** `checkUpdate` / `installUpdate` 的统一回执。 */
+export interface DesktopActionResult {
+  ok: boolean
+  message?: string
+}
+
+/**
+ * preload 经 `contextBridge` 暴露的桌面能力（`electron/preload.cjs`）。
+ *
+ * **这份声明是 IPC 契约的另一半**：preload 改了暴露面，这里必须同步，
+ * 否则 `pnpm check:contract` 直接失败（P1-10 记录的三处漂移正是
+ * 漏 `getFailure`、`openPath` 漏 `'install'`、`getInfo` 只声明了 4 个字段）。
+ * preload 只在 Electron 里存在，浏览器开发模式下 `window.wrkDesktop` 为 `undefined`。
+ */
+export interface DesktopBridge {
+  isDesktop: true
+  getInfo: () => Promise<DesktopInfo>
+  getLogs: () => Promise<string>
+  getFailure: () => Promise<StartupFailure | null>
+  /** P1-9：首次改密成功后清除主进程内存里的初始凭据（幂等）。 */
+  clearInitialCredential: () => Promise<{ ok: boolean }>
+  openPath: (kind: OpenPathKind) => Promise<string>
+  restartBackend: () => Promise<{
+    ok: boolean
+    port?: number
+    error?: string
+    /** 失败时的人话标题；`detail` 折叠进日志提示里 */
+    title?: string
+    detail?: string
+    reasonId?: string
+  }>
+  updateState: () => Promise<UpdateState>
+  checkUpdate: () => Promise<DesktopActionResult>
+  installUpdate: () => Promise<DesktopActionResult>
+  /** 订阅更新状态推送，返回取消订阅函数 */
+  onUpdate: (cb: (state: UpdateState) => void) => () => void
 }
 
 export interface KbStats {

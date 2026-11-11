@@ -66,29 +66,12 @@ let baseReady: Promise<void> | null = null
 
 declare global {
   interface Window {
-    wrkDesktop?: {
-      isDesktop: true
-      getInfo: () => Promise<{ apiBase: string; version: string; backendVersion: string; dataDir: string }>
-      getLogs: () => Promise<string>
-      openPath: (kind: 'data' | 'logs') => Promise<string>
-      /**
-       * 重启内置后端。失败时主进程会额外给 `title`（人话）与 `detail`（技术细节），
-       * 诊断区块直接展示 `title`，`detail` 折叠进日志提示里——都是可选字段，
-       * 旧版主进程只返回 `{ok,error}` 也能正常跑。
-       */
-      restartBackend: () => Promise<{
-        ok: boolean
-        port?: number
-        error?: string
-        title?: string
-        detail?: string
-        reasonId?: string
-      }>
-      updateState?: () => Promise<import('./types').UpdateState>
-      checkUpdate?: () => Promise<{ ok: boolean; message?: string }>
-      installUpdate?: () => Promise<{ ok: boolean; message?: string }>
-      onUpdate?: (cb: (state: import('./types').UpdateState) => void) => () => void
-    }
+    /**
+     * 桌面端 preload 注入的能力桥，浏览器模式下不存在。
+     * 类型定义在 `types.ts` 的 `DesktopBridge`：它和 `electron/preload.cjs`
+     * 的暴露面由 `pnpm check:contract` 比对锁定，调用处不需要再做强转。
+     */
+    wrkDesktop?: import('./types').DesktopBridge
   }
 }
 
@@ -229,12 +212,18 @@ interface RequestOptions {
   form?: FormData
   /** 登录接口等场景：401 不触发全局登出 */
   silent401?: boolean
+  /** 探活等旁路请求：403 不弹全局 toast */
+  silent403?: boolean
+  /** 探活等旁路请求：锁冲突不弹「后端忙」横幅 */
+  silentBusy?: boolean
   signal?: AbortSignal
+  /** 额外请求头（如 SSE 的 `Accept: text/event-stream`） */
+  headers?: Record<string, string>
   /**
    * 超时毫秒数，默认 60s。
    * 之前完全没有超时：后端在向量化/索引时一旦卡住，页面就永远转圈，
    * 用户只能重启应用。现在到点抛错，页面能走正常的 ErrorState + 重试。
-   * 生成类接口（ask）单独放宽到 180s。
+   * 生成类接口（ask）单独放宽到 180s；流式问答由调用方 signal 控制，传 0 关闭。
    */
   timeoutMs?: number
 }
@@ -264,9 +253,24 @@ async function parseError(res: Response): Promise<string> {
   }
 }
 
-async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+/**
+ * 全站唯一的 fetch 出口。
+ *
+ * 体检清单 P1-10 的原始问题是：`request()` / `requestBlob()` / `askStream()` /
+ * `probeBackend()` 各自实现了一遍「注入 Bearer 令牌 + 超时 + 401 清登录态 +
+ * 403 弹 toast + 锁冲突映射」，改一处鉴权规则要同步四处，漏一处就是线上故障。
+ * 现在这些判断只写在这里，四个入口都调用它：
+ *
+ * - 401：按 `silent401` 决定是否清令牌并广播 `UNAUTHORIZED_EVENT`；
+ * - 403：按 `silent403` 决定是否弹全局 toast；
+ * - 503 / `database is locked`：统一翻译成「后端忙」，按 `silentBusy` 决定是否弹横幅；
+ * - 超时：只有我们自己的超时才报「请求超时」，外部传 `signal` 时由调用方解释中止。
+ *
+ * 抛出的 `ApiError` 的 `kind` 就是界面选文案的依据（不匹配错误字符串）。
+ */
+async function send(path: string, opts: RequestOptions = {}): Promise<Response> {
   if (baseReady) await baseReady
-  const headers: Record<string, string> = { Accept: 'application/json' }
+  const headers: Record<string, string> = { Accept: 'application/json', ...opts.headers }
   const token = getToken()
   if (token) headers.Authorization = `Bearer ${token}`
 
@@ -278,12 +282,14 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     body = JSON.stringify(opts.body)
   }
 
-  let res: Response
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const ctrl = opts.signal ? null : new AbortController()
-  const timer = ctrl && timeoutMs > 0
-    ? window.setTimeout(() => ctrl.abort(), timeoutMs)
-    : null
+  // 只在「调用方没给 signal」且「timeoutMs > 0」时用自己的超时：
+  // 流式问答传 signal 与 timeoutMs: 0，由调用方决定什么时候中止。
+  const ownTimeout = !opts.signal && timeoutMs > 0
+  const ctrl = ownTimeout ? new AbortController() : null
+  const timer = ctrl ? window.setTimeout(() => ctrl.abort(), timeoutMs) : null
+
+  let res: Response
   try {
     res = await fetch(apiUrl(path), {
       method: opts.method ?? 'GET',
@@ -315,7 +321,7 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 
   if (res.status === 403) {
     const detail = await parseError(res)
-    onForbidden(detail || '没有操作权限')
+    if (!opts.silent403) onForbidden(detail || '没有操作权限')
     throw new ApiError(403, detail)
   }
 
@@ -323,64 +329,35 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
     const detail = await parseError(res)
     if (looksLikeLockError(res.status, detail)) {
       // 原始 detail（`database is locked`）只留在日志/控制台，界面统一说人话
-      announceBusy()
+      if (!opts.silentBusy) announceBusy()
       throw new ApiError(res.status, BACKEND_BUSY_MESSAGE, 'busy')
     }
     throw new ApiError(res.status, detail)
   }
 
   // 有请求成功就说明写锁已经放开：让横幅立刻消失，不用等它自己超时
-  announceBusyCleared()
+  if (!opts.silentBusy) announceBusyCleared()
 
+  return res
+}
+
+async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const res = await send(path, opts)
   if (res.status === 204) return undefined as T
   const text = await res.text()
   if (!text) return undefined as T
   try {
     return JSON.parse(text) as T
   } catch {
+    // 后端极少数端点返回纯文本；保持旧行为原样透传，不做额外解释
     return text as unknown as T
   }
 }
 
 async function requestBlob(path: string): Promise<Blob> {
-  if (baseReady) await baseReady
-  const headers: Record<string, string> = {}
-  const token = getToken()
-  if (token) headers.Authorization = `Bearer ${token}`
   // 下载同样要有超时：后端被写锁挡住时 fetch 不会自己结束，
   // 不设上限就又是一个「永远转圈」的入口。
-  const ctrl = new AbortController()
-  const timer = window.setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS)
-  let res: Response
-  try {
-    res = await fetch(apiUrl(path), { headers, signal: ctrl.signal })
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new ApiError(0, requestTimeoutMessage(DEFAULT_TIMEOUT_MS), 'timeout')
-    }
-    throw new ApiError(0, BACKEND_OFFLINE_MESSAGE, 'offline')
-  } finally {
-    window.clearTimeout(timer)
-  }
-  if (res.status === 401) {
-    setToken(null)
-    onUnauthorized()
-    throw new ApiError(401, '登录状态失效，请重新登录')
-  }
-  if (res.status === 403) {
-    const detail = await parseError(res)
-    onForbidden(detail)
-    throw new ApiError(403, detail)
-  }
-  if (!res.ok) {
-    const detail = await parseError(res)
-    if (looksLikeLockError(res.status, detail)) {
-      announceBusy()
-      throw new ApiError(res.status, BACKEND_BUSY_MESSAGE, 'busy')
-    }
-    throw new ApiError(res.status, detail)
-  }
-  announceBusyCleared()
+  const res = await send(path, { headers: { Accept: '*/*' } })
   return res.blob()
 }
 
@@ -636,46 +613,19 @@ export const chatApi = {
     signal?: AbortSignal,
     modelConfigId?: number | null,
   ): Promise<AskResponse> => {
-    if (baseReady) await baseReady
-    const headers: Record<string, string> = {
-      Accept: 'text/event-stream',
-      'Content-Type': 'application/json',
-    }
-    const token = getToken()
-    if (token) headers.Authorization = `Bearer ${token}`
     const payload: Record<string, unknown> = { question, kb_ids }
     // 不传时沿用模型设置里的默认模型；旧后端也会忽略这个新字段。
     if (modelConfigId != null) payload.model_config_id = modelConfigId
 
-    let res: Response
-    try {
-      res = await fetch(apiUrl(`/conversations/${id}/ask/stream`), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-        signal,
-      })
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') throw err
-      throw new ApiError(0, BACKEND_OFFLINE_MESSAGE, 'offline')
-    }
-
-    if (res.status === 401) {
-      const detail = await parseError(res)
-      setToken(null)
-      onUnauthorized()
-      throw new ApiError(401, detail)
-    }
-    if (res.status === 403) {
-      const detail = await parseError(res)
-      onForbidden(detail || '没有操作权限')
-      throw new ApiError(403, detail)
-    }
-    if (!res.ok) {
-      const detail = await parseError(res)
-      throw new ApiError(res.status, detail,
-        looksLikeLockError(res.status, detail) ? 'busy' : 'http')
-    }
+    // 流式接口不走 request()（不能等整包 JSON），但鉴权/超时/401/403/忙判定
+    // 仍然走同一个 send()：生成可能持续很久，所以自己的超时关掉，由 signal 控制。
+    const res = await send(`/conversations/${id}/ask/stream`, {
+      method: 'POST',
+      headers: { Accept: 'text/event-stream' },
+      body: payload,
+      signal,
+      timeoutMs: 0,
+    })
     if (!res.body) {
       throw new ApiError(0, '当前浏览器不支持流式读取，请升级浏览器后重试。', 'http')
     }
@@ -869,7 +819,10 @@ export const agentApi = {
 
 /**
  * 探活：不依赖登录态，用于「后端未就绪」兜底页与关于页的「检查后端状态」。
- * 直接 fetch，不走 request()，避免 401 触发全局登出。
+ *
+ * 走同一个 `send()`，但把三类副作用关掉：401 不清登录态、403 不弹 toast、
+ * 锁冲突不弹「后端忙」横幅——探活是旁路检查，不该改动界面全局状态。
+ * 失败不抛异常，而是返回结构化结果，调用方直接渲染。
  */
 export async function probeBackend(timeoutMs = 4000): Promise<{
   ok: boolean
@@ -880,22 +833,15 @@ export async function probeBackend(timeoutMs = 4000): Promise<{
   /** 探活失败但后端其实活着（在写库/索引）：界面据此用「稍后自动恢复」而不是「服务挂了」 */
   busy?: boolean
 }> {
-  if (baseReady) await baseReady
   const started = performance.now()
-  const ctrl = new AbortController()
-  const timer = window.setTimeout(() => ctrl.abort(), timeoutMs)
   try {
-    const res = await fetch(apiUrl('/meta'), {
-      headers: { Accept: 'application/json' },
-      signal: ctrl.signal,
+    const res = await send('/meta', {
+      timeoutMs,
+      silent401: true,
+      silent403: true,
+      silentBusy: true,
     })
     const latencyMs = Math.round(performance.now() - started)
-    if (!res.ok) {
-      if (looksLikeLockError(res.status, '')) {
-        return { ok: false, message: BACKEND_BUSY_MESSAGE, latencyMs, busy: true }
-      }
-      return { ok: false, message: `后端返回 HTTP ${res.status}`, latencyMs }
-    }
     const data = (await res.json()) as MetaInfo
     return {
       ok: true,
@@ -906,7 +852,8 @@ export async function probeBackend(timeoutMs = 4000): Promise<{
     }
   } catch (err) {
     const latencyMs = Math.round(performance.now() - started)
-    if (err instanceof DOMException && err.name === 'AbortError') {
+    const apiError = err instanceof ApiError ? err : null
+    if (apiError?.kind === 'timeout') {
       // 说明真实原因：向量化/索引期间 CPU 与数据库都忙，短超时探测会误报「后端挂了」
       return {
         ok: false,
@@ -915,9 +862,13 @@ export async function probeBackend(timeoutMs = 4000): Promise<{
         latencyMs,
       }
     }
+    if (apiError?.kind === 'busy') {
+      return { ok: false, message: BACKEND_BUSY_MESSAGE, latencyMs, busy: true }
+    }
+    if (apiError && apiError.status > 0) {
+      return { ok: false, message: `后端返回 HTTP ${apiError.status}`, latencyMs }
+    }
     return { ok: false, message: BACKEND_OFFLINE_MESSAGE, latencyMs }
-  } finally {
-    window.clearTimeout(timer)
   }
 }
 
