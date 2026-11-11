@@ -1,0 +1,196 @@
+# 文档口径收尾：`WRK_*` 条数核准 + 旧数字扫查（2026-11-11）
+
+对应 todo「文档口径收尾：核准 WRK_* 数量并清理过时数字」。
+
+**起因**：仓库治理那轮报告说 `docs/FACTS.md` 写 `config.py` 有 41 个 `WRK_*`，而它在同一个文件里
+数到 43 个；且 FACTS 自己的算式「旧写 38 + 新增 4 个 `WRK_LOGIN_*` + `WRK_HARDEN_SECRETS`」
+= 43，与 41 对不上。
+
+**结论**：**43**。41 是批次三的算式笔误（同一段写的是「38 + 5」）。本轮只改文档：
+`docs/FACTS.md` 按代码订正为 43 并补了可复现的数法（§1.3），其余文档保持「只指向、不复述」。
+本文件是这次核准与扫查的原始证据。
+
+---
+
+## 1. 测的是哪棵树
+
+| 项 | 值 |
+| --- | --- |
+| 起点提交 | `26503ec`（PR #58 合并后的 `master`，本分支从它开出） |
+| 本轮改动范围 | 只有 `docs/**`、`README.md`、`CHANGELOG.md`；`backend/**`、`frontend/**`、`.github/**` 零改动，`docs/archive/**` 零改动 |
+| 环境 | Windows 11（10.0.26200）、Python 3.13.11、Node 24.18.0、pnpm 12.3.4 |
+
+---
+
+## 2. 核准命令与输出（可复现）
+
+### 2.1 主命令：数 `config.py` 里 `WRK_*` 的唯一名字
+
+仓库根目录执行，一条命令、无第三方依赖：
+
+```
+python -c "import re,pathlib;print(len(set(re.findall(r'\bWRK_[A-Z0-9_]+\b', pathlib.Path('backend/app/config.py').read_text(encoding='utf-8')))))"
+```
+
+输出：
+
+```
+43
+```
+
+（这条命令在 PowerShell 7 与 bash 下都能原样跑通：外层用双引号、内层字符串用单引号，
+两边都按原样传给 Python。PowerShell 里把外层换成单引号反而会失败——原生命令收到的双引号会被吞掉。）
+
+### 2.2 交叉校验：只数真正被 `os.getenv(...)` 读取的名字
+
+实际是怎么跑的（PowerShell 7 的 here-string，把脚本喂给 `python -`；bash 下等价的写法是
+`python - <<'PY' … PY`）：
+
+```
+@'
+import re, pathlib
+t = pathlib.Path("backend/app/config.py").read_text(encoding="utf-8")
+allt = sorted(set(re.findall(r"\bWRK_[A-Z0-9_]+\b", t)))
+env = sorted(set(re.findall(r"os\.getenv\(\s*\"(WRK_[A-Z0-9_]+)\"", t)))
+print("config.py WRK_ unique tokens:", len(allt))
+print("config.py WRK_ read via os.getenv:", len(env))
+print("tokens not passed to os.getenv:", sorted(set(allt) - set(env)))
+print("getenv names not in token set:", sorted(set(env) - set(allt)))
+print("lines:", len(t.splitlines()))
+'@ | python -
+```
+
+实际输出：
+
+```
+config.py WRK_ unique tokens: 43
+config.py WRK_ read via os.getenv: 43
+tokens not passed to os.getenv: []
+getenv names not in token set: []
+lines: 132
+```
+
+两条口径同为 **43**，且两个集合完全重合：43 个名字**全部**真的被 `os.getenv` 读取，
+没有「只在注释里出现」的幽灵项（唯一的注释提及是 `WRK_HARDEN_SECRETS`，它本身就是一项）。
+`WRK_LOCK_RETRY` 是 `WRK_LOCK_RETRY_ATTEMPTS` 的兼容别名，出现在同一处 `os.getenv` 的外层与内层
+（`config.py` 的 `LOCK_RETRY_ATTEMPTS`），按「一个环境变量名算一项」计入。
+
+### 2.3 43 个名字（字母序）
+
+```
+WRK_ADMIN_PASSWORD                      WRK_LOCK_RETRY
+WRK_ADMIN_USERNAME                      WRK_LOCK_RETRY_ATTEMPTS
+WRK_AGENT_ENABLED                       WRK_LOGIN_FAIL_WINDOW
+WRK_AGENT_HISTORY_CHARS                 WRK_LOGIN_LOCK_SECONDS
+WRK_AGENT_HISTORY_MESSAGES              WRK_LOGIN_MAX_FAILURES
+WRK_AGENT_PLUGIN_DIR                    WRK_LOGIN_MAX_FAILURES_PER_SOURCE
+WRK_AGENT_RUN_TIMEOUT                   WRK_MAX_EVIDENCE
+WRK_AGENT_WORKSPACE                     WRK_MAX_UPLOAD_MB
+WRK_BUSY_TIMEOUT_INTERACTIVE            WRK_PER_KB_CANDIDATES
+WRK_BUSY_TIMEOUT_PROGRESS               WRK_RRF_K
+WRK_BUSY_TIMEOUT_WORKER                 WRK_SECRET_DIR
+WRK_CHUNK_OVERLAP                       WRK_TABLE_CHUNK_BUDGET
+WRK_CHUNK_SIZE                          WRK_TOKEN_TTL_MINUTES
+WRK_CONTEXT_CHAR_BUDGET                 WRK_WIKI_MAX_MAP_CALLS
+WRK_CORS_ORIGINS                        WRK_WIKI_MAX_PAGES
+WRK_DATABASE_URL                        WRK_WIKI_SHARD_CHAR_BUDGET
+WRK_DATA_DIR                            WRK_WIKI_TOPIC_EXCERPT_CHARS
+WRK_DB_PATH                             WRK_WIKI_TOPIC_EXCERPT_MIN
+WRK_HARDEN_SECRETS                      WRK_WORKER_CONCURRENCY
+WRK_HTTP_PROXY                          WRK_WORKER_ENABLED
+WRK_HTTP_TIMEOUT_READ                   WRK_WORKER_POLL_SECONDS
+WRK_HTTP_TRUST_ENV
+```
+
+（左列 22 个 + 右列 21 个 = 43，整表按字母序：左列是前 22 个，右列是后 21 个。）
+
+**不在这个数里的 8 个**：`WRK_HOST`、`WRK_PORT`、`WRK_WATCH_STDIN`、`WRK_LOG_LEVEL`（`desktop_entry.py`）、
+`WRK_PBKDF2_ITER`（`security.py`）、`WRK_SUGGESTION_LIMIT`、`WRK_SUGGESTION_RESOURCE_LIMIT`（`answering.py`）、
+`WRK_PACKAGED`（Electron 主进程注入）。它们在别的文件里，改动节奏与 `config.py` 不同，故不计入。
+
+---
+
+## 3. 与旧口径 41 的差异
+
+| 口径 | 值 | 来历 |
+| --- | --- | --- |
+| FACTS 最初写的 | 38 | 体检当时（P0 批次）的读数：`docs/HEALTH_CHECK.md` §3.2 D6「`config.py` 出现 38 个 `WRK_*`」 |
+| P1-8（批次三）新增 | +5 | 4 个 `WRK_LOGIN_*`（`MAX_FAILURES` / `MAX_FAILURES_PER_SOURCE` / `FAIL_WINDOW` / `LOCK_SECONDS`）+ `WRK_HARDEN_SECRETS` |
+| P1-8 落进 FACTS 的数 | 41 | **算错**：`38 + 5 = 43`，不是 41；同一段的算式与实际数字自相矛盾 |
+| 本轮按代码重数 | **43** | 本文件 §2 的两条口径一致 |
+
+38 与 43 相差的 5 个，正是 P1-8 新增的 5 个；也就是说 41 既不是「38 + 4」（漏了
+`WRK_HARDEN_SECRETS`）也不是「38 + 5」，没有任何代码树算得出 41——它是纯粹的笔误。
+
+---
+
+## 4. 旧数字扫查
+
+### 4.1 扫法
+
+对仓库内 `*.md` / `*.txt` / `*.yml` / `*.json` / `*.py` / `*.mjs` / `*.cjs` / `*.ts` / `*.tsx`
+（跳过 `node_modules`、`.git`、`docs/archive`）逐行搜索这几类已被取代的口径：
+
+```
+583            638            673
+21 张表        38 个 WRK_*    41 个 WRK_*
+```
+
+### 4.2 命中与分类
+
+| 位置 | 命中内容 | 分类 | 处置 |
+| --- | --- | --- | --- |
+| `docs/FACTS.md` §1 表、§1 注、§1.2 末段 | `41 个 WRK_*`（3 处） | **当前口径，且是错的** | **本轮改为 43**，并新增 §1.3 的可复现数法 |
+| `README.md` 目录树测试目录 | `53 个 test_*.py + 1 个 conftest.py` | 属于 §2 的分解数字，散落在 §2 之外 | **本轮改为指向 §2**，不复述条数 |
+| `docs/HEALTH_CHECK.md` §2、§3.1、§3.2（D4/D6）、§4.1（P0-3）、§5.3 | `583 passed`、`21 张表`、`21 个 __tablename__`、`38 个 WRK_*`、`42 个测试文件` | 体检当时（P0）的实测与读数 | 保留：`FACTS.md` §2.5 已声明属历史记录、不回改；其价值就是「当时是什么样」 |
+| `docs/PR42_FIX_REPORT.md` §三 及「合并 `origin/master` 后的复核」 | `618 / 673 passed`、「四项检查」 | 该任务自己的点对点交付报告 | 保留：记的是它那一轮的验收；§2.1 已把它当作上一版基线的独立佐证引用 |
+| `docs/evidence/gates-2026-11-11.txt` §1 | `673 passed, 1 skipped` | 上一轮证据文件里「为什么把初测 673 作废」的说明 | 保留：作废说明本身需要写出被作废的数字 |
+| `docs/archive/HANDOFF_HISTORY.md` 等归档件 | `59 / 82 / 89 / 93 / 157 / 171 / 192 / 200 passed`、`WORKER_CONCURRENCY = 2`、`busy_timeout=15000` | 历史证据 | **不动**（`docs/archive/README.md` 与文件头已声明「当时读数，不是当前值」） |
+| `docs/DESIGN.md:318`、`docs/HEALTH_CHECK.md:176` | `retrieval.py:583`、`main.cjs:583-589` | **假命中**：`583` 是行号，不是测试基线 | 不动（`FACTS.md` §3 已约定行号只作辅助定位） |
+| `docs/FACTS.md` §0、§2.3、§2.5 | `583` / `638` / `673` | 「旧口径是什么、怎么被取代」的追溯记录 | 保留（§2 是全仓唯一允许出现基线数字的地方） |
+
+### 4.3 结论
+
+- 除 `docs/FACTS.md` 自身与上表的「历史语境」外，仓库里**不再有**把 `583` / `638` / `673`
+  当作当前基线的表述，也没有 `21 张表` / `38 个 WRK_` / `41 个 WRK_` 的现行口径。
+- 六份文档（`README.md`、`DESIGN.md`、`EXPERIMENT.md`、`THESIS.md`、`HANDOFF.md`、`API.md`）
+  对版本、表数、并发、锁超时、测试基线一律只放链接；`CHANGELOG.md`、`CONTRIBUTING.md`
+  同样只写指向（本轮复核为真）。
+- 现行表数口径统一为 **23 张表**（`models.py` 的 22 个 `__tablename__` + `migrations.py` 的
+  `schema_migrations`）：`README.md` 目录树、`docs/THESIS.md` §2.1/§2.2、`docs/API.md` §8.2 都是 23，
+  无残留的 21 或 19（后两者只出现在 FACTS 的历史追溯段落与 `HEALTH_CHECK.md` 快照里）。
+
+---
+
+## 5. 本轮门禁实跑
+
+| # | 命令 | 结果 |
+| --- | --- | --- |
+| 1 | `python -m pytest backend/tests -q` | **`707 passed, 1 skipped in 261.66s (0:04:21)`**，退出码 0 |
+| 2 | `cd frontend && pnpm check:contract` | 通过（退出码 0）：契约 17 组，含「后端 77 条路由，`docs/API.md` 已覆盖」 |
+
+**第 1 项与 `docs/FACTS.md` §2 的核对**：计数 `707 / 1` 与 §2.1 / §2.2 **逐字一致**；
+耗时 261.66s 与 §2.2 记录的 243.49s 不同，属机器负载差异（§2.3 已说明「耗时不是验收指标」）。
+因此**本轮不改 §2.2 的转录、也不覆盖 `docs/evidence/pytest-baseline.txt`**——那两者是同一套事实的
+一次特定运行，本次只是同一计数在新树上的复现。
+
+**未跑的三项**：`pnpm typecheck`、`pnpm build:web`、`pnpm test`。本工作区是全新 checkout，
+`frontend/node_modules` 不存在，三者在缺依赖时必然报错（实测：
+`error TS2307: Cannot find module 'react' / 'vite'`、`ERR_MODULE_NOT_FOUND: Cannot find package 'vite'`），
+**与本轮改动无关**——本轮零改前端文件。这三项在 `master@26503ec` 的 CI #33 上是绿的（见 §6）。
+
+---
+
+## 6. 远端 CI 与未取到的证据
+
+`master@26503ec`（即本分支的起点）的 push 运行：**CI #33（run `42947552959`）completed/success**，
+作业「后端测试 + 前端类型检查、构建与自动化测试」completed/success，五个检查步骤
+（全量后端测试、前后端契约一致性、前端类型检查、前端 Web 构建、前端自动化测试）逐项 success。
+链接：https://github.com/guanmuya/wiki-rag-knowledge/actions/runs/42947552959
+
+**仍然拿不到的**：
+
+1. 该 run 的 `pytest-baseline` artifact——本机没有下载通道，所以 `docs/FACTS.md` §2.1 的
+   「CI 状态」只写「CI 已通过、artifact 未取」，**不引用 CI 里的计数**；§2.2 仍以本机实跑为准。
+2. **本分支自己的 PR / CI**：本轮改动提交后由 PR 触发，结果在 PR 页面上，本文件成文时尚未产生，
+   如实标「远端待验」，不填推测值。
