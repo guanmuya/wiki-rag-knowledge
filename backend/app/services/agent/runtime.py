@@ -40,8 +40,16 @@ log = logging.getLogger("wrk.agent.runtime")
 RECOVERED_TEXT = "上次执行没有完成（应用已重启），请重新发送。"
 STOPPED_TEXT = "已停止。"
 EMPTY_OUTPUT_TEXT = "Agent 没有返回内容。"
+# 只出推理、没有最终回答（Codex 的 reasoning 项把整段内心独白铺给用户时就是这样）：
+# 说清楚「有过程、没答案」，并指向可展开的思考区，而不是把推理当答案给出去。
+NO_ANSWER_TEXT = (
+    "这次执行只产出了思考过程，没有给出最终回答。"
+    "可以展开上面的「思考过程」看它做到哪一步。"
+)
 MAX_EVENTS = 2500
 MAX_TEXT_CHARS = 200_000
+# 思考过程单独限额：推理往往比答案长一个数量级，但它只是过程，别让它把库撑爆。
+MAX_THINKING_CHARS = 60_000
 MAX_FINISHED_RUNS = 40
 
 
@@ -64,7 +72,11 @@ class RunState:
         self.status = "running"          # running | ok | failed | stopped
         self.error = ""
         self.text = ""
+        # 思考过程（模型推理）与回答正文是两条独立通道：前者进折叠区，后者才是
+        # 用户要看的答案。历史原因见 `emit_thinking`。
+        self.thinking = ""
         self.truncated = False
+        self.thinking_truncated = False
         self.started_at = time.time()
         self.finished_at: float | None = None
         self.terminate: Callable[[], None] | None = None
@@ -94,6 +106,29 @@ class RunState:
             self.emit("log", text=f"输出超过 {MAX_TEXT_CHARS} 字符，后续内容已截断")
         self.text += delta
         self.emit("text", text=delta)
+
+    def emit_thinking(self, delta: str) -> None:
+        """模型推理/工具尝试的增量，单独一条通道，绝不混进 `emit_text`。
+
+        用户报过「整段内心推理直接铺在回答位置，看不到最终答案」：推理仍然值得
+        看（它解释了模型为什么迟迟不给答案、哪条命令被拦了），但它是**过程**。
+        所以照常流式推给前端，只是落在可折叠的「思考过程」里，并在收尾时写进
+        消息的 `meta.thinking`；回答正文一个字都不沾。
+        """
+        if not delta:
+            return
+        remaining = MAX_THINKING_CHARS - len(self.thinking)
+        if remaining <= 0:
+            if not self.thinking_truncated:
+                self.thinking_truncated = True
+                self.emit("log", text=f"思考过程超过 {MAX_THINKING_CHARS} 字符，后续内容已截断")
+            return
+        if len(delta) > remaining:
+            delta = delta[:remaining]
+            self.thinking_truncated = True
+            self.emit("log", text=f"思考过程超过 {MAX_THINKING_CHARS} 字符，后续内容已截断")
+        self.thinking += delta
+        self.emit("thinking", text=delta)
 
     def snapshot(self, after: int = 0) -> dict:
         with self.lock:
@@ -261,24 +296,24 @@ def _execute(message_id: int, state: RunState) -> None:
         content, evidence, meta = _run_cli(state, ctx)
         if state.stop_event.is_set():
             raise RunStopped()
-        out = _safe_finish(ctx, "ok", content, evidence, meta)
+        out = _safe_finish(ctx, "ok", content, evidence, _meta_with_thinking(meta, state))
         if out is None:
             raise AgentRunError("执行完成，但结果保存失败，请重试")
         state.status = "ok"
         state.emit("done", message=out, status="ok")
     except RunStopped:
         ctx = ctx or _safe_context(message_id)
-        out = _safe_finish(ctx, "stopped", state.text.strip() or STOPPED_TEXT,
-                           [], {"stopped": True}) if ctx else _mark_failed_without_ctx(
-            message_id, STOPPED_TEXT, "stopped")
+        meta = _meta_with_thinking({"stopped": True}, state)
+        out = (_safe_finish(ctx, "stopped", state.text.strip() or STOPPED_TEXT, [], meta)
+               if ctx else _mark_failed_without_ctx(message_id, STOPPED_TEXT, "stopped"))
         state.status = "stopped"
         state.emit("stopped", message=out, status="stopped")
     except AgentRunError as exc:
         log.warning("Agent 执行失败（消息 #%s）：%s", message_id, exc)
         ctx = ctx or _safe_context(message_id)
-        out = _safe_finish(ctx, "failed", state.text.strip() or str(exc),
-                           [], {"error": str(exc)}) if ctx else _mark_failed_without_ctx(
-            message_id, str(exc), "failed")
+        meta = _meta_with_thinking({"error": str(exc)}, state)
+        out = (_safe_finish(ctx, "failed", state.text.strip() or str(exc), [], meta)
+               if ctx else _mark_failed_without_ctx(message_id, str(exc), "failed"))
         state.status = "failed"
         state.error = str(exc)
         state.emit("error", message=str(exc), status="failed")
@@ -286,15 +321,31 @@ def _execute(message_id: int, state: RunState) -> None:
         log.exception("Agent 执行异常（消息 #%s）", message_id)
         ctx = ctx or _safe_context(message_id)
         message = f"执行失败：{exc}"
-        out = _safe_finish(ctx, "failed", state.text.strip() or message,
-                           [], {"error": str(exc)}) if ctx else _mark_failed_without_ctx(
-            message_id, message, "failed")
+        meta = _meta_with_thinking({"error": str(exc)}, state)
+        out = (_safe_finish(ctx, "failed", state.text.strip() or message, [], meta)
+               if ctx else _mark_failed_without_ctx(message_id, message, "failed"))
         state.status = "failed"
         state.error = message
         state.emit("error", message=message, status="failed")
     finally:
         state.finished_at = time.time()
         state.terminate = None
+
+
+def _meta_with_thinking(meta: dict, state: RunState) -> dict:
+    """把这一轮的思考过程挂到 `meta` 上（前端据此渲染折叠的「思考过程」）。
+
+    为什么进 meta 而不是新开一列：思考是**这一轮的运行事实**，与 `usage`、
+    `command`、`workspace` 同类；落四行以外的列还要一次库迁移，收益不比 meta 大。
+    成功、失败、用户停止三条收尾路径都要带上它——只出推理、没有回答的那次执行，
+    思考过程就是唯一能解释「为什么没答案」的证据。
+    """
+    thinking = state.thinking.strip()
+    if thinking:
+        meta["thinking"] = thinking
+    if state.thinking_truncated:
+        meta["thinking_truncated"] = True
+    return meta
 
 
 def _safe_context(message_id: int) -> RunContext | None:
@@ -496,6 +547,71 @@ def _extract_jsonl_text(obj: Any, paths: tuple[str, ...]) -> str:
     return ""
 
 
+# 没声明 `answer_item_types` 的清单（外部插件）也认这些 item 类型为「过程」：
+# 推理、命令执行、文件改动、MCP 工具调用、联网搜索。名字取自 Codex CLI 的事件
+# 词汇（docs/AGENT_PLUGINS.md §3.4），覆盖「推理冒充回答」这个具体故障，又不会
+# 把不认识的事件类型从正文里拿掉。
+_DEFAULT_PROCESS_ITEM_TYPES = frozenset({
+    "reasoning", "command_execution", "file_change", "mcp_tool_call", "web_search",
+})
+
+
+def _jsonl_item_type(obj: Any) -> str:
+    """这条 JSONL 事件里的「item 类型」：`item.type` 优先，其次顶层 `type`。
+
+    Codex CLI 0.167.0 实测（`codex exec --json`，2026-11-11 本机）：
+
+    ```json
+    {"type":"thread.started","thread_id":"..."}
+    {"type":"turn.started"}
+    {"type":"item.completed","item":{"id":"item_2","type":"reasoning","text":"用户问的是…"}}
+    {"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"答案是…"}}
+    {"type":"turn.completed","usage":{...}}
+    ```
+
+    即推理与回答是**同一种事件**（`item.completed`）里的不同 `item.type`，
+    只看 `text_paths` 分不出来——那正是「推理铺满回答气泡」的根因。
+    """
+    if not isinstance(obj, dict):
+        return ""
+    item = obj.get("item")
+    if isinstance(item, dict):
+        value = item.get("type")
+        if isinstance(value, str) and value:
+            return value
+    value = obj.get("type")
+    return value if isinstance(value, str) else ""
+
+
+def _jsonl_text_channel(obj: Any, plugin: plugins.AgentPlugin) -> tuple[str, str]:
+    """一条 JSONL 事件里的文字该进哪条通道：`("answer" | "thinking", text)`。
+
+    三种情况，按清单能力从强到弱：
+
+    1. 清单声明了 `answer_item_types`（内置 Codex 声明 `["agent_message"]`）：
+       **只**认白名单里的 `item.type`，其余一律进思考区。最严格，推荐新清单使用。
+    2. 没声明，但 `item.type` 落在 `_DEFAULT_PROCESS_ITEM_TYPES` 里（推理、命令执行、
+       文件改动、MCP 调用、联网搜索）：这是过程，不进回答。默认就挡住「推理冒充
+       回答」，外部插件不必改清单也能受益。
+    3. 其它情况照旧：`text_paths` 命中的第一个非空字符串就是回答正文——不能因为
+       这次改动把不认识的事件类型从正文里拿掉（那些插件可能把答案放在别处）。
+
+    声明白名单的核心，宁可把不认识的 item 关进折叠区，也不让它冒充回答；没声明
+    的核心则保留旧行为，不悄悄吞掉外部插件的正文。
+    """
+    text = _extract_jsonl_text(obj, plugin.text_paths)
+    if not text:
+        return "", ""
+    item_type = _jsonl_item_type(obj)
+    if plugin.answer_item_types:
+        if item_type in plugin.answer_item_types:
+            return "answer", text
+        return "thinking", text
+    if item_type in _DEFAULT_PROCESS_ITEM_TYPES:
+        return "thinking", text
+    return "answer", text
+
+
 def _jsonl_error(obj: Any) -> str:
     if not isinstance(obj, dict):
         return ""
@@ -621,7 +737,7 @@ def _run_cli(state: RunState, ctx: RunContext) -> tuple[str, list, dict]:
                   config.AGENT_RUN_TIMEOUT_SECONDS)
     deadline = time.time() + timeout
     stderr_tail: deque[str] = deque(maxlen=40)
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     done_streams = 0
     # 一轮执行里 usage 事件可能出现多次（每个 turn 一条），token 累加、调用仍记 1 次。
     usage_events = 0
@@ -667,10 +783,16 @@ def _run_cli(state: RunState, ctx: RunContext) -> tuple[str, list, dict]:
                 usage_events += 1
                 prompt_tokens += usage[0]
                 completion_tokens += usage[1]
-            text = _extract_jsonl_text(obj, plugin.text_paths)
-            if text and text not in seen:
-                seen.add(text)
-                state.emit_text(text if text.endswith("\n") else text + "\n")
+            channel, text = _jsonl_text_channel(obj, plugin)
+            if text and (channel, text) not in seen:
+                # 同一段文字在一次执行里只发一次（Codex 会先 item.started 再
+                # item.completed，有些 CLI 还会重复整段）。
+                seen.add((channel, text))
+                line_text = text if text.endswith("\n") else text + "\n"
+                if channel == "thinking":
+                    state.emit_thinking(line_text)
+                else:
+                    state.emit_text(line_text)
         else:
             state.emit_text(clean + "\n")
 
@@ -689,7 +811,9 @@ def _run_cli(state: RunState, ctx: RunContext) -> tuple[str, list, dict]:
     content = state.text.strip()
     if not content:
         tail = "\n".join(stderr_tail)[-800:]
-        raise AgentRunError(EMPTY_OUTPUT_TEXT + (f"\n{tail}" if tail else ""))
+        # 有思考过程却没有回答：这不是「什么都没输出」，而是「只想了没答」。
+        headline = NO_ANSWER_TEXT if state.thinking.strip() else EMPTY_OUTPUT_TEXT
+        raise AgentRunError(headline + (f"\n{tail}" if tail else ""))
     meta = {
         "core": plugin.id,
         "model": ctx.model_label,

@@ -60,6 +60,7 @@ def _write_fake_agent(directory, *, body: str, plugin_id: str = "fake-cli",
                       protocols: list[str] | None = None,
                       env: dict | None = None, output: str = "text",
                       text_paths: list[str] | None = None,
+                      answer_item_types: list[str] | None = None,
                       usage_event: str = "") -> str:
     script = directory / f"{plugin_id}.py"
     script.write_text(body, encoding="utf-8")
@@ -81,6 +82,8 @@ def _write_fake_agent(directory, *, body: str, plugin_id: str = "fake-cli",
     }
     if text_paths:
         manifest["text_paths"] = text_paths
+    if answer_item_types:
+        manifest["answer_item_types"] = answer_item_types
     if usage_event:
         manifest["usage_event"] = usage_event
     (directory / f"{plugin_id}.json").write_text(
@@ -700,3 +703,201 @@ def test_text_cli_without_usage_is_marked_unmetered(app_client, admin_headers,
     assert meta["usage"]["calls"] == 1
     assert meta["usage"]["prompt_tokens"] == 0
     assert meta["usage"]["completion_tokens"] == 0
+
+
+# -------------------------------------------------- 思考过程与回答分区（2026-11-11）
+# 用户截图反馈：个人 Agent 的一条回复气泡里，整段模型内心推理直接铺在回答位置，
+# 最终答案根本没出现。根因是 JSONL 解析只看 `text_paths`、不看 `item.type`，
+# 于是 Codex 的 `reasoning` 项和 `agent_message` 项挤进同一条正文通道。
+# 下面的事件结构来自本机 codex-cli 0.167.0 的实测输出（docs/AGENT_PLUGINS.md §3.4）。
+CODEX_REASONING = "用户问的是 2026 年市场规模，先查资料再回答。"
+CODEX_ANSWER = "2026 年中国企业级 AI Agent 市场约 240 亿元。"
+
+
+def _jsonl_body(*events: dict) -> str:
+    """一段把给定事件逐行打到 stdout 的假 CLI 源码（`codex exec --json` 同构）。"""
+    lines = [
+        "import json",
+        "",
+        "",
+        "def emit(payload):",
+        "    print(json.dumps(payload, ensure_ascii=False), flush=True)",
+        "",
+    ]
+    for event in events:
+        lines.append(f"emit({json.dumps(event, ensure_ascii=False)})")
+    return "\n".join(lines) + "\n"
+
+
+def _ask_once(app_client, admin_headers, model_id: int, question: str = "市场有多大？",
+              plugin_id: str = "fake-cli") -> dict:
+    created = app_client.post("/api/agent/sessions", headers=admin_headers, json={
+        "core_id": plugin_id, "model_config_id": model_id,
+    })
+    assert created.status_code == 201, created.text
+    sent = app_client.post(
+        f"/api/agent/sessions/{created.json()['id']}/messages",
+        headers=admin_headers, json={"content": question},
+    )
+    assert sent.status_code == 200, sent.text
+    return _wait_run(app_client, admin_headers, sent.json()["run_id"])
+
+
+def test_jsonl_reasoning_is_separated_from_the_answer(app_client, admin_headers,
+                                                      db_session, cli_plugin):
+    """推理进思考区（meta.thinking + thinking 事件），回答正文只留 agent_message。
+
+    这是用户那条截图的回归用例：修复前 reasoning 的 `item.text` 会被当成正文，
+    气泡里看到的是整段内心独白，答案反而没有落进气泡。
+    """
+    model_id = _make_model(db_session)
+    _write_fake_agent(
+        cli_plugin, output="jsonl", text_paths=["item.text"],
+        answer_item_types=["agent_message"],
+        body=_jsonl_body(
+            {"type": "thread.started", "thread_id": "t-1"},
+            {"type": "turn.started"},
+            {"type": "item.completed",
+             "item": {"id": "item_2", "type": "reasoning", "text": CODEX_REASONING}},
+            {"type": "item.completed",
+             "item": {"id": "item_3", "type": "agent_message", "text": CODEX_ANSWER}},
+            {"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 5}},
+        ),
+    )
+    plugins.clear_detection_cache()
+
+    result = _ask_once(app_client, admin_headers, model_id)
+    assert result["status"] == "ok", result
+
+    content = result["message"]["content"]
+    assert CODEX_ANSWER in content
+    assert "用户问的是" not in content
+    assert result["message"]["meta"]["thinking"].strip() == CODEX_REASONING
+
+    text_events = "".join(
+        e["data"]["text"] for e in result["events"] if e["type"] == "text")
+    thinking_events = "".join(
+        e["data"]["text"] for e in result["events"] if e["type"] == "thinking")
+    assert CODEX_ANSWER in text_events
+    assert "用户问的是" not in text_events
+    assert CODEX_REASONING in thinking_events
+
+
+def test_jsonl_command_items_are_process_not_answer(app_client, admin_headers,
+                                                    db_session, cli_plugin):
+    """命令执行/工具调用算「过程」：绝不进回答气泡，但仍可在思考区看到。"""
+    model_id = _make_model(db_session)
+    command_text = "$ rg --files\n退出码 1：blocked by policy"
+    _write_fake_agent(
+        cli_plugin, output="jsonl", text_paths=["item.text"],
+        answer_item_types=["agent_message"],
+        body=_jsonl_body(
+            {"type": "item.completed",
+             "item": {"type": "reasoning", "text": "先看看工作目录里有没有资料。"}},
+            {"type": "item.completed",
+             "item": {"type": "command_execution", "command": "rg --files",
+                      "text": command_text, "exit_code": 1, "status": "failed"}},
+            {"type": "item.completed",
+             "item": {"type": "agent_message", "text": CODEX_ANSWER}},
+        ),
+    )
+    plugins.clear_detection_cache()
+
+    result = _ask_once(app_client, admin_headers, model_id)
+    assert result["status"] == "ok", result
+    assert result["message"]["content"].strip() == CODEX_ANSWER
+    thinking = result["message"]["meta"]["thinking"]
+    assert "先看看工作目录" in thinking
+    assert "rg --files" in thinking
+
+
+def test_jsonl_without_answer_item_types_still_keeps_process_out(app_client, admin_headers,
+                                                                 db_session, cli_plugin):
+    """没声明 `answer_item_types` 的清单：过程类 item 仍然不进正文，其它照旧。
+
+    兼容口径：外部插件不改清单也不会再被「推理冒充回答」坑到（reasoning 等已知
+    过程类型默认归思考区）；但不认识的事件类型必须保持旧行为——不能悄悄吞掉
+    别人的正文。
+    """
+    model_id = _make_model(db_session)
+    _write_fake_agent(
+        cli_plugin, output="jsonl", text_paths=["item.text"],
+        body=_jsonl_body(
+            {"type": "item.completed", "item": {"type": "reasoning", "text": CODEX_REASONING}},
+            {"type": "item.completed", "item": {"type": "message", "text": CODEX_ANSWER}},
+        ),
+    )
+    plugins.clear_detection_cache()
+
+    result = _ask_once(app_client, admin_headers, model_id)
+    assert result["status"] == "ok", result
+    assert result["message"]["content"].strip() == CODEX_ANSWER
+    assert result["message"]["meta"]["thinking"].strip() == CODEX_REASONING
+
+
+def test_jsonl_reasoning_only_run_says_there_is_no_answer(app_client, admin_headers,
+                                                          db_session, cli_plugin):
+    """只出推理、没有最终回答：状态记 failed，正文说清「没有最终回答」并留证据。
+
+    不把推理倒进正文（那是用户的抱怨），也不假装成功：思考过程留在 meta.thinking
+    里，界面据此给出可展开的「思考过程」，能看出它卡在哪一步。
+    """
+    model_id = _make_model(db_session)
+    _write_fake_agent(
+        cli_plugin, output="jsonl", text_paths=["item.text"],
+        answer_item_types=["agent_message"],
+        body=_jsonl_body(
+            {"type": "item.completed", "item": {"type": "reasoning", "text": CODEX_REASONING}},
+            {"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 5}},
+        ),
+    )
+    plugins.clear_detection_cache()
+
+    result = _ask_once(app_client, admin_headers, model_id)
+    assert result["status"] == "failed", result
+    content = result["message"]["content"]
+    assert "只产出了思考过程" in content
+    assert "用户问的是" not in content
+    assert result["message"]["meta"]["thinking"].strip() == CODEX_REASONING
+    assert result["message"]["status"] == "failed"
+
+
+def test_thinking_is_not_replayed_into_the_next_prompt(app_client, admin_headers,
+                                                       db_session, cli_plugin):
+    """思考过程只给用户看，不回放进下一轮提示词：历史仍只带回答正文。"""
+    model_id = _make_model(db_session)
+    prompt_log = cli_plugin / "prompt.log"
+    _write_fake_agent(
+        cli_plugin, output="jsonl", text_paths=["item.text"],
+        answer_item_types=["agent_message"],
+        body=(
+            "import json, sys\n"
+            f"open({str(prompt_log)!r}, 'a', encoding='utf-8')"
+            ".write(sys.argv[1] + '\\n')\n"
+            "print(json.dumps({'type': 'item.completed',"
+            " 'item': {'type': 'reasoning', 'text': "
+            f"{CODEX_REASONING!r}" "}}, ensure_ascii=False), flush=True)\n"
+            "print(json.dumps({'type': 'item.completed',"
+            " 'item': {'type': 'agent_message', 'text': "
+            f"{CODEX_ANSWER!r}" "}}, ensure_ascii=False), flush=True)\n"
+        ),
+    )
+    plugins.clear_detection_cache()
+
+    created = app_client.post("/api/agent/sessions", headers=admin_headers, json={
+        "core_id": "fake-cli", "model_config_id": model_id,
+    })
+    session_id = created.json()["id"]
+    for question in ("第一轮：市场有多大？", "第二轮：再说细一点"):
+        sent = app_client.post(
+            f"/api/agent/sessions/{session_id}/messages",
+            headers=admin_headers, json={"content": question},
+        )
+        assert sent.status_code == 200, sent.text
+        assert _wait_run(app_client, admin_headers, sent.json()["run_id"])["status"] == "ok"
+
+    prompts = prompt_log.read_text(encoding="utf-8").splitlines()
+    assert len(prompts) == 2, prompts
+    # 第二轮提示词带上了上一轮的回答（历史回放），但绝不能带上思考过程。
+    assert CODEX_ANSWER in prompts[1]
+    assert "用户问的是" not in prompts[1]

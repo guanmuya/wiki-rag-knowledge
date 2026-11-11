@@ -912,6 +912,8 @@ export interface AgentCore {
   requires_workspace: boolean
   timeout_seconds: number
   output: string
+  /** JSONL 核心：哪些 item 类型的文字算最终回答（空 = 不区分类型，旧行为） */
+  answer_item_types?: string[]
   manifest_path: string
   compatible_model_count?: number
   default_model_id?: number | null
@@ -985,7 +987,11 @@ export interface AgentSessionDetail extends AgentSession {
 
 export interface AgentRunEvent {
   seq: number
-  type: 'status' | 'text' | 'log' | 'evidence' | 'done' | 'error' | 'stopped'
+  /**
+   * `thinking` 是模型的推理/工具尝试，只进折叠的「思考过程」，绝不进回答气泡；
+   * `text` 才是给用户看的回答正文。
+   */
+  type: 'status' | 'text' | 'thinking' | 'log' | 'evidence' | 'done' | 'error' | 'stopped'
   data: Record<string, unknown>
 }
 

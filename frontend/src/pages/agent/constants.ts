@@ -1,14 +1,27 @@
-import type { AgentCore, EvidenceItem } from '../../types'
+import type { AgentCore, AgentMessage, EvidenceItem } from '../../types'
 
 export interface LiveRun {
   runId: number
   sessionId: number
   text: string
+  /** 模型的推理/工具尝试：只进折叠的「思考过程」，不进回答气泡 */
+  thinking: string
   logs: string[]
   evidence: EvidenceItem[]
   stage: string
   status: 'running' | 'ok' | 'failed' | 'stopped'
   error: string
+}
+
+/**
+ * 助手消息里的思考过程。
+ *
+ * 后端把推理（Codex 的 `reasoning` 项）写进 `meta.thinking`，回答正文仍只在
+ * `content` 里——两者混在一起正是用户抱怨的「整段内心推理铺在回答位置」。
+ */
+export function thinkingOf(message: AgentMessage): string {
+  const value = message.meta?.thinking
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 export const EXAMPLE_PLUGIN = `{

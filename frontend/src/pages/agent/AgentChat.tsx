@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { RefObject } from 'react'
 import type {
   AgentCore,
@@ -7,11 +8,21 @@ import type {
   UsageInfo,
 } from '../../types'
 import { Button, Select, Spinner } from '../../components/ui'
-import { IconAgent, IconPlug, IconStop, IconTerminal } from '../../components/icons'
+import {
+  IconAgent,
+  IconChevronDown,
+  IconChevronRight,
+  IconPlug,
+  IconStop,
+  IconTerminal,
+} from '../../components/icons'
 import { EvidencePanel, UsageLine } from '../../components/Evidence'
 import { Markdown } from '../../components/Markdown'
 import { formatMs, formatTime } from '../../utils'
-import { coreUsable, type LiveRun } from './constants'
+import { coreUsable, thinkingOf, type LiveRun } from './constants'
+
+/** 只有过程没有答案时的说明：与后端 `runtime.NO_ANSWER_TEXT` 同一口径。 */
+const NO_ANSWER_HINT = '这次执行只产出了思考过程，没有给出最终回答。'
 
 export function AgentChat({
   active,
@@ -208,6 +219,13 @@ function AgentMessageBubble({ message }: { message: AgentMessage }) {
   const metaError = typeof message.meta?.error === 'string' ? message.meta.error : ''
   const failed = message.status === 'failed'
   const stopped = message.status === 'stopped'
+  // 回答正文只来自 content；思考过程来自 meta.thinking。两者绝不合并渲染：
+  // 合并过一次的后果就是「整段内心推理铺在回答位置」（用户 2026-11-11 反馈）。
+  const answer = (message.content || '').trim()
+  const thinking = thinkingOf(message)
+  const emptyAnswerText = failed
+    ? metaError || NO_ANSWER_HINT
+    : stopped ? '已停止。' : NO_ANSWER_HINT
   if (!isUser && message.status === 'pending') {
     return (
       <div className="msg msg-assistant">
@@ -226,11 +244,16 @@ function AgentMessageBubble({ message }: { message: AgentMessage }) {
         {isUser ? '我' : <IconAgent size={15} />}
       </div>
       <div className="msg-main">
+        {!isUser && thinking ? (
+          <AgentThinking text={thinking} running={false} />
+        ) : null}
         <div className={`msg-bubble ${failed || stopped ? 'msg-failed' : ''}`}>
           {isUser ? (
             <div style={{ whiteSpace: 'pre-wrap' }}>{message.content}</div>
+          ) : answer ? (
+            <Markdown content={answer} />
           ) : (
-            <Markdown content={message.content || (failed ? metaError || '这次执行没有完成。' : '')} />
+            <div className="agent-answer-empty">{emptyAnswerText}</div>
           )}
         </div>
         <div className="msg-meta">
@@ -264,18 +287,26 @@ function LiveBubble({
 }) {
   const failed = live.status === 'failed'
   const stopped = live.status === 'stopped'
+  const running = live.status === 'running'
+  const thinking = live.thinking.trim()
+  const answer = live.text.trim()
   return (
     <div className="msg msg-assistant">
       <div className="msg-avatar"><IconAgent size={15} /></div>
       <div className="msg-main">
+        {thinking ? <AgentThinking text={thinking} running={running} /> : null}
         <div className={`msg-bubble agent-live ${failed ? 'msg-failed' : ''}`}>
-          {live.text ? <Markdown content={live.text} /> : (
+          {answer ? <Markdown content={live.text} /> : (
             <div className="agent-live-wait">
               <Spinner size={14} />
-              <span>{live.stage || '正在执行…'}</span>
+              <span>
+                {!running
+                  ? NO_ANSWER_HINT
+                  : thinking ? '正在思考，答案会显示在这里…' : (live.stage || '正在执行…')}
+              </span>
             </div>
           )}
-          {live.text && live.status === 'running' ? <span className="agent-caret" /> : null}
+          {answer && running ? <span className="agent-caret" /> : null}
           {failed || stopped ? (
             <div className="agent-live-error">
               {stopped ? '已停止。' : live.error || '执行失败。'}
@@ -302,6 +333,37 @@ function LiveBubble({
           </details>
         ) : null}
       </div>
+    </div>
+  )
+}
+
+/**
+ * 思考过程折叠区：模型的推理/工具尝试都收在这里，**默认收起**。
+ *
+ * 复用「智能问答」页 `.thinking-card` 的视觉（讨论、折叠头、脉冲点），所以两个
+ * 页面看起来是同一套语言。为什么默认收起：用户要的是答案——推理铺在回答位置时
+ * 他甚至看不到结论；收起后回答占据主位，需要核对过程时再展开。
+ */
+function AgentThinking({ text, running }: { text: string; running: boolean }) {
+  const [open, setOpen] = useState(false)
+  const chars = text.trim().length
+  if (!chars) return null
+  return (
+    <div className="thinking-card agent-thinking">
+      <button
+        type="button"
+        className="thinking-head"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        <span className={`thinking-pulse ${running ? '' : 'done'}`} />
+        <span className="thinking-title">{running ? '正在思考' : '思考过程'}</span>
+        <span className="tiny muted">{chars} 字</span>
+        <span className="spacer" />
+        <span className="tiny muted">{open ? '收起' : '展开'}</span>
+        {open ? <IconChevronDown size={13} /> : <IconChevronRight size={13} />}
+      </button>
+      {open ? <div className="agent-thinking-body">{text}</div> : null}
     </div>
   )
 }

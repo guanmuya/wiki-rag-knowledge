@@ -137,6 +137,7 @@ Codex 核心跑在应用自己的配置目录里：
 | `env` | 否 | 注入子进程的环境变量模板，最多 32 项；键必须在 `ALLOWED_ENV_KEYS` 白名单内，不能覆盖 `PATH`/`PYTHONPATH`/`NODE_OPTIONS` 等系统或代码加载变量 |
 | `output` | 否 | `text`（默认，逐行当正文）或 `jsonl`（逐行解析 JSON） |
 | `text_paths` | 否 | `output=jsonl` 时提取正文的点路径，如 `["item.text","message"]` |
+| `answer_item_types` | 否 | `output=jsonl` 时哪些 `item.type` 的文字算「最终回答」，如 `["agent_message"]`；留空时推理、命令执行等已知过程类型默认归「思考过程」，其它仍按旧行为当正文。见 §3.4。写了 `output=text` 会被拒绝 |
 | `usage_event` | 否 | `output=jsonl` 时哪一类事件带 token 用量（如 `turn.completed`）；写了 `output=text` 会被拒绝。见 §3.4 |
 | `timeout_seconds` | 否 | 单轮硬超时，10..3600，默认 900；仍受全局 `WRK_AGENT_RUN_TIMEOUT` 限制 |
 | `requires_workspace` | 否 | 默认 `true`；CLI 在会话工作目录里启动（该目录必须落在 `AGENT_WORKSPACE_DIR` 内） |
@@ -187,9 +188,64 @@ Codex 核心跑在应用自己的配置目录里：
 }
 ```
 
-应用会逐行 `json.loads`，按 `text_paths` 顺序找第一个非空字符串作为正文；
+应用会逐行 `json.loads`，按 `text_paths` 顺序找第一个非空字符串作为正文候选；
 解析失败的行会作为运行日志展示，不会中断执行。Codex CLI 的
 `codex exec --json` 就使用这种模式。
+
+**正文分两栏**：候选文字还要按事件的 `item.type` 分流成「回答」与「思考过程」，
+见下一节。只想让某类事件进正文的清单必须声明 `answer_item_types`。
+
+#### 思考过程与最终回答（`answer_item_types`）
+
+`codex exec --json` 把推理和最终回答都放在**同一种事件**里（`item.completed`），
+区别只在 `item.type`。只看 `text_paths` 时，两者都会进正文——用户 2026-11-11
+的截图就是这样：气泡里从「用户问的是…」一路铺到「Command rejected by policy…」，
+是整段内心推理与工具尝试，最终答案反而没落在气泡里。
+
+本机 `codex-cli 0.167.0` 的实测事件（2026-11-11，用本地 mock 的 Responses API
+喂一次确定性响应，没有调用真实在线模型；`CODEX_HOME` 用临时目录）：
+
+```json
+{"type":"thread.started","thread_id":"01a1cb10-..."}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `gpt-5` not found..."}}
+{"type":"item.completed","item":{"id":"item_2","type":"reasoning","text":"用户问的是市场规模。先看看工作目录里有没有资料。"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"2026 年市场约 240 亿元。"}}
+{"type":"turn.completed","usage":{"input_tokens":120,"cached_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":5}}
+```
+
+另有顶层 `{"type":"error","message":"..."}`（重连提示等）与 `item.type:"error"`
+（websocket 回退等），前者由运行器当运行日志，后者不带 `text` 所以不进正文。
+本机的命令执行全被策略拦下（"blocked by policy"），**没有产生任何 JSONL item**，
+只有模型在推理里提到它；所以这里不照搬推测的 `command_execution` 字段结构，
+也不做逐条命令步骤面板。二进制里能确认存在 `command_execution` / `file_change` /
+`mcp_tool_call` / `web_search` 等 item 类型名，但它们的字段形状本机未实测。
+
+因此内置 `codex` 清单声明 `answer_item_types: ["agent_message"]`。分流规则三档：
+
+1. **声明了 `answer_item_types`**：只认名单里的 `item.type` 为回答；其余一切带文字
+   的事件（`reasoning`、命令执行、文件改动…）都进「思考过程」。推荐新清单用这档。
+2. **没声明，但 `item.type` 是 `reasoning` / `command_execution` / `file_change` /
+   `mcp_tool_call` / `web_search`**：默认当过程，不进回答（外部插件不改清单也不会
+   再被「推理冒充回答」坑到）。
+3. **其余情况照旧**：`text_paths` 命中的第一个非空字符串就是回答正文——不能因为
+   这次改动悄悄吞掉不认识的事件类型里的正文。
+
+界面上「思考过程」是**默认折叠**的卡片（复用智能问答页 `.thinking-card` 的视觉），
+回答留在主气泡；正在执行时回答位置只显示「正在思考…」。运行器用 `thinking`
+事件推推理增量、用 `text` 事件推回答增量，收尾把推理写进助手消息的
+`meta.thinking`（超长截断时 `meta.thinking_truncated: true`）。历史回放只用
+`content`，思考过程不会塞进下一轮提示词。
+
+取舍与边界（2026-11-11 定）：
+
+- 命令执行/工具调用（含被策略拦截的命令）算「过程」的一部分，不进回答；本机实测
+  被拦的命令没有独立 JSONL 事件，只有推理文字，所以不为它另造字段。
+- 一轮**只出推理、没有最终回答**时，状态记 `failed`，正文明确写「只产出了思考过程，
+  没有给出最终回答」，`meta.thinking` 保留全部推理供展开核对——不把推理倒进正文，
+  也不假装执行成功。
+- **已落库的旧消息不重解析**：库里只有当时的正文，没有原始 JSONL，事后切分只能
+  靠猜。隔离只影响新执行；旧消息照原样显示。
 
 #### 用量事件（`usage_event`）
 
@@ -283,7 +339,8 @@ CLI 没吐用量就老实说「未计量」。
 ## 5. 执行、停止与恢复
 
 - 发送消息后先落一条 `pending` 的 assistant 消息，后台线程执行核心；
-  前端每 350ms 轮询 `/api/agent/runs/{id}/events?after=` 追加文本、日志和证据。
+  前端每 350ms 轮询 `/api/agent/runs/{id}/events?after=` 追加回答正文（`text`）、
+  思考过程（`thinking`）、日志和证据。
 - 点「停止」会终止子进程树（Windows 用 `taskkill /T /F`，POSIX 用进程组），
   消息收尾为 `stopped`。
 - 超过 `timeout_seconds` 自动终止，消息收尾为 `failed`。

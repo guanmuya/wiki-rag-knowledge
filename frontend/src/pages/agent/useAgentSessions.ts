@@ -80,7 +80,7 @@ export function useAgentSessions({
     if (!active) return
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [active, live?.text, live?.logs.length])
+  }, [active, live?.text, live?.thinking, live?.logs.length])
 
   async function refreshSessions(): Promise<AgentSession[]> {
     const data = await agentApi.sessions()
@@ -124,10 +124,11 @@ export function useAgentSessions({
           const base: LiveRun = prev && prev.runId === runId
             ? prev
             : {
-                runId, sessionId, text: '', logs: [], evidence: [],
+                runId, sessionId, text: '', thinking: '', logs: [], evidence: [],
                 stage: '', status: 'running', error: '',
               }
           let text = base.text
+          let thinking = base.thinking
           const logs = [...base.logs]
           let evidence = [...base.evidence]
           let stage = base.stage
@@ -138,6 +139,10 @@ export function useAgentSessions({
             if (ev.type === 'text') {
               const delta = typeof data.text === 'string' ? data.text : ''
               if (delta) text += delta
+            } else if (ev.type === 'thinking') {
+              // 推理单独累计：它要进折叠区，不能混进回答正文。
+              const delta = typeof data.text === 'string' ? data.text : ''
+              if (delta) thinking += delta
             } else if (ev.type === 'log') {
               const line = typeof data.text === 'string' ? data.text : ''
               if (line) logs.push(line)
@@ -155,7 +160,7 @@ export function useAgentSessions({
             }
           }
           return {
-            ...base, text, logs: logs.slice(-200), evidence, stage,
+            ...base, text, thinking, logs: logs.slice(-200), evidence, stage,
             status: snap.status === 'running' ? status : snap.status,
             error: snap.error || error,
           }
@@ -248,6 +253,7 @@ export function useAgentSessions({
         runId: res.run_id,
         sessionId,
         text: '',
+        thinking: '',
         logs: [],
         evidence: [],
         stage: '正在启动…',
