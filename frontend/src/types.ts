@@ -951,7 +951,7 @@ export interface AgentSession {
   core_name: string
   model_config_id: number | null
   model_label: string
-  kb_ids: number[]
+  /** 个人 Agent 不检索知识库，后端已不返回 `kb_ids`；知识库问答在「智能问答」页 */
   workspace: string
   status: 'idle' | 'running' | 'error'
   message_count: number
@@ -1003,6 +1003,6 @@ export interface AgentSessionPayload {
   title?: string
   core_id?: string
   model_config_id?: number | null
-  kb_ids?: number[]
+  /** 个人 Agent 不检索知识库，后端已不接受 `kb_ids`；知识库问答在「智能问答」页 */
   workspace?: string
 }

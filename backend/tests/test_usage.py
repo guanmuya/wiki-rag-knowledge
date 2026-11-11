@@ -814,7 +814,8 @@ def test_agent_usage_counts_once_and_splits_by_core(isolated_api):
     assert sources["chat"]["calls"] == 1
     cores = {row["core_id"]: row for row in data["by_core"]}
     assert set(cores) == {"kb", "codex"}
-    assert cores["kb"]["label"] == agent_plugins.BUILTIN_BY_ID["kb"].name
+    # kb 核心已下线，但历史会话仍在用量里出现：标签走 core_label()，落到「已下线」文案。
+    assert cores["kb"]["label"] == agent_plugins.core_label("kb")
     assert cores["codex"]["label"] == agent_plugins.BUILTIN_BY_ID["codex"].name
     assert cores["kb"]["cost"]["amount"] == pytest.approx(0.169)
     assert cores["codex"]["cost"]["unpriced_records"] == 1
@@ -847,7 +848,7 @@ def test_agent_without_usage_is_unmetered_and_filters_apply(isolated_api):
     assert data["totals"] == totals(calls=1, chat_calls=1, live_calls=1,
                                     record_count=1, unmetered_records=1)
     assert data["by_core"] == [{
-        "core_id": "kb", "label": agent_plugins.BUILTIN_BY_ID["kb"].name,
+        "core_id": "kb", "label": agent_plugins.core_label("kb"),
         **totals(calls=1, chat_calls=1, live_calls=1, record_count=1,
                  unmetered_records=1),
     }]

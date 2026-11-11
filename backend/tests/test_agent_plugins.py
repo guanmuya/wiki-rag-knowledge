@@ -67,6 +67,7 @@ def test_parse_manifest_accepts_minimal_cli():
         ({"env": {"1BAD": "x"}}, "env"),
         ({"kind": "kb"}, "kb"),
         ({"id": "kb"}, "保留"),
+        ({"isolated_home": "codex"}, "isolated_home"),
         # 纯文本输出没有可解析的事件：写了 usage_event 也必须拒绝，不能静默忽略。
         ({"usage_event": "turn.completed"}, "usage_event"),
         ({"output": "jsonl", "usage_event": 123}, "usage_event"),
@@ -271,12 +272,27 @@ def test_plugin_enable_disable_roundtrip(db_session):
     assert codex["enabled"] is True
 
 
-def test_builtin_kb_core_always_available(db_session):
+def test_builtin_cores_are_all_cli_and_kb_is_gone(db_session):
+    """个人 Agent 不再与知识库交互：内置核心只剩 CLI，列表里没有 kb。"""
     data = plugins.list_plugins(db_session)
-    kb = next(item for item in data["items"] if item["id"] == "kb")
-    assert kb["installed"] is True
-    assert kb["available"] is True
-    assert kb["kind"] == "kb"
+    ids = [item["id"] for item in data["items"]]
+    assert "kb" not in ids
+    assert {"claude-code", "codex"} <= set(ids)
+    assert all(item["kind"] == "cli" for item in data["items"])
+    assert all(item["isolated_home"] == "" or item["isolated_home"] == "codex"
+               for item in data["items"])
+    codex = next(item for item in data["items"] if item["id"] == "codex")
+    assert codex["isolated_home"] == "codex"
+    assert codex["builtin"] is True
+
+
+def test_legacy_core_label_and_hint():
+    assert plugins.core_label("kb") == "知识库助手（已下线）"
+    assert plugins.core_label("codex") == "Codex CLI"
+    assert plugins.core_label("no-such-core") == "no-such-core"
+    assert plugins.is_legacy_core("kb") is True
+    assert plugins.is_legacy_core("codex") is False
+    assert "智能问答" in plugins.LEGACY_CORE_HINT
 
 
 def test_substitute_args_and_env(tmp_path, monkeypatch):
