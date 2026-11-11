@@ -6,10 +6,13 @@
 > 构建环境的实测数字（产物大小、`latest.yml` 原文、安装包 sha512、门禁输出）见
 > [`docs/evidence/release-v1.0.19-build.txt`](evidence/release-v1.0.19-build.txt)。
 
-> **发布状态：构建已完成（2026-11-11），Release 待合并后上传** —— 本轮只做版本号、
-> 交付说明、五项门禁与安装包构建；`v1.0.19` tag 由平台在 PR 合并落地后打在 `master`
-> 的合并提交上，Release 与三件资产在下一步用 `gh release create --verify-tag` 上传
-> （命令见 §2）。上一版（v1.0.18）的发布实测记录在
+> **发布状态：已发布（2026-11-11 14:22 UTC）** —— Release 页面
+> <https://github.com/guanmuya/wiki-rag-knowledge/releases/tag/v1.0.19>；
+> `v1.0.19` tag 由平台创建并打在 `master` 的合并提交 `cda67b2` 上，三件资产已上传、
+> 匿名可下载（均 200），GitHub 列表已标 `Latest`。发布的是**重建件**：体积与 sha512
+> 与构建记录 `release-v1.0.19-build.txt` §5 那轮不同，属正常。本次发布的前置核对、上传与三项校验的实测数据见
+> [`docs/evidence/release-v1.0.19-publish.txt`](evidence/release-v1.0.19-publish.txt)
+> （该文件是发布时的权威数字）；上一版（v1.0.18）的记录在
 > [`docs/evidence/release-v1.0.18-publish.txt`](evidence/release-v1.0.18-publish.txt)。
 
 - 版本：`1.0.19`（`backend/app/main.py` 的 `VERSION` 与 `frontend/package.json` 的 `version` 同步递增）
@@ -143,11 +146,14 @@ gh release upload v1.0.19 --clobber `
 
 ---
 
-## 3. 本版没做的事（如实记录）
+## 3. 本轮构建没做的事（后续已在发布步骤补上）
 
-- **没有打 tag**：`v1.0.19` 由平台在合并落地后创建，本轮不建。
-- **没有上传 Release**：tag 还不存在，先建 Release 会把 tag 指到错误提交；
-  上传动作按 §2 在 tag 出现后执行。
+- **没有打 tag**（构建轮）：`v1.0.19` 由平台在合并落地后创建，构建轮不建。
+  **已于 2026-11-11 完成**：tag 指向合并提交 `cda67b2`，见 §2.1 与
+  [`docs/evidence/release-v1.0.19-publish.txt`](evidence/release-v1.0.19-publish.txt) §4.1。
+- **没有上传 Release**（构建轮）：tag 还不存在时先建 Release 会把 tag 指到错误提交；
+  上传动作按 §2 在 tag 出现后执行。**已于 2026-11-11 完成**：三件资产已上传并校验
+  匿名可下载，见发布记录 §5。
 - **没有代码签名**：见 `docs/UPDATE.md` §6.2，属外部凭据，需用户单独授权。
 - **业务代码零改动**：本版只 bump 版本号三处、补交付说明与构建记录、构建安装包；
   `backend/app/**`、`frontend/src/**`、`frontend/electron/**` 一行未动
