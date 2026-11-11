@@ -10,6 +10,44 @@
 
 ---
 
+## [1.0.20] - 2026-11-11
+
+> 本版区间是 `v1.0.19` 之后合入 `master` 的部分，用 `git log v1.0.19..HEAD` 可核对；
+> `v1.0.20` tag 由平台在合并落地后打在 `master` 的合并提交上，本节不预设 tag 存在。
+> 测试计数不在本文件复述，见 `docs/FACTS.md` §2。
+
+### 新增
+
+- **个人 Agent 把思考过程与最终回答分开显示**：模型推理与工具尝试不再整段铺在回答气泡里，
+  改为收进默认折叠的「思考过程」卡片，回答气泡只保留最终答案；需要时可展开查看过程
+- **只有推理没有回答时明确标成未完成**：整轮只有思考、没有最终答案的运行不再显示成
+  「回答完毕」，而是明确提示「这次执行只产出了思考过程，没有给出最终回答」，并归入未完成
+- **旧消息不重解析**：历史消息按落库时的内容照常展示，不重新拆分思考/回答（库里没有原始事件流），
+  新口径只对之后产生的消息生效
+
+### 变更
+
+- 个人 Agent 的 Codex 核心改用清单字段 `answer_item_types` 声明「哪些事件属于回答」：
+  内置 Codex 声明 `agent_message`，其余推理 / 命令 / 文件改动等事件一律归「思考过程」；
+  事件口径见 `docs/AGENT_PLUGINS.md` §3.4
+
+### 发布
+
+- 版本号递增到 `1.0.20`（`backend/app/main.py` 的 `VERSION`、`frontend/package.json` 的 `version`、
+  `docs/FACTS.md` §1 三处同步）；`README.md`、`docs/HANDOFF.md`、`docs/THESIS.md` 里写当前版本的
+  那几句同步改数字（历史快照、历史证据、历史 CHANGELOG 段落不动）
+- 产出 Windows NSIS 安装包 `wiki-rag-knowledge-1.0.20-x64-setup.exe` 与更新源三件套
+  （`latest.yml` + 安装包 + `.blockmap`）；产物大小、`latest.yml` 原文、安装包 sha512 与五项门禁的
+  实跑输出见 `docs/evidence/release-v1.0.20-build.txt`
+- 交付说明（Release 正文草稿 + 上传与校验命令）见 [`docs/RELEASE_NOTES_v1.0.20.md`](docs/RELEASE_NOTES_v1.0.20.md)：
+  Release 资产在 `master` 合并、tag `v1.0.20` 打上之后再上传，本版不预先建 tag
+- 清理 v1.0.17 遗留的空草稿 Release，并补记 v1.0.19 三件资产的上传与校验；证据见
+  `docs/evidence/release-v1.0.17-draft-cleanup.txt` 与 `docs/evidence/release-v1.0.19-publish.txt`
+- 安装包**没有代码签名证书**，Windows 首次安装会弹 SmartScreen「未知发布者」；
+  风险与后续步骤仍是 `docs/UPDATE.md` §6 的书面记录，未变
+
+---
+
 ## [1.0.19] - 2026-11-11
 
 > 本版区间是 `v1.0.18` 之后合入 `master` 的部分，用 `git log v1.0.18..HEAD` 可核对；
