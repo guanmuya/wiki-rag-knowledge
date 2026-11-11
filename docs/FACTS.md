@@ -28,16 +28,22 @@
 | 项 | 当前值 | 代码依据（文件 + 符号名） | 体检前被写成 |
 | --- | --- | --- | --- |
 | 应用版本 | `1.0.17` | `backend/app/main.py` 的 `VERSION`；`frontend/package.json` 的 `version` | THESIS.md `1.0.0`、HANDOFF.md 首屏 `v1.0.10` |
-| 数据表数量 | **21 张** | `backend/app/models.py` 的 21 个 `__tablename__` | THESIS.md 19 张 |
+| 数据表数量 | **23 张**：`models.py` 声明 22 张 + `schema_migrations` 1 张 | `backend/app/models.py` 的 22 个 `__tablename__`；`backend/app/migrations.py` 的 `_CREATE_TABLE`（原始 SQL 建表，**不进** `Base.metadata`，所以 `create_all()` 不建它） | THESIS.md 19 张；本表旧口径 21 张（`models.py` 实际是 22 张，漏算 1 张，见下方注） |
 | Worker 并发 | **1** | `backend/app/config.py` 的 `WORKER_CONCURRENCY`（`WRK_WORKER_CONCURRENCY` 默认 `"1"`） | `2`（5 份文档） |
 | SQLite 写锁等待 | **三档 3s / 30s / 1s**（见 §1.1） | `backend/app/config.py` 的 `BUSY_TIMEOUT_INTERACTIVE` / `BUSY_TIMEOUT_WORKER` / `BUSY_TIMEOUT_PROGRESS` | 一刀切 `busy_timeout=15000`；DESIGN.md §4.5 又写 `3s` |
 | 拿不到锁的重试次数 | `5`（`WRK_LOCK_RETRY_ATTEMPTS`，兼容别名 `WRK_LOCK_RETRY`） | `backend/app/config.py` 的 `LOCK_RETRY_ATTEMPTS` | 未进文档 |
-| 可调项 | `config.py` 中 **38 个 `WRK_*`** 环境变量（另有若干由 `desktop_entry.py` / `security.py` / `answering.py` 读取） | `backend/app/config.py` | README §5 漏列 11 个（见 §1.2） |
-| 后端测试基线 | **673 passed, 1 skipped**（见 §2） | 合并 master 后本机实跑，原始输出 `docs/evidence/pytest-baseline.txt`；CI 待验（§2.1） | 六份文档 8 个互不相同的数字 |
+| 可调项 | `config.py` 中 **41 个 `WRK_*`** 环境变量（另有若干由 `desktop_entry.py` / `security.py` / `answering.py` 读取） | `backend/app/config.py` | 本表旧口径 38 个；README §5 漏列 11 个（见 §1.2） |
+| 后端测试基线 | **707 passed, 1 skipped**（见 §2） | 合并 `origin/master` 后本机实跑，原始输出 `docs/evidence/pytest-baseline.txt`；CI 待验（§2.1） | 六份文档 8 个互不相同的数字 |
 
-> 表里「当前值」一列在 2026-11 本轮逐条回查代码确认；D1–D7 的结论在代码里**仍然成立**
-> （`config.py:26` 仍是 `1`，`config.py:34-40` 仍是三档，`main.py:36` 仍是 `1.0.17`，
-> `models.py` 仍是 21 个 `__tablename__`）。
+> 表里「当前值」一列在本轮（批次三 P1-8）逐条回查代码确认；D1–D7 的结论在代码里**仍然成立**
+> （`backend/app/config.py` 的 `WORKER_CONCURRENCY` 仍是 `1`、`BUSY_TIMEOUT_*` 仍是三档，
+> `backend/app/main.py` 的 `VERSION` 仍是 `1.0.17`）。
+> 两处旧口径本轮按代码订正：`models.py` 实际是 **22** 个 `__tablename__`（旧写 21，少算 1 张），
+> 加上 P1-8 新增的 `schema_migrations` 共 **23** 张；`config.py` 实际是 **41** 个 `WRK_*`
+> （旧写 38；本轮新增 4 个 `WRK_LOGIN_*` 与 `WRK_HARDEN_SECRETS`，见 §1.2）。
+> `README.md` 目录树注释与 `docs/THESIS.md` §1 里仍写着「21 张表」——两处都在 P1-8 的
+> 文件所有权之外，**未改**，留给下一个碰这两份文档的任务按本节订正（`THESIS.md` §4 是实验结果，
+> 按仓库约定不动）。
 
 ### 1.1 SQLite 写锁三档（替代旧的一刀切 `15000ms`）
 
@@ -51,7 +57,7 @@
 `WORKER_CONCURRENCY=1` 的原因是「SQLite 同时只允许一个写者，多开 worker 只会互相抢写锁」。
 **`docs/DESIGN.md` 原先 §1.2 写 `15000` / `2`、§4.5 写 `3s`，两处已统一到本表口径。**
 
-### 1.2 README §5 补齐的 11 个配置项（D6）
+### 1.2 环境变量清单（D6 补齐的 11 项 + P1-8 新增 5 项）
 
 | 环境变量 | 默认 | 对应 `config.py` 符号 |
 | --- | --- | --- |
@@ -66,6 +72,22 @@
 | `WRK_AGENT_RUN_TIMEOUT` | `900` | `AGENT_RUN_TIMEOUT_SECONDS` |
 | `WRK_AGENT_HISTORY_MESSAGES` | `12` | `AGENT_HISTORY_MESSAGES` |
 | `WRK_AGENT_HISTORY_CHARS` | `1200` | `AGENT_HISTORY_CHARS` |
+
+**P1-8 新增（登录限流与密钥权限；尚未进 README §5，归下一个碰 README 的任务）**
+
+| 环境变量 | 默认 | 对应 `config.py` 符号 |
+| --- | --- | --- |
+| `WRK_LOGIN_MAX_FAILURES` | `5` | `LOGIN_MAX_FAILURES` |
+| `WRK_LOGIN_MAX_FAILURES_PER_SOURCE` | `20` | `LOGIN_MAX_FAILURES_PER_SOURCE` |
+| `WRK_LOGIN_FAIL_WINDOW` | `900` | `LOGIN_FAIL_WINDOW_SECONDS` |
+| `WRK_LOGIN_LOCK_SECONDS` | `900` | `LOGIN_LOCK_SECONDS` |
+| `WRK_HARDEN_SECRETS` | `1` | `HARDEN_SECRET_PERMISSIONS` |
+
+四个 `WRK_LOGIN_*` 的语义：**账号**维度 5 次、**来源**维度 20 次，在 900 秒窗口内达到阈值即锁定
+900 秒；锁定期间即使密码正确也返回 429（联调时别把它当登录失败排查，响应头带 `Retry-After`）。
+`WRK_HARDEN_SECRETS=0` 关掉密钥文件/目录的权限收紧（POSIX 0600/0700、Windows `icacls`），
+关掉不影响密钥本身可用，只是不再改权限。这 5 项都在 `backend/app/config.py`，与上表 11 项同源，
+因此计入 §1「可调项 41 个」。
 
 另需更正 README §5 的一句总述：`WRK_HOST` / `WRK_PORT` / `WRK_WATCH_STDIN` / `WRK_LOG_LEVEL`
 在 `backend/app/desktop_entry.py`，`WRK_PBKDF2_ITER` 在 `backend/app/security.py`，
@@ -94,15 +116,16 @@
 | 权威环境（CI） | `windows-latest`、Python 3.13.x、依赖来自 `backend/requirements-dev.txt` + `backend/constraints.txt` |
 | 本次实测环境 | Windows 11（10.0.26200）、Python 3.13.11、pytest 9.2.0、全局解释器（当前 checkout 无 `.venv`） |
 | 数据隔离 | `backend/tests/conftest.py` 用独立临时目录并关闭 Worker 与预热，不污染 `data/` |
-| 当前基线 | **`673 passed, 1 skipped`** |
-| 本次实测 | 合并 `origin/master` 后的本分支工作区，`673 passed, 1 skipped in 184.88s (0:03:04)`；同日另一次复跑 `198.88s`，计数相同 |
-| 独立佐证 | `docs/PR42_FIX_REPORT.md` §验收表记录了另一个任务在合并 master 后跑出的 `673 passed, 1 skipped`，与本机两次实跑一致 |
-| CI 状态 | **待验**：产出本基线的合并提交还没有 CI 运行 |
+| 当前基线 | **`707 passed, 1 skipped`** |
+| 本次实测 | 合并 `origin/master`（带入 P1-5 / P1-10）后的本分支工作区，`707 passed, 1 skipped in 243.49s (0:04:03)` |
+| 独立佐证 | 上一版 `673` 有 `docs/PR42_FIX_REPORT.md` §验收表的独立记录；本轮在它之上新增 34 条用例（`462 → 496` 个 `def test_`、`47 → 53` 个测试文件），`673 + 34 = 707` 与 §2.3 的分解数字自洽，可用该节的三条命令复核 |
+| CI 状态 | **待验**：产出本基线的合并提交还没有 CI 运行（PR 触发后按 §2.4 第 3 条用 artifact 覆盖本行与 §2.2） |
 
 > **为什么这次记的是本机数字，而不是 CI artifact**：§2.4 第 3 条要求从 CI artifact 取数，
-> 但本次改动是**合并 master 之后**的树（master 带进来一批 Wiki 生成的测试），这棵树还没有任何
-> CI 运行，也就没有对应的 artifact。按「拿不到远端结果就写待验、并给出本机等价证据」的口径，
-> 这里先落本机实跑、把 CI 明确标为待验；PR 的 CI 跑完后按第 3 条用 artifact 覆盖本行与 §2.2。
+> 但本次改动是**合并 `origin/master` 之后**的树（master 带进来 P1-5 / P1-10 的前端与契约校验改动），
+> 这棵树还没有任何 CI 运行，也就没有对应的 artifact。按「拿不到远端结果就写待验、并给出本机
+> 等价证据」的口径，这里先落本机实跑、把 CI 明确标为待验；PR 的 CI 跑完后按第 3 条用 artifact
+> 覆盖本行与 §2.2。
 >
 > 本机与 CI 在同一提交上的历史一致性可以支撑「本机等价证据」这个说法：上一版基线（`638`）时，
 > CI #14（run `42860672282`，job `129985607428`）的 artifact 与本机在同一提交 `350009c` 上的复跑
@@ -113,16 +136,16 @@
 
 ```
 ........................................................................ [ 10%]
-........................................................................ [ 21%]
-........................................................................ [ 32%]
-........................................................................ [ 42%]
-........................................................................ [ 53%]
-........................................................................ [ 64%]
-..........s............................................................. [ 74%]
-........................................................................ [ 85%]
-........................................................................ [ 96%]
-..........................                                               [100%]
-673 passed, 1 skipped in 184.88s (0:03:04)
+........................................................................ [ 20%]
+........................................................................ [ 30%]
+........................................................................ [ 40%]
+........................................................................ [ 50%]
+........................................................................ [ 61%]
+..................................s..................................... [ 71%]
+........................................................................ [ 81%]
+........................................................................ [ 91%]
+............................................................             [100%]
+707 passed, 1 skipped in 243.49s (0:04:03)
 ```
 
 > 上面是本次实跑的 stdout 原样转录（`pytest -q`，`Tee-Object` 落盘后转存为 UTF-8），
@@ -132,27 +155,33 @@
 
 ### 2.3 数字的来龙去脉
 
-- **673 passed, 1 skipped**：`backend/tests/` 有 **47 个 `test_*.py` + 1 个 `conftest.py`**
-  （共 48 个 `.py`），文件内 **462 个 `def test_`**、**80 个 `@pytest.mark.parametrize`**；
-  参数化展开后正好得到 673 项。三条分解数字可用同一条命令复核：
+- **707 passed, 1 skipped**：`backend/tests/` 有 **53 个 `test_*.py` + 1 个 `conftest.py`**
+  （共 54 个 `.py`），文件内 **496 个 `def test_`**、**80 个 `@pytest.mark.parametrize`**；
+  参数化展开后正好得到 707 项。三条分解数字可用同一条命令复核：
   `Get-ChildItem backend/tests -Filter 'test_*.py' -Recurse`、
   `Select-String -Pattern '^\s*def test_'`、`Select-String -Pattern '@pytest\.mark\.parametrize'`。
-- **比上一版多 35 项的原因**：`master` 的 Wiki 生成改动带进来 4 个新测试文件
+- **比上一版（673）多 34 项的原因**：批次三 P1-8 新增 6 个测试文件，**全是新增用例，没有删改既有用例**：
+  `test_must_change_password.py`（4）、`test_login_rate_limit.py`（6）、`test_upload_magic.py`（5）、
+  `test_secret_permissions.py`（7）、`test_watchdog_logging.py`（5）、`test_schema_migrations.py`（7），
+  合计 34。对应 `47 → 53` 个测试文件、`462 → 496` 个 `def test_`；`parametrize` 仍为 **80**
+  （新用例都不带参数化），展开后 `673 → 707`。**这不是新增了失败用例，全部为 passed。**
+- **历史（上一版 673 的来历，保留作追溯）**：`master` 的 Wiki 生成改动带进来 4 个新测试文件
   （`test_wiki_generation_source_migration.py`、`test_wiki_generation_visibility.py`、
   `test_wiki_input_source_race.py`、`test_wiki_input_timestamp.py`）以及既有文件的增补；
   `43 → 47` 个测试文件、`430 → 462` 个 `def test_`、`77 → 80` 个 `parametrize`，
-  展开后 `638 → 673`。**这不是新增了失败用例，全部为 passed。**
+  展开后 `638 → 673`。
 - **1 skipped 的来源（与上一版相同，未新增）**：`backend/tests/test_tables.py:319` 调用
   `pytest.importorskip("reportlab", reason="需要 reportlab 生成 PDF 夹具")`；本机与 CI 都未安装
   可选的 `reportlab`，该用例被跳过。用 `python -m pytest backend/tests -q -rs` 复核可见
   `SKIPPED [1] backend/tests/test_tables.py:319`。**它是可选依赖缺失，不是漏测，也不是新增 skip。**
-- **耗时不是验收指标**：本机两次 184.88 s 与 198.88 s，旧版 CI 为 196.41 s，随机器负载变化；
-  **passed / skipped 计数在本机两次运行中稳定为 673 / 1**。
+- **耗时不是验收指标**：本机两次绿跑分别是 `243.49 s`（本树）与 `306.01 s`（同一后端树、合并前），
+  随机器负载变化；**passed / skipped 计数稳定为 707 / 1**。负载高时另出现过 2 次与 P1-8 无关的
+  偶发（`test_agent_runtime` / `test_freeze_during_task`，单独复跑均通过），见 §2.5。
 - **warning 行与代码无关**：旧版 CI 曾出现 1 个
   `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.`，
   出自第三方 `starlette` 的 `testclient.py`，由 CI 环境的版本组合触发；本机实跑没有该行。
-- 更早的两个口径（`583 passed` 与 `638 passed`）都已过时：前者是批次一体检时的快照，
-  后者是 `master@350009c` 的基线；本节按当前测试树统一重算。
+- 更早的三个口径（`583`、`638`、`673`）都已过时：`583` 是批次一体检时的快照，`638` 是
+  `master@350009c` 的基线，`673` 是本轮合入 `origin/master` 之前的基线；本节按当前测试树统一重算。
 
 ### 2.4 维护约定（避免再次散落）
 
@@ -180,14 +209,16 @@
 
 ### 2.5 本轮已知残留（如实记录，未在本任务范围内修改）
 
-- `backend/requirements.txt` 第 5 行的注释仍写 `583 passed, 1 skipped`。本任务的文件所有权
-  限定为 `frontend/**`、`docs/API.md`、`docs/FACTS.md` 与 CI 步骤（并行任务正在拆
-  `backend/app/services/llm.py` / `routers/kbs_*.py`），因此**未改动该文件**；
-  按 §2.4 第 1 条，该注释应当在下一个碰 `backend/**` 的任务里改成指向本节。
+- ~~`backend/requirements.txt` 第 5 行的注释仍写 `583 passed, 1 skipped`~~ **本轮（P1-8）已修**：
+  该行已改成指向本节、不再手写数字（P1-8 是第一批改动 `backend/**` 的任务）。
 - `docs/HEALTH_CHECK.md` §3.1 的 `583` 是体检当时的实测快照，属于历史记录，**不回改**。
 - `docs/PR42_FIX_REPORT.md` 的验收表里另有一份 `673 passed, 1 skipped`，并仍写着「四项检查」
   ——那是该任务交付当时的点对点报告（当时 CI 还是四项，本轮才加到五项）。它属于历史报告，
-  本轮未回改；本节已把它当作独立佐证引用（§2.1）。
+  本轮未回改；§2.1 已把它当作上一版基线的独立佐证引用。
+- **一处与 P1-8 无关的已知偶发**：`backend/tests/test_agent_runtime.py` 的 `_wait_run()` 只等
+  15 秒，全量跑在负载高时会偶发超时（本轮全量跑中出现过 1 次，随后单独复跑 `13 passed`）。
+  它不涉及 P1-8 改动的任何代码路径，也不影响 `707 / 1` 的计数复现，本轮未修改；
+  若 CI 上再次出现，把等待上限按机器负载放宽即可。
 
 
 

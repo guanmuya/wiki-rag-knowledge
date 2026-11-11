@@ -6,7 +6,7 @@
 
 - 前缀：`/api`
 - 认证：`Authorization: Bearer <token>`。免登录的只有 `POST /api/auth/login`、`GET /api/meta`、`GET /api/health` 与 `/api/setup/*`（首次初始化必须在无账号时可用）。
-- 错误：`{"detail": "中文错误信息"}`，HTTP 400/401/403/404/409/422。
+- 错误：`{"detail": "中文错误信息"}`，HTTP 400/401/403/404/409/422，以及**只在登录出现的 `429`**（限流，响应头带 `Retry-After`，见 §1）。
 - 时间：业务接口返回的 ISO 8601 时间统一为 **UTC 且带 `+00:00` 偏移**（前端负责换算本地时区展示；不带偏移的字符串会被浏览器当成本地时间；`/api/diagnostics` 的运维输出不在此列）。**真正分页的只有两个接口**：`GET /api/documents/{id}/chunks`（`?page=1&page_size=20`）与 `GET /api/settings/audit`（`?page=1&page_size=50`），返回 `{"items":[],"total":0,"page":1,"page_size":20}`；其余列表接口只返回 `{"items":[],"total":N}`，没有 `page`/`page_size` 字段（前端一次拿全量）。
 - 角色：`admin` | `employee`。知识库授权等级：`read` | `manage`（admin 隐式拥有全部知识库 manage）。
 
@@ -39,6 +39,33 @@
 `POST /api/auth/logout` 都会递增该用户的版本，使其**此前签发的全部令牌立即失效**——
 之后用旧 token 调任意需鉴权接口均返回 401，须重新登录取新令牌。
 因此上述三类操作成功后，前端应丢弃本地令牌；角色与知识库授权仍每次实时查库判定。
+
+**登录失败限流（P1-8）**：`POST /api/auth/login` 按两个维度计数——同一**账号** 15 分钟内失败
+5 次、同一**来源** 15 分钟内失败 20 次，任一维度达到阈值即锁定 15 分钟；窗口、阈值与锁定时长
+由 `backend/app/config.py` 的 `LOGIN_*` 控制，环境变量见 `docs/FACTS.md` §1.2。达到阈值后：
+
+| 状态 | 响应 | 说明 |
+|---|---|---|
+| `429` | `{"detail": "登录失败次数过多，该账号已被临时锁定，请约 N 分钟后再试"}` + 响应头 `Retry-After: <秒>`；来源维度锁定时把「该账号」换成「当前来源」 | `detail` 是可直接展示的中文；`Retry-After` 表示还需等待多少秒 |
+| `401` | `{"detail": "用户名或密码不正确"}` | 与限流区分开，前端按密码错误提示 |
+| `403` | `{"detail": "账号已停用，请联系管理员"}` | 仅停用账号；与下文「待改密账号」的 403 是不同场景 |
+
+**锁定期间即使密码正确也返回 429**——否则限流只是把试错变慢，仍能被用来判定「这个账号的密码对不对」。
+计数器在进程内存中（重启即清零，不会把用户永久锁死）；每次失败与每次拦截都写审计
+（`action=login_failed`，`detail` 记 `source` 与 `failures`；`action=login_blocked`，
+`detail` 记 `reason` / `retry_after` / `failures`。`target` 是用户名，**不落请求来源的原始串**）。
+
+**强制初始口令修改（P1-8）**：`must_change_password=true` 的账号（新建用户、管理员重置密码后）
+**只放行三条自助路径**——`GET /api/auth/me`、`POST /api/auth/change-password`、
+`POST /api/auth/logout`；调用其余任何需鉴权接口都返回：
+
+```
+403 {"detail": "请先修改初始密码，再使用其他功能"}
+```
+
+这条边界由后端统一在鉴权依赖（`backend/app/deps.py` 的 `get_current_user()`）里判定，
+不是只靠前端弹窗：绕过前端直接打 API 同样被拒。顺序上先校验令牌与版本（401），再判定该标记（403），
+两种失败对前端是不同处理路径。改密成功后标记清零，并同时递增令牌版本（见上一条），旧令牌立即失效。
 
 ## 2. 元信息
 
@@ -398,12 +425,40 @@ v1 全部要求管理员令牌；CLI 核心以应用进程身份执行本机命�
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/diagnostics/lock` | 写锁现场快照：最近阻塞事件、慢语句、正在执行中的语句、全部线程栈；响应另附 `process` 进程信息（`diagnostics.py` 的 `lock_diagnostics()`） |
-| GET | `/api/diagnostics/process` | 进程身份：`pid` / `ppid` / 真实端口 / 工作目录 / 数据目录 / Python 版本（`diagnostics.py` 的 `process_diagnostics()`） |
+| GET | `/api/diagnostics/process` | 进程身份：`pid` / `ppid` / 真实端口 / 工作目录 / 数据目录 / Python 版本；另含 P1-8 加入的三组可观测性状态：`watchdog.log_rotation`（`failed` / `at` / `error`，日志轮转失败时非空）、`login_guard`（限流阈值与当前计数，只给数量、不回显账号）、`secrets`（密钥权限收紧的 `enabled` / `platform` / `hardened_count` / `failed`）。数据由 `backend/app/routers/diagnostics.py` 的 `process_diagnostics()` 拼装 |
+
+### 8.3 启动期 schema 自愈与 `schema_migrations`（P1-8）
+
+启动时 `backend/app/db.py` 的 `init_db()` 先 `create_all()`（只建缺失的**表**），再调
+`ensure_sqlite_columns()`：老库缺少后来新增的列（如 `chunks.kind` / `chunks.meta`）会在这里被
+`ALTER TABLE … ADD COLUMN` 补齐——否则升级后任何查询都会 `no such column`，直接 500。
+`create_all()` 不会给已存在的表加列，所以这一步不能省。
+
+每补一列都记进 **`schema_migrations`** 表（`backend/app/migrations.py`），升级路径因此可查、可回退：
+
+| 列 | 含义 |
+| --- | --- |
+| `version` | 版本号。`1` = 基线（第一次建账本时写入），之后每补一列 +1 |
+| `kind` / `name` | 迁移类型与标识；目前只有 `baseline` 与 `add_column:<表>.<列>` |
+| `detail` | **执行的确切 DDL** |
+| `revert_sql` | 可逆 DDL（`ALTER TABLE "<表>" DROP COLUMN "<列>"`）；为空表示该步不可自动回退 |
+| `applied_at` | 应用时间（UTC，带 `+00:00`） |
+
+- 这张表**不在** `Base.metadata` 里（由 `migrations.py` 用原始 SQL 建），所以 `create_all()` 不建它；
+  `docs/FACTS.md` §1 的「23 张表」= `models.py` 的 22 张 + 本表。
+- 回退是**库层能力**：`migrations.downgrade(bind, target=1)` 按版本逆序执行 `revert_sql` 并删除对应记录；
+  任何一步没有可逆 DDL 就整体拒绝回退并抛 `MigrationError`——不做「猜着删数据」的操作。
+  当前**没有** HTTP 接口或命令行入口暴露它（桌面版暂无降级需求）。
+- 账本写不进去只 `log.warning`，**不会让启动失败**：升级本身已经生效，缺的只是可追溯信息。
+- 需要人工核对时直接查库：`SELECT version, kind, name, applied_at FROM schema_migrations ORDER BY version;`
 
 ## 9. 前端约定
 
 - 令牌存 `localStorage.wrk_token`；401 时清空并跳登录页。
-- `must_change_password=true` 登录后强制进入改密弹窗。
+- `must_change_password=true` 登录后强制进入改密弹窗；后端同时用 403 兜底（见 §1），
+  收到该 403 时应引导用户回到改密流程，而不是当作「权限不足」提示。
+- 登录返回 `429` 时按 §1 的语义提示等待（`detail` 可直接展示，`Retry-After` 是还需等待的秒数），
+  **不要**把它当密码错误反复重试。
 - 改密 / 登出成功后旧 token 已失效，须丢弃本地令牌并重新登录，不能继续带旧 token 调接口。
 - 任务进度用 2 秒轮询 `GET /api/tasks?status=queued,running`。
 - 问答页左栏会话、顶部知识库多选、右栏证据卡片可折叠查看原文依据。
