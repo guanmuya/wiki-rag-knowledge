@@ -18,6 +18,7 @@ const { app, dialog, ipcMain, BrowserWindow } = require('electron')
 const { existsSync, readFileSync } = require('node:fs')
 const { join } = require('node:path')
 const { validateFeed } = require('./update-url.cjs')
+const { matchUpdate, UPDATE_FALLBACK, UPDATE_DEV_DISABLED } = require('./error-hints.cjs')
 
 let autoUpdater = null
 let log = console.log
@@ -73,22 +74,14 @@ function setState(patch) {
   broadcast()
 }
 
-/** 把 electron-updater 的英文错误翻成能指导操作的中文。 */
+/**
+ * 把 electron-updater 的英文错误翻成能指导操作的中文。
+ * 文案表在 electron/error-hints.json 的 update 段（单一来源，与主进程启动失败
+ * 文案同一份文件）；匹配不到时回落原始串，原始串也没有才用兜底文案。
+ */
 function explainError(err) {
   const raw = String(err?.message || err || '')
-  if (/404|not found|cannot find/i.test(raw)) {
-    return '更新源不可访问：GitHub 仓库需要公开，或改用 generic 静态源'
-  }
-  if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|network|getaddrinfo/i.test(raw)) {
-    return '连不上更新服务器，请检查网络或代理设置'
-  }
-  if (/sha512|checksum|integrity/i.test(raw)) {
-    return '更新包校验失败（可能下载不完整），请稍后重试'
-  }
-  if (/dev|development/i.test(raw)) {
-    return '开发模式不检查更新（可设 WRK_UPDATE_URL 联调）'
-  }
-  return raw.slice(0, 200) || '更新检查失败'
+  return matchUpdate(raw)?.message || raw.slice(0, 200) || UPDATE_FALLBACK
 }
 
 function registerIpc() {
@@ -219,7 +212,7 @@ function init(options = {}) {
 
   // 开发模式：只有显式给了联调地址才继续
   if (!app.isPackaged && !devUrl && process.env.WRK_UPDATE_DEV !== '1') {
-    setState({ status: 'disabled', message: '开发模式不检查更新（设 WRK_UPDATE_URL 可联调）' })
+    setState({ status: 'disabled', message: UPDATE_DEV_DISABLED })
     return
   }
 

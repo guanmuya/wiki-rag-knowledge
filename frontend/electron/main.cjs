@@ -11,6 +11,7 @@ const { existsSync, mkdirSync, appendFileSync } = require('node:fs')
 const { join, dirname } = require('node:path')
 const updater = require('./updater.cjs')
 const { redactBackendLine } = require('./log-redact.cjs')
+const { matchStartup, STARTUP_FALLBACK } = require('./error-hints.cjs')
 
 const HERE = __dirname
 const ROOT = join(HERE, '..')
@@ -57,53 +58,9 @@ const logLines = []
 
 // ---------------------------------------------------------------- 启动失败翻译
 //
-// 用户不该看到「退出码 1」。这张表把后端启动失败的原始信息翻译成
-// 「发生了什么 + 下一步做什么」，原始串只保留在 detail 里给技术支持看。
-// 关键字按顺序匹配，先命中先返回（具体原因在前，通用兜底在后）。
-const FAILURE_HINTS = [
-  {
-    id: 'no-permission',
-    title: '数据目录没有写入权限',
-    action: '请确认当前 Windows 账号对数据目录有写权限；公司电脑可请管理员放开该目录权限后重试。',
-    match: /permission|eacces|eperm|拒绝访问|read-only/i,
-  },
-  {
-    id: 'port-in-use',
-    title: '端口被其他程序占用了',
-    action: '关掉占用端口的程序后点重试。桌面版通常会自己换端口，重试一般就能起来。',
-    match: /eaddrinuse|address already in use|10048|端口/i,
-  },
-  {
-    id: 'missing-runtime',
-    title: '缺少运行库，后端无法启动',
-    action: '通常是缺少 Microsoft Visual C++ 2015-2022 x64 运行库，安装后重启应用。',
-    match: /vcruntime|msvcp|0xc000007b|dll|could not be loaded/i,
-  },
-  {
-    id: 'missing-file',
-    title: '后端程序文件缺失或被安全软件拦截',
-    action: '安装可能不完整，或安全软件隔离了后端程序。请重新安装；装了杀毒软件的话把安装目录加白名单。',
-    match: /enoent|no such file|not found|找不到|拦截|quarantin/i,
-  },
-  {
-    id: 'timeout',
-    title: '后端启动超时',
-    action: '首次启动要初始化数据库，可能较慢。请点重试；连续失败请打开日志看卡在哪一步。',
-    match: /60 秒内未就绪|超时|timeout|timed out/i,
-  },
-  {
-    id: 'exited',
-    title: '后端启动后立即退出',
-    action: '数据库可能损坏或上次异常退出留了锁。先点重启后端；仍失败请打开日志发给技术支持。',
-    match: /退出码|exit code|signal|信号/i,
-  },
-]
-
-const FALLBACK_HINT = {
-  id: 'unknown',
-  title: '后端服务没能启动',
-  action: '请先点重试。如果一直失败，点「查看详情」复制日志发给技术支持。',
-}
+// 用户不该看到「退出码 1」。文案表本身在 electron/error-hints.json（单一来源，
+// 渲染进程 BackendGate 与更新器 updater.cjs 读同一份），这里只负责匹配与拼装：
+// 命中的规则给出「发生了什么 + 下一步做什么」，原始串只保留在 detail 里给技术支持看。
 
 /**
  * 把原始错误串翻译成人话。
@@ -111,12 +68,8 @@ const FALLBACK_HINT = {
  */
 function explainFailure(raw) {
   const text = String(raw || '')
-  for (const hint of FAILURE_HINTS) {
-    if (hint.match.test(text)) {
-      return { id: hint.id, title: hint.title, action: hint.action, detail: text }
-    }
-  }
-  return { ...FALLBACK_HINT, detail: text }
+  const hint = matchStartup(text) || STARTUP_FALLBACK
+  return { id: hint.id, title: hint.title, action: hint.action, detail: text }
 }
 
 /** 最近一次启动失败的人话版本，供渲染进程查询。 */
@@ -740,7 +693,7 @@ ipcMain.handle('wrk:restartBackend', async () => {
       ok: false,
       // 人话版本给界面，原始串留在 detail
       error: e.userAction || String(e),
-      title: e.userTitle || '后端服务没能启动',
+      title: e.userTitle || STARTUP_FALLBACK.title,
       detail: e.detail || String(e),
       reasonId: e.reasonId || 'unknown',
     }

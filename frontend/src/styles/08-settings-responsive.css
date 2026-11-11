@@ -1,0 +1,287 @@
+/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
+
+/* ---------------------------------------------------------------- 21 设置 / 用户 / 模型 */
+.embed-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+.grants-grid { display: flex; flex-direction: column; gap: 6px; }
+.grant-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface);
+}
+.grant-name { font-size: 12.5px; font-weight: 500; flex: 1; min-width: 0; }
+
+/* 模型按用途分组：每组是一张可折叠的卡片。刻意不用 overflow:hidden 收圆角，
+   否则会破坏 .table thead th 相对视口的 sticky 吸顶（见 9 表格的注释）。 */
+.model-group {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  background: var(--c-surface);
+}
+.model-group + .model-group { margin-top: 16px; }
+.model-group-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--c-hairline);
+}
+.model-group.is-collapsed .model-group-title { border-bottom: none; }
+/* 标题本身是折叠开关：箭头 / 用途图标 / 名称 / 数量按固定列对齐，三组之间不会错位。 */
+.model-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--c-text);
+  text-align: left;
+  cursor: pointer;
+}
+.model-group-chevron { display: inline-flex; flex: 0 0 16px; color: var(--c-text-muted); }
+.model-group-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 8px;
+  background: var(--c-surface-sunken);
+  color: var(--c-text-secondary);
+}
+.model-group-name { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.model-group-count {
+  font-size: 12px;
+  color: var(--c-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.model-group-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-surface);
+  color: var(--c-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.model-group-add:hover {
+  background: var(--c-primary-soft);
+  border-color: var(--c-primary-soft-strong);
+  color: var(--c-primary-hover);
+}
+/* 展开时表格是卡片下半部分：去掉自己的外框，只留底部圆角。 */
+.model-group .table-wrap {
+  border: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.model-group .table-wrap .table thead tr:first-child th:first-child,
+.model-group .table-wrap .table thead tr:first-child th:last-child {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+.model-group .table tbody tr:last-child td:first-child { border-bottom-left-radius: calc(var(--radius) - 1px); }
+.model-group .table tbody tr:last-child td:last-child { border-bottom-right-radius: calc(var(--radius) - 1px); }
+/* 三个用途各一张表：固定布局 + 同一套 colgroup 宽度，跨表的列头才会纵向对齐。
+   固定布局不再按内容撑列，长模型名/长测试信息靠换行兜住。
+   末尾几列按视口宽度取 clamp：窗口从 1440 收到最小 1100 时它们一起收窄，
+   余量留给「模型」列，模型名不会被挤成一列单字。 */
+.model-table { table-layout: fixed; }
+.model-table td { overflow-wrap: anywhere; }
+.model-table col.model-col-provider { width: clamp(104px, 9vw, 132px); }
+.model-table col.model-col-dim { width: clamp(60px, 5.2vw, 76px); }
+.model-table col.model-col-default { width: clamp(84px, 7.1vw, 104px); }
+.model-table col.model-col-enabled { width: clamp(64px, 5.4vw, 80px); }
+.model-table col.model-col-tested { width: clamp(170px, 15.1vw, 220px); }
+.model-table col.model-col-actions { width: clamp(96px, 6.8vw, 100px); }
+.params-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--c-text-secondary);
+  cursor: pointer;
+}
+.params-caret { transition: transform 0.15s ease; display: inline-block; }
+.params-caret.open { transform: rotate(90deg); }
+.params-body { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.params-section { display: flex; flex-direction: column; gap: 6px; }
+.params-textarea {
+  width: 100%;
+  min-height: 110px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  padding: 10px 12px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface-alt);
+  color: var(--c-text);
+  resize: vertical;
+}
+.test-ok { color: var(--c-success); font-size: 12px; font-weight: 600; }
+
+/* ---------------------------------------------------------------- 22 离线提示条 */
+.offline-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid #d5e5fb;
+  background: #eef5ff;
+  color: #2c4a6b;
+}
+.offline-banner-icon {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: #dcebff;
+  color: var(--c-primary);
+  font-size: 13px;
+}
+.offline-banner-body { min-width: 0; flex: 1; }
+.offline-banner-body strong { font-size: 12.5px; font-weight: 650; display: block; }
+.offline-banner-detail { font-size: 11.5px; color: #5c7896; line-height: 1.55; }
+.offline-banner-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+
+/* ---------------------------------------------------------------- 23 响应式 */
+@media (max-width: 1180px) {
+  .content { padding: 20px 20px 36px; }
+  /* 问答 / Agent 是整屏布局，不能继承普通页面的内边距，否则底部输入框会被
+     这圈留白顶离视口底边，长会话时看起来仍「没有固定在最底下」。 */
+  .content.content-flush { padding: 0; }
+  .wiki-layout { grid-template-columns: 1fr; }
+  .wiki-tree {
+    position: static;
+    max-height: 220px;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .wiki-tree-title { width: 100%; }
+}
+
+@media (max-width: 1024px) {
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 0.2s ease, visibility 0s linear 0.2s;
+    box-shadow: var(--shadow-lg);
+  }
+  .sidebar.open { transform: none; visibility: visible; transition: transform 0.2s ease; }
+  .sidebar-close { margin-left: auto; flex: 0 0 30px; }
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 29;
+    border: 0;
+    background: rgba(15, 28, 46, 0.36);
+    cursor: pointer;
+  }
+  .mobile-only { display: inline-grid !important; }
+  .kb-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+  .login-page { grid-template-columns: 1fr; }
+  .login-aside { display: none; }
+  .chat-shell { grid-template-columns: 1fr; }
+  .chat-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 264px;
+    transform: translateX(-100%);
+    visibility: hidden;
+    transition: transform 0.2s ease, visibility 0s linear 0.2s;
+    z-index: 40;
+    box-shadow: var(--shadow-lg);
+  }
+  .chat-sidebar.open { transform: none; visibility: visible; transition: transform 0.2s ease; }
+}
+
+@media (max-width: 720px) {
+  .page-head { flex-direction: column; align-items: stretch; }
+  .page-head-actions { justify-content: flex-start; flex-wrap: wrap; }
+  .kb-grid { grid-template-columns: 1fr; }
+  .kb-stats { grid-template-columns: repeat(2, 1fr); }
+  .chat-scroll { padding: 16px 14px 8px; }
+  .chat-composer { padding: 10px 12px 8px; }
+  .composer-hint { gap: 8px; }
+  .msg-user .msg-bubble { max-width: 88%; }
+  .detail-title { font-size: 18px; }
+  .table-wrap { overflow-x: auto; }
+  .table th, .table td { padding: 9px 10px; }
+  .modal { width: 100% !important; }
+  .login-panel { padding: 32px 20px; }
+  .offline-banner, .lock-banner {
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr);
+    align-items: start;
+    gap: 8px 12px;
+  }
+  .offline-banner-actions, .lock-banner-actions {
+    grid-column: 2;
+    flex-wrap: wrap;
+  }
+}
+
+/* ---------------------------------------------------------------- 24 细节修正 */
+.nav-icon { display: grid; place-items: center; }
+.nav-icon svg { display: block; }
+
+.detail-hero { margin-bottom: 16px; overflow: hidden; }
+.detail-hero .detail-head { padding: 15px 20px 12px; margin: 0; gap: 6px; }
+.detail-hero .tabs {
+  border-top: 1px solid var(--c-hairline);
+  border-bottom: none;
+  padding: 0 10px;
+  background: transparent;
+}
+.detail-hero .tab.active::after { bottom: 0; }
+.back-link {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  padding: 0;
+  margin-bottom: 2px;
+  font-size: 12px;
+  color: var(--c-text-muted);
+  cursor: pointer;
+}
+.back-link:hover { color: var(--c-primary); }
+.detail-title h1 { font-size: 20px; }
+
+.card .state-block { padding: 26px 18px; }
+.card .state-icon { width: 36px; height: 36px; font-size: 13px; }
+
+/* 登录页左侧：淡蓝纯色面板（不再使用渐变） */
+
