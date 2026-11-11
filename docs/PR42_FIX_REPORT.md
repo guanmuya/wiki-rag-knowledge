@@ -71,13 +71,27 @@
 
 说明：本轮所有 pytest 用例均在离线配置下运行（模型响应与向量被测试桩替代，不需要在线模型凭据），因此「完整后端测试」的结论只覆盖离线可复现的行为。
 
+### 合并 `origin/master` 后的复核
+
+交付前把 `origin/master`（已含 CI、依赖锁文件与前端 E2E，`350009c`）合并进本分支，合并干净无冲突，并按其 CI 的四项检查原样重跑：
+
+| CI 检查 | 命令 | 合并后实际输出 | 结论 |
+|---|---|---|---|
+| 1/4 全量后端测试 | 仓库根目录 `python -m pytest -q -p no:cacheprovider backend/tests` | `673 passed, 1 skipped in 288.90s` | **实测通过** |
+| 2/4 前端类型检查 | `frontend/` 下 `pnpm run typecheck` | `tsc -b --noEmit`，退出码 0 | **实测通过** |
+| 3/4 前端构建 | `frontend/` 下 `pnpm run build:web` | `✓ 65 modules transformed` / `✓ built in 4.54s`，退出码 0 | **实测通过** |
+| 4/4 前端 E2E | `frontend/` 下 `pnpm test` | `pass 4 / fail 0` | **实测通过** |
+| 界面撤销验证（非 CI 项） | `frontend/` 下 `node scripts/verify-wiki-source-revocation.mjs` | 全部场景通过，退出码 0 | **实测通过** |
+
+后端用例数从 618 增到 673 是 master 带来的新测试（如 `test_token_revocation.py`），不是本轮放宽或删减；上表是合并后的最新实测口径。
+
 ## 四、未实测 / 待实验 与已知限制
 
 以下各项**没有在本轮实测**，按 `docs/EXPERIMENT.md:3` 标注「待实验」，不填任何推测数字：
 
 - 在线模型配置（配置 B）下的生成、来源追踪与删除后可见性：本机无在线模型配置与 API Key，未实测 → **待实验**。
 - 任何依赖真实在线模型调用的端到端场景（含模型调用期间删除文档的实际服务端行为）→ **待实验**。
-- GitHub Actions / check runs 与提交状态：PR #42 分支至今没有检查记录；排队中的 Cursor 检查套件无结论，不计为通过 → **未实测**。
+- GitHub Actions / check runs 与提交状态：PR #42 分支至今没有检查记录；排队中的 Cursor 检查套件无结论，不计为通过 → **未实测**。本分支合并 master 后已具备 CI（`.github/workflows/ci.yml`），但本轮未等 CI 跑完，只按 CI 的同名命令在本地重跑（见上表）。
 - 合并后的集成行为（合并到 master 之后的表现）：本轮未合并 → **未实测**。
 
 以下为 PR 正文列出的**设计限制**，本轮不改、也无法靠代码反推，如实保留：
