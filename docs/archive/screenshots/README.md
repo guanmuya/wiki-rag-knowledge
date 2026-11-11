@@ -30,9 +30,9 @@
 
 两批内容混在一起，按文件名区分：
 
-1. **整站首拍**（`01-login.png` … `17-about-update.png`）：早期版本用
-   `scripts/dev-only/legacy/frontend-ui_check.mjs` 那类脚本一次拍完七个页面与首次引导流程，
-   文件名是「序号-页面」。
+1. **整站首拍**（`01-login.png` … `17-about-update.png`）：早期版本用 `ui_check.mjs` 那类脚本
+   一次拍完七个页面与首次引导流程，文件名是「序号-页面」。（该脚本当年在 `frontend/` 根目录
+   还留过一份字节相同的副本，2026-11-11 已删除，见 `scripts/dev-only/README.md` §1.2。）
 2. **逐轮对比**（`18-…` 起）：`<序号>-<主题>-before.png` / `-after.png`，
    序号越大越新；主题覆盖会话历史、抽屉、移动端、文档失败态、Wiki 目录、模型分组、
    小字清理、关于页版本号等。**同序号可能是不同主题**（例如 `23-` 有 chat-switch 与

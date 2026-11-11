@@ -35,10 +35,23 @@
 | 脚本 | 做什么 | 状态 |
 | --- | --- | --- |
 | `ui_check.mjs` | 老的全站验收：登录 → 各页面截图 → 提问 → 检查证据与路由 | **已过时**：项目改用 `HashRouter` 后路由是 `/#/kbs`，脚本里的 `/kbs` 路径不再成立；截图输出已改到 `.tmp-verify/shots/`。要看当前界面请用 `capture-ui.mjs` |
-| `legacy/frontend-ui_check.mjs` | 上面那个脚本当年误放 `frontend/` 根目录的**原样副本**（与原始文件字节相同） | 仅留档；属于「可删候选」，删除需维护者确认 |
 | `diag/prove_old_freeze.py` | 把补丁还原成旧实现，证明回归测试确实能抓到旧行为 | 依赖当时的 anyio 内部结构，可能跑不通 |
 | `diag/repro_freeze_exe.py` | 直接驱动打包后的后端 exe 复现「整机卡死」，默认找 `frontend/build/backend/wrk-backend.exe`（可用 `WRK_BACKEND_EXE` 覆盖） | 需打包产物 |
 | `verify/shot-installer.ps1` | 截 NSIS 安装包窗口，用来确认安装向导语言 | 需安装包 |
+
+> **已删除：`legacy/frontend-ui_check.mjs`（2026-11-11，维护者确认后执行）**
+>
+> 来源：当年 `scripts/ui_check.mjs` 被误复制了一份到 `frontend/` 根目录，两份字节完全相同；
+> 本批次把 `scripts/ui_check.mjs` 收进 `scripts/dev-only/` 时，那份副本一并收进 `legacy/`。
+> 删除前做了字节比对：`frontend/ui_check.mjs`（master 上的原路径）与该副本的 `git hash-object`
+> 都是 `ec40210a6e6608829ecd1dd0ab8a3361b9881290`（6,682 字节）——**内容完全一致**，属于纯重复；
+> 与现役的 `scripts/dev-only/ui_check.mjs` 只差 3 行路径修正（用法注释 + 截图输出目录）。
+>
+> - 要查原件：`git rev-parse 3187fd2:frontend/ui_check.mjs` → 仍是同一个 blob `ec40210a…`；
+>   要取回：`git show 3187fd2:frontend/ui_check.mjs > ui_check.mjs`
+>   （`3187fd2` 是本批次开始前的 master 提交，那时这份副本还在 `frontend/` 根目录）
+> - 要跑这个脚本：直接用同目录的 `ui_check.mjs`，逻辑与原件一致
+> - 归档索引里的对应记录：`docs/archive/README.md` §4
 
 ## 2. 使用纪律
 

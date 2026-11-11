@@ -32,6 +32,8 @@
 
 - **仓库治理（P2 批次四）**：`.dsh-kanban.json` 与历史截图归档到 `docs/archive/`；一次性排障脚本收进 `scripts/dev-only/`；
   补齐 `LICENSE` / `CHANGELOG` / `CONTRIBUTING` / `.editorconfig`；清理文档与构建提示里写死的开发机路径
+- **删除一处纯重复副本**：`scripts/dev-only/legacy/frontend-ui_check.mjs`（当年 `frontend/ui_check.mjs` 的字节级重复副本，
+  与现役 `scripts/dev-only/ui_check.mjs` 逻辑一致、无人引用），经确认后 `git rm`；历史截图**全部保留**，不做删除
 
 ---
 

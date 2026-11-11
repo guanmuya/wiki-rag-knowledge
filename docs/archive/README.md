@@ -39,12 +39,13 @@
 ## 4. 与「删除」的边界
 
 本目录里的东西都可以删——但那是**删除类操作**，需要维护者明确同意，不应由某次重构顺手带走。
-目前下面两项是「可删候选」，本次只做了归档、没有删：
+下面两项原为此前登记的「可删候选」。**2026-11-11 维护者答复：删除重复副本脚本，历史截图全部保留。**
+本批次已按下述结论处理，判断依据与操作记录一并留在这里：
 
-| 候选 | 体积 | 判据 | 删除前要做什么 |
+| 候选 | 体积 | 判据 | 处置（2026-11-11） |
 | --- | --- | --- | --- |
-| `scripts/dev-only/legacy/frontend-ui_check.mjs` | 6.8 KB | 与 `scripts/dev-only/ui_check.mjs` **字节完全相同**（`sha256` 一致），只是当年误放在 `frontend/` 根目录 | 确认没有任何旧文档/脚本按 `frontend/ui_check.mjs` 调用它 |
-| `screenshots/history/` 整体 | 10.12 MB | 早期整站截图，与当前版本 UI 已明显不同，正文不再引用 | 先确认 `HANDOFF_HISTORY.md` 里对截图的引用也一并加注「图已归档/已移除」 |
+| `scripts/dev-only/legacy/frontend-ui_check.mjs` | 6,682 字节 | 与 master 上原 `frontend/ui_check.mjs` **字节完全相同**（blob `ec40210a…`，`git hash-object` 两边一致），只是当年误放在 `frontend/` 根目录 | **已删除**（`git rm`）。原件仍在 git 历史里：`git rev-parse 3187fd2:frontend/ui_check.mjs` 得到的仍是同一个 blob `ec40210a…`（要取回：`git show 3187fd2:frontend/ui_check.mjs > frontend/ui_check.mjs`）；现役版本是 `scripts/dev-only/ui_check.mjs`（仅路径修正 3 行）。详见 `scripts/dev-only/README.md` §1.2 |
+| `screenshots/history/` 整体 | 10.12 MB | 早期整站截图，与当前版本 UI 已明显不同，正文不再引用 | **保留，不删**（维护者选择保留全部归档）。原计划若要删，需先给 `HANDOFF_HISTORY.md` 里的截图引用补「已归档」注记 |
 
 ## 5. 新增归档的规矩
 

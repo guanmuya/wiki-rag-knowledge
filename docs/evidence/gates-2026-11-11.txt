@@ -20,6 +20,12 @@
 的两个数字，而 FACTS 是唯一口径。因此本轮以合并后的树重跑，**只保留这一套数字**，
 初测的 673 记录作废（历史见本分支 `850c9a5` 那一版文件）。
 
+**表里的数字是最后一次实跑**：合并后在 10:2x 跑过一次（`707 passed … in 221.09s`），
+随后按维护者答复删除了纯重复副本 `scripts/dev-only/legacy/frontend-ui_check.mjs`
+（与原件字节相同、无人引用），并在删除后的树上**再跑一次**，也就是本文件第 3 节引用的那次
+（`224.37s`，计数不变；`build:web` 产物哈希与上一次完全相同 —— `index-GkBxTW7I.js`，
+说明删除没有影响构建）。两次的运行时长差异属于机器负载正常抖动。
+
 ## 2. 环境
 
 | 项 | 本地实跑 | CI（`.github/workflows/ci.yml`） |
@@ -36,7 +42,7 @@
 
 | # | 命令（仓库根目录） | 结果 |
 | --- | --- | --- |
-| 1 | `python -m pytest backend/tests -q` | **`707 passed, 1 skipped in 221.09s (0:03:41)`** |
+| 1 | `python -m pytest backend/tests -q` | **`707 passed, 1 skipped in 224.37s (0:03:44)`** |
 | 2 | `cd frontend && pnpm check:contract` | 通过（退出码 0）：契约 17 组，含「后端 77 条路由，`docs/API.md` 已覆盖」 |
 | 3 | `cd frontend && pnpm typecheck` | 通过（退出码 0）：`tsc -b --noEmit` |
 | 4 | `cd frontend && pnpm build:web` | 通过（退出码 0）：`vite v6.4.5`，90 modules，`index-GkBxTW7I.js 502.04 kB` |
@@ -45,7 +51,7 @@
 与权威口径核对：第 1 项的 **`707 passed, 1 skipped`** 与 `docs/FACTS.md` §2 完全一致；
 用例套（53 个 `test_*.py`）也没有因为本轮归档移动而失效或跳过。第 1 项与
 [`pytest-baseline.txt`](pytest-baseline.txt) 是**两次不同的运行**（同一套用例：那边
-`243.49s`、这边 `221.09s`，计数相同），本文件不重复粘贴全量 stdout。
+`243.49s`、这边 `224.37s`，计数相同），本文件不重复粘贴全量 stdout。
 
 ## 4. 第 2–5 项的真实输出
 
@@ -94,7 +100,7 @@ computing gzip size...
 dist/index.html                   2.09 kB │ gzip:   1.32 kB
 dist/assets/index-ufMAgdvt.css   64.97 kB │ gzip:  12.55 kB
 dist/assets/index-GkBxTW7I.js   502.04 kB │ gzip: 156.31 kB
-✓ built in 1.01s
+✓ built in 994ms
 ```
 
 ### 5) `pnpm test`
@@ -122,7 +128,7 @@ $ node --test tests/e2e.test.mjs tests/error-hints.test.mjs
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 4463.7839
+ℹ duration_ms 4529.2193
 ```
 
 ## 5. 合并后仍需注意的两点
