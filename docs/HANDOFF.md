@@ -1,11 +1,11 @@
 # 交接说明
 
-> **当前版本 v1.0.22（2026-11-12）｜当前状态：答辩材料 P0 已闭环，功能可交付；桌面安装包已构建，Release 待合并后发布**
+> **当前版本 v1.0.22（2026-11-12）｜当前状态：答辩材料 P0 已闭环，功能可交付；v1.0.22 已发布到 GitHub Release**
 >
 > | 项 | 当前状态 |
 > | --- | --- |
 > | 版本 | `1.0.22`（`backend/app/main.py` 的 `VERSION`、`frontend/package.json` 的 `version`） |
-> | 桌面安装包 | `wiki-rag-knowledge-1.0.22-x64-setup.exe`（NSIS，未签名，Win 会提示 SmartScreen）；产物指标与上传命令见 `docs/evidence/release-v1.0.22-build.txt` 与 `docs/RELEASE_NOTES_v1.0.22.md` |
+> | 桌面安装包 | `wiki-rag-knowledge-1.0.22-x64-setup.exe`（NSIS，未签名，Win 会提示 SmartScreen）；**已发布** <https://github.com/guanmuya/wiki-rag-knowledge/releases/tag/v1.0.22>，产物指标见 `docs/evidence/release-v1.0.22-build.txt`、发布实测见 `docs/evidence/release-v1.0.22-publish.txt` |
 > | 后端测试 | 全量 `python -m pytest backend/tests -q` **通过、无新增 skip**；计数口径与一次真实运行输出见 `docs/FACTS.md` §2（全仓唯一记录，本首屏不复述数字） |
 > | 实验数据 | **配置 A 离线结果已落库**（`docs/results/` 16 个文件、`docs/EXPERIMENT.md` §8、`docs/THESIS.md` §4）；配置 B 在线、人工标注与实际 p 值仍按约定标「待实验」 |
 > | 文档事实口径 | 已统一到 `docs/FACTS.md`（版本、表数、并发、锁超时、测试基线、代码锚点）；六份文档只放链接 |

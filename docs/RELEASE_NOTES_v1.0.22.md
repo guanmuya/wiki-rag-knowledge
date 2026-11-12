@@ -6,11 +6,15 @@
 > 构建环境的实测数字（产物大小、`latest.yml` 原文、安装包 sha512、门禁输出）见
 > [`docs/evidence/release-v1.0.22-build.txt`](evidence/release-v1.0.22-build.txt)。
 
-> **发布状态：待发布（构建轮已完成）** —— 本机安装包三件套已构建并通过五项门禁，
-> 但**尚未建 tag、尚未上传**。按既有流程：PR 合并到 `master` 后由平台把 `v1.0.22` tag
-> 打在合并提交上，再按本文件 §2 上传三件资产并做三项校验。
-> 构建轮改了哪些文件、门禁实跑输出去哪里，见构建记录
-> [`docs/evidence/release-v1.0.22-build.txt`](evidence/release-v1.0.22-build.txt)（该文件是构建轮的权威数字）。
+> **发布状态：已发布（2026-11-12 04:10 UTC）** —— Release 页面
+> <https://github.com/guanmuya/wiki-rag-knowledge/releases/tag/v1.0.22>；
+> `v1.0.22` tag 由平台创建并打在 `master` 的合并提交 `0601afd` 上，三件资产已上传、
+> 匿名可下载（均 200），GitHub 列表已标 `Latest`。发布的是**重建件**：体积与 sha512
+> 与构建记录 `release-v1.0.22-build.txt` §5 那轮不同，属正常。本次发布的前置核对、上传与
+> 三项校验的实测数据见
+> [`docs/evidence/release-v1.0.22-publish.txt`](evidence/release-v1.0.22-publish.txt)
+> （该文件是发布时的权威数字）；构建轮的门禁实跑输出仍见
+> [`docs/evidence/release-v1.0.22-build.txt`](evidence/release-v1.0.22-build.txt)。
 
 - 版本：`1.0.22`（`backend/app/main.py` 的 `VERSION` 与 `frontend/package.json` 的 `version` 同步递增）
 - 更新源：GitHub Releases（`guanmuya/wiki-rag-knowledge`，仓库公开）

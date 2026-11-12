@@ -482,8 +482,9 @@ git 里是删除状态。
 | [docs/screenshots/README.md](docs/screenshots/README.md) | 界面图索引：当前版本配图清单、拍摄口径、历史对比图去哪了 |
 | [docs/evidence/pytest-baseline.txt](docs/evidence/pytest-baseline.txt) | 测试基线一次真实运行的完整 stdout |
 | [docs/evidence/gates-2026-11-11.txt](docs/evidence/gates-2026-11-11.txt) | 五项门禁在本地一次全绿实跑的记录（环境、命令、退出码、真实输出） |
-| [docs/RELEASE_NOTES_v1.0.22.md](docs/RELEASE_NOTES_v1.0.22.md) | v1.0.22 交付说明：Release 正文草稿 + 合并后上传/校验命令 |
+| [docs/RELEASE_NOTES_v1.0.22.md](docs/RELEASE_NOTES_v1.0.22.md) | v1.0.22 交付说明（已发布）：Release 正文草稿 + 合并后上传/校验命令 |
 | [docs/evidence/release-v1.0.22-build.txt](docs/evidence/release-v1.0.22-build.txt) | v1.0.22 构建记录：门禁输出、产物大小、`latest.yml` 原文、安装包 sha512 |
+| [docs/evidence/release-v1.0.22-publish.txt](docs/evidence/release-v1.0.22-publish.txt) | v1.0.22 发布记录：前置核对、产物重建、tag 指向、上传动作、匿名下载与三项校验实测 |
 | [docs/RELEASE_NOTES_v1.0.21.md](docs/RELEASE_NOTES_v1.0.21.md) | v1.0.21 交付说明（历史，已发布）：Release 正文草稿 + 合并后上传/校验命令 |
 | [docs/evidence/release-v1.0.21-build.txt](docs/evidence/release-v1.0.21-build.txt) | v1.0.21 构建记录（历史）：门禁输出、产物大小、`latest.yml` 原文、安装包 sha512 |
 | [docs/evidence/release-v1.0.21-publish.txt](docs/evidence/release-v1.0.21-publish.txt) | v1.0.21 发布记录（历史）：前置核对、tag 指向、上传动作、匿名下载与三项校验实测 |
