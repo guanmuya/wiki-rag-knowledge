@@ -274,10 +274,14 @@ export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
 
 export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
   const { className, children, ...rest } = props
+  // 箭头画在 .select-wrap 上：<select> 是替换元素，自己的 ::after 不生效。
+  // 箭头颜色由 CSS 取 --c-text-muted，不再写死灰色（见 styles/03-controls.css）。
   return (
-    <select className={`input select ${className ?? ''}`} {...rest}>
-      {children}
-    </select>
+    <span className="select-wrap">
+      <select className={`input select ${className ?? ''}`} {...rest}>
+        {children}
+      </select>
+    </span>
   )
 }
 

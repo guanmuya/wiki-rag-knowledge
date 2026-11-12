@@ -267,8 +267,13 @@ export function ProviderFormModal({ form }: { form: ProviderForm }) {
             autoComplete="new-password"
           />
         </Field>
-        <label className="checkbox">
-          <input type="checkbox" checked={pEnabled} onChange={(e) => setPEnabled(e.target.checked)} />
+        <label className="check-row">
+          <input
+            type="checkbox"
+            className="checkbox"
+            checked={pEnabled}
+            onChange={(e) => setPEnabled(e.target.checked)}
+          />
           启用该供应商
         </label>
         {providerModal !== 'create' && providerModal?.has_key ? (
