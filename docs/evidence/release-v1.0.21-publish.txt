@@ -1,0 +1,245 @@
+# v1.0.21 发布实测记录（2026-11-12）
+
+对应任务：**上传 v1.0.21 的 GitHub Release 三件资产**。
+本文件记录这次真实发布的前置核对、产物重建、tag 创建、上传动作、三项发布后校验的输出，
+以及与构建轮记录不一致的地方（**发布的是重建件**，哈希与体积必然不同）。
+
+> 交付说明见 [`docs/RELEASE_NOTES_v1.0.21.md`](../RELEASE_NOTES_v1.0.21.md)；
+> 发版链路与风险留档见 [`docs/UPDATE.md`](../UPDATE.md)；
+> 构建轮的产物指标见 [`release-v1.0.21-build.txt`](release-v1.0.21-build.txt)
+> （**已被本文件取代部分数字，见 §3.2**）。
+> 上一版同类记录是 [`release-v1.0.20-publish.txt`](release-v1.0.20-publish.txt)（历史，不复改）。
+
+## 1. 发布对象
+
+| 项 | 值 |
+| --- | --- |
+| Release 页面 | <https://github.com/guanmuya/wiki-rag-knowledge/releases/tag/v1.0.21> |
+| tag | `v1.0.21`（平台 tag 能力创建；`object.type=commit`，即轻量 tag，见 §4.1） |
+| tag 指向 | `d039f35ecede53a98a26d2380a6cbd793d2e7443`（`Merge pull request #75` 合并提交，发布时即 `master` tip） |
+| 发布时间（UTC） | `2026-11-12T01:31:51Z` |
+| 状态 | `draft=false`、`prerelease=false`；`/releases/latest` 已指向 v1.0.21（见 §5.4） |
+| 资产数 | 3（无多余资产） |
+| Release 正文 | 取 `RELEASE_NOTES_v1.0.21.md` §1 代码块，810 字符、无 BOM UTF-8，与远端逐字相同（见 §4.2、§5.3） |
+
+## 2. 前置核对（打 tag 之前做，全部通过）
+
+| 检查 | 命令 | 实测结果 |
+| --- | --- | --- |
+| `master` tip | `git ls-remote --heads origin master` | `d039f35ecede53a98a26d2380a6cbd793d2e7443` |
+| 本工作区 HEAD | `git rev-parse HEAD` | 同上（分支 `tds/conv-01a1cd57-…` 与 master tip 一致） |
+| 后端版本号 | `git grep` `backend/app/main.py` | `VERSION = "1.0.21"`（第 36 行） |
+| 前端版本号 | `frontend/package.json` | `"version": "1.0.21"`（第 3 行） |
+| 文档事实源版本号 | `docs/FACTS.md` §1 | 「应用版本 `1.0.21`」（第 30 行） |
+| `v1.0.21` tag 是否已存在 | `git ls-remote --tags origin v1.0.21` | 无输出（不存在；远端当时最新为 `v1.0.20` → `67baf76`） |
+| Release 是否已存在 | `gh release view v1.0.21` | `release not found`（无遗留草稿，不会踩已有 Release） |
+| 仓库凭据 | `gh auth status` | `Logged in to github.com account guanmuya`（本机 keyring） |
+| 发布前 `/releases/latest` | `gh api repos/…/releases/latest` | `v1.0.20` → 3 个资产（发布后已切到 v1.0.21，见 §5.4） |
+
+> 未读取、未复制、未落盘任何令牌值；`gh` 靠自身登录态执行。
+
+## 3. 产物重建（本工作区开工时没有构建轮的产物）
+
+开工时三件产物在本机**都不存在**：本工作区没有 `frontend/release/`、没有 `frontend/node_modules`、
+也没有 `.venv`。按 `docs/RELEASE_NOTES_v1.0.21.md` §2.1 从零重建，**没有改任何代码，也没有改版本号**。
+
+### 3.1 环境与构建过程（一次跑通）
+
+| 项 | 值 |
+| --- | --- |
+| `.venv` | 新建；`pip install --upgrade pip` + `pip install -r backend/requirements-dev.txt -r backend/requirements-build.txt -c backend/constraints.txt -i https://pypi.org/simple`（全局源缺锁定版本，必须显式指定 PyPI） |
+| Python / pip | 3.13.11 / 26.3 |
+| PyInstaller | 6.11.1（`build-backend.mjs` 自校验与锁文件一致） |
+| Node / pnpm | v24.18.0 / 12.3.4 |
+| pnpm install | `pnpm install --frozen-lockfile` 用时 7.5 s，`resolved 420, reused 420, downloaded 0`（全部命中本机 store） |
+| Electron / electron-builder | 33.4.11 / 25.1.8 |
+| Vite | 6.4.5（95 modules，`dist/index.html 2.09 kB`、`index-DYmEQvIG.css 71.98 kB`、`index-szJGQUd2.js 515.85 kB`，built in 1.07 s） |
+
+构建命令（`frontend/` 目录，用 `cmd /c "… > log 2>&1"` 包装以避开 PowerShell 把 PyInstaller 的
+`INFO:` stderr 当成终止性错误的坑）：
+
+```powershell
+cmd /c "node scripts/build.mjs > ..\.tmp-release-logs\04-build.txt 2>&1"
+```
+
+关键输出（退出码 0，`[build] 完成（用时 330.6s）`）：
+
+```
+[build] --- TypeScript 编译 --- / --- Vite 构建 --- ✓ 95 modules transformed / ✓ built in 1.07s
+[build-backend] PyInstaller: 6.11.1（与锁文件一致）
+[build-backend] /api/health → {"ok":true,"version":"1.0.21"}
+[build-backend] /api/meta → app=企业知识库文档整理与问答系统 v1.0.21 initialized=false
+[build]     sidecar 体积: 53.8 MB
+[build] 更新源配置校验通过：交付配置无明文 HTTP 源
+[build] 更新文件已收集：…\frontend\release\updates（3 个）
+[build] 完成（用时 330.6s）
+```
+
+> **打包后自检**：`build-backend.mjs` 拉起打出来的 `wrk-backend.exe` 实打 `/api/health`、`/api/meta`，
+> 两条都返回 **`1.0.21`**，说明包里的后端版本号已同步。
+> `signing with signtool.exe … no signing info identified, signing is skipped` 是预期行为（无证书，
+> `forceCodeSigning: false`，见 `docs/UPDATE.md` §6.2）；PyInstaller 的 `greenlet` / `tzdata` /
+> `pysqlite2` / `MySQLdb` WARNING 是 SQLite 单机后端的固有提示，不是失败。
+> **NSIS 首次即成功**，没有出现 `Can't open output file` 半截 exe，也不需要 `--skip-web --skip-backend` 重跑。
+> 构建走 `electron-builder … --publish never`，**未使用 `--publish always`**（它会自己建 Release 并连带打 tag）。
+
+### 3.2 本次实际发布的产物指标（`frontend/release/updates/`）
+
+| 文件 | 大小 | 说明 |
+| --- | --- | --- |
+| `latest.yml` | 376 B | 更新源元数据 |
+| `wiki-rag-knowledge-1.0.21-x64-setup.exe` | **131,537,426 B（125.4 MB）** | NSIS 安装包 |
+| `wiki-rag-knowledge-1.0.21-x64-setup.exe.blockmap` | 136,558 B（133.4 KB） | 差量下载用 |
+
+**安装包 SHA-512**（base64 与 `latest.yml` 逐字一致，hex 供人工比对；用 `node:crypto` 现场重算）：
+
+```
+size    : 131537426
+base64  : IG4nDrgbS/OxAVFB+aZOlrGiV2ZbZSPZSjiM2k5XqnhelGiyMfiIdWc2fCYfZDFbXNxs844E023FqyARBZAYTg==
+hex     : 206e270eb81b4bf3b1015141f9a64e96b1a257665b6523d94a388cda4e57aa785e9468b231f888
+          7567367c261f64315b5cdc6cf38e04d36dc5ab20110590184e
+```
+
+`latest.yml` 原文（本次上传的就是这一份）：
+
+```yaml
+version: 1.0.21
+files:
+  - url: wiki-rag-knowledge-1.0.21-x64-setup.exe
+    sha512: IG4nDrgbS/OxAVFB+aZOlrGiV2ZbZSPZSjiM2k5XqnhelGiyMfiIdWc2fCYfZDFbXNxs844E023FqyARBZAYTg==
+    size: 131537426
+path: wiki-rag-knowledge-1.0.21-x64-setup.exe
+sha512: IG4nDrgbS/OxAVFB+aZOlrGiV2ZbZSPZSjiM2k5XqnhelGiyMfiIdWc2fCYfZDFbXNxs844E023FqyARBZAYTg==
+releaseDate: '2026-11-12T01:30:41.900Z'
+```
+
+三件资产的 SHA-256（上传前本地实测，供服务端 digest 兜底比对）：
+
+```
+latest.yml                                           ef4a969fdce6cf67401c26bba5f6aab7074e167d94aaf1693b6b99d296474eab
+wiki-rag-knowledge-1.0.21-x64-setup.exe               ed82de1976ba1f628d9652fffb0ef4d3c25267bbf1c2e5e3516c01226b314850
+wiki-rag-knowledge-1.0.21-x64-setup.exe.blockmap      c0b98162396b888cba66271e333ba8e62fd15d554920c3cee9662665b0b72542
+```
+
+上传前用 `node:crypto` 对 7 项逐项断言，**全部 PASS**（`=== ALL_CONSISTENT ===`）：
+
+```
+PASS  version==1.0.21  [1.0.21]
+PASS  files[0].url==exeName  [wiki-rag-knowledge-1.0.21-x64-setup.exe]
+PASS  path==exeName  [wiki-rag-knowledge-1.0.21-x64-setup.exe]
+PASS  files[0].sha512==computed
+PASS  top.sha512==computed
+PASS  top.sha512==files[0].sha512
+PASS  files[0].size==bytes  [131537426 vs 131537426]
+```
+
+> **与 `release-v1.0.21-build.txt` §5 的差异**：那一轮是 131,537,754 B / `xGi5TYNBFpRiwxyo…`、
+> blockmap 136,535 B、`releaseDate 2026-11-12T01:03:06.067Z`；本轮是 131,537,426 B /
+> `IG4nDrgbS/OxAVFB…`、blockmap 136,558 B。重装环境重建出来的包不可能逐字节相同
+> （内嵌时间戳、PyInstaller 生成的字节码），sha512、体积、blockmap 都变了，**属正常**。
+> 判据不是「与旧记录相同」，而是「`latest.yml` 与本次上传的安装包逐项一致」（见 §5 校验 3）。以本文件为准。
+
+## 4. 创建 tag 与上传
+
+### 4.1 tag
+
+用**平台的 tag 能力**在 `d039f35ecede53a98a26d2380a6cbd793d2e7443` 上创建 `v1.0.21`
+（不是 `git tag` + `git push`，也不是 `electron-builder --publish always`），随后核对指向：
+
+```
+$ git ls-remote --tags origin v1.0.21
+d039f35ecede53a98a26d2380a6cbd793d2e7443	refs/tags/v1.0.21
+
+$ gh api repos/guanmuya/wiki-rag-knowledge/git/ref/tags/v1.0.21
+{"ref":"refs/tags/v1.0.21", …
+ "object":{"sha":"d039f35ecede53a98a26d2380a6cbd793d2e7443","type":"commit",
+           "url":"https://api.github.com/repos/guanmuya/wiki-rag-knowledge/git/commits/d039f35ecede53a98a26d2380a6cbd793d2e7443"}}
+```
+
+指向与 `master` tip 一致，`object.type=commit`，才继续上传。平台 tag 能力只有 `tag` + `target`、
+没有说明字段，产出的是**轻量 tag**（与 v1.0.18 / v1.0.19 / v1.0.20 相同）；版本要点写在 Release 正文里。
+
+### 4.2 上传
+
+| 项 | 值 |
+| --- | --- |
+| 账号 | `gh auth status` → `Logged in to github.com account guanmuya`（本机 keyring，即仓库属主） |
+| 令牌处理 | **未读取、未复制、未落盘任何令牌值**；靠 `gh` 自身登录态执行 |
+| 正文 | `RELEASE_NOTES_v1.0.21.md` §1 的 `markdown` 代码块，按 §2.2 的正则提取为无 BOM UTF-8 临时文件 `.tmp-release-body.md`（810 字符 / 1818 字节 / 无 BOM），交给 `--notes-file`；**不是整份文档** |
+| 命令 | `gh release create v1.0.21 --verify-tag --title "v1.0.21" --notes-file .tmp-release-body.md latest.yml <安装包> <blockmap>` |
+| 结果 | 退出码 0，输出 `https://github.com/guanmuya/wiki-rag-knowledge/releases/tag/v1.0.21` |
+
+`--verify-tag` 保证 tag 已存在才发布；上传前 `gh release view v1.0.21` 为 `release not found`，
+不存在同名草稿需要清理，因此没有触发「同名 Release 已存在」的分支，也没有做任何删除/覆盖动作。
+
+## 5. 发布后三项校验（全部通过）
+
+### 校验 1：三个资产都在，且不是草稿
+
+```
+tag=v1.0.21  draft=False  prerelease=False  published=2026-11-12T01:31:51Z
+url=https://github.com/guanmuya/wiki-rag-knowledge/releases/tag/v1.0.21
+assets=3
+  latest.yml                                         376 B        state=uploaded  digest=sha256:ef4a969fdce6cf67401c26bba5f6aab7074e167d94aaf1693b6b99d296474eab
+  wiki-rag-knowledge-1.0.21-x64-setup.exe            131537426 B  state=uploaded  digest=sha256:ed82de1976ba1f628d9652fffb0ef4d3c25267bbf1c2e5e3516c01226b314850
+  wiki-rag-knowledge-1.0.21-x64-setup.exe.blockmap   136558 B     state=uploaded  digest=sha256:c0b98162396b888cba66271e333ba8e62fd15d554920c3cee9662665b0b72542
+```
+
+三个 `digest` 与 §3.2 的本地 SHA-256 逐一相同，说明**上传到服务器的字节就是本地这三个文件**。
+
+### 校验 2：匿名可下载（不带任何凭据）
+
+```
+$base = 'https://github.com/guanmuya/wiki-rag-knowledge/releases/download/v1.0.21'
+latest.yml -> 200
+wiki-rag-knowledge-1.0.21-x64-setup.exe -> 200
+wiki-rag-knowledge-1.0.21-x64-setup.exe.blockmap -> 200
+
+跟随重定向后的 Content-Length：
+latest.yml                                        376
+wiki-rag-knowledge-1.0.21-x64-setup.exe           131537426
+wiki-rag-knowledge-1.0.21-x64-setup.exe.blockmap  136558
+```
+
+三个数与本地产物字节数逐一相同。本次上传后立刻就是 200，没遇到
+`docs/UPDATE.md` §2.1 记的 1–2 分钟 CDN 延迟。
+
+### 校验 3：`latest.yml` 与实际上传的安装包逐项一致
+
+用**匿名下载回来的** `latest.yml` 与**匿名下载回来的安装包本体**（131,537,426 B，http 200）
+做服务端↔服务端比对，9 项全部 PASS（`=== VERIFY3_ALL_PASS ===`）：
+
+```
+PASS  远端 latest.yml version==1.0.21
+PASS  远端 files[0].url == 上传安装包名
+PASS  远端 path == 上传安装包名
+PASS  远端 files[0].sha512 == 远端安装包实测 sha512
+PASS  远端 top.sha512 == 远端安装包实测 sha512
+PASS  远端 top.sha512 == 远端 files[0].sha512
+PASS  远端 files[0].size == 远端安装包字节数
+PASS  本地 latest.yml 与远端 latest.yml 逐字相同
+PASS  本地安装包与远端安装包逐字相同
+远端安装包 sha512(base64)=IG4nDrgbS/OxAVFB+aZOlrGiV2ZbZSPZSjiM2k5XqnhelGiyMfiIdWc2fCYfZDFbXNxs844E023FqyARBZAYTg==
+```
+
+即：客户端从 GitHub 取到的 `latest.yml` 声明的 version / path / url / sha512 / size，
+与它随后下载到的那个安装包**完全对得上**；自动更新器的完整性校验不会失败。
+
+### 5.4 附加确认
+
+- **Release 正文**：远端 `body` 与 §1 代码块逐字相同（均 810 字符），不含 §2 的上传命令或内部说明。
+- **`/releases/latest`**（客户端更新器走这条，不是列表里第一个）：
+  `tag=v1.0.21  draft=False  prerelease=False`，资产为
+  `latest.yml 376B | wiki-rag-knowledge-1.0.21-x64-setup.exe 131537426B | …blockmap 136558B`。
+  即已装旧版的客户端点「检查更新」会检出 1.0.21。
+
+## 6. 本文件覆盖的边界
+
+- **不改业务代码、不改版本号**：`backend/app/**`、`frontend/src/**`、`frontend/electron/**` 零改动；
+  三处版本号此前已是 1.0.21，本轮只打 tag、上传、校验、留证。
+- **产物不入库**：`frontend/release/`、`frontend/build/`、`.venv/`、`.tmp-*` 均被 `.gitignore` 覆盖
+  （`git check-ignore -v` 逐项确认）；写本文件前 `git status --short` 为空。
+- **没做代码签名**：仍无证书，`forceCodeSigning: false`，首次安装会弹 SmartScreen，见 `docs/UPDATE.md` §6.2。
+- **没做客户端侧实测**：`docs/RELEASE_NOTES_v1.0.21.md` §2.4 那条「已装旧版的机器点检查更新」
+  需要一台装有旧版的机器，本次未做；§5.4 的 `/releases/latest` 实测只能证明服务端已就位。
+- **没有删除/覆盖任何既有 Release**：上传前确认 v1.0.21 不存在，无遗留草稿需要处理。
