@@ -6,10 +6,14 @@
 > 构建环境的实测数字（产物大小、`latest.yml` 原文、安装包 sha512、门禁输出）见
 > [`docs/evidence/release-v1.0.21-build.txt`](evidence/release-v1.0.21-build.txt)。
 
-> **发布状态：待发布（本轮只构建，不建 tag、不上传）** —— 本任务只递增版本号、补交付说明
-> 与构建记录、产出 Windows NSIS 安装包。`v1.0.21` tag 由平台在 PR 合并落地后打在 `master`
-> 的合并提交上，三件资产由下一个任务用 `gh release create --verify-tag` 上传；上传前请以
-> `docs/evidence/release-v1.0.21-build.txt` §5 或现场重算的值逐项核对 `latest.yml`。
+> **发布状态：已发布（2026-11-12 01:31 UTC）** —— Release 页面
+> <https://github.com/guanmuya/wiki-rag-knowledge/releases/tag/v1.0.21>；
+> `v1.0.21` tag 由平台创建并打在 `master` 的合并提交 `d039f35` 上，三件资产已上传、
+> 匿名可下载（均 200），GitHub 列表已标 `Latest`。发布的是**重建件**：体积与 sha512
+> 与构建记录 `release-v1.0.21-build.txt` §5 那轮不同，属正常。本次发布的前置核对、上传与
+> 三项校验的实测数据见
+> [`docs/evidence/release-v1.0.21-publish.txt`](evidence/release-v1.0.21-publish.txt)
+> （该文件是发布时的权威数字）。
 
 - 版本：`1.0.21`（`backend/app/main.py` 的 `VERSION` 与 `frontend/package.json` 的 `version` 同步递增）
 - 更新源：GitHub Releases（`guanmuya/wiki-rag-knowledge`，仓库公开）
@@ -155,11 +159,14 @@ gh release upload v1.0.21 --clobber `
 
 ---
 
-## 3. 本轮构建没做的事（后续在发布步骤补上）
+## 3. 本轮构建没做的事（后续已在发布步骤补上）
 
 - **没有打 tag**（构建轮）：`v1.0.21` 由平台在合并落地后创建，构建轮不建。
+  **已于 2026-11-12 完成**：tag 指向合并提交 `d039f35`（`object.type=commit`），见 §2.1 与
+  [`docs/evidence/release-v1.0.21-publish.txt`](evidence/release-v1.0.21-publish.txt) §4.1。
 - **没有上传 Release**（构建轮）：tag 还不存在时先建 Release 会把 tag 指到错误提交；
-  上传动作按 §2 在 tag 出现后执行。
+  上传动作按 §2 在 tag 出现后执行。**已于 2026-11-12 完成**：三件资产已上传并校验
+  匿名可下载，见发布记录 §5。
 - **没有代码签名**：见 `docs/UPDATE.md` §6.2，属外部凭据，需用户单独授权。
 - **业务代码零改动**：本版只 bump 版本号三处、补交付说明与构建记录、构建安装包；
   `backend/app/**` 只有 `main.py` 的 `VERSION` 一行，`frontend/src/**`、`frontend/electron/**`
