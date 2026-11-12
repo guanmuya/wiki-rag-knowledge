@@ -33,7 +33,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("wrk")
 
 APP_NAME = "企业知识库文档整理与问答系统"
-VERSION = "1.0.21"
+VERSION = "1.0.22"
 
 
 def bootstrap_admin() -> None:

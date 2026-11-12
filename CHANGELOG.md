@@ -10,10 +10,10 @@
 
 ---
 
-## [1.0.21] - 2026-11-12
+## [1.0.22] - 2026-11-12
 
-> 本版区间是 `v1.0.20` 之后合入 `master` 的部分，用 `git log v1.0.20..HEAD` 可核对；
-> `v1.0.21` tag 由平台在合并落地后打在 `master` 的合并提交上，本节不预设 tag 存在。
+> 本版区间是 `v1.0.21` 之后合入 `master` 的部分，用 `git log v1.0.21..HEAD` 可核对；
+> `v1.0.22` tag 由平台在合并落地后打在 `master` 的合并提交上，本节不预设 tag 存在。
 > 测试计数不在本文件复述，见 `docs/FACTS.md` §2。
 
 ### 新增
@@ -23,6 +23,43 @@
   首帧就按档位上色（深色下不会先闪一帧白），桌面端窗口底色与原生控件（下拉弹层、滚动条）
   一起跟着走。浅色档的观感与改动前一致，只多出这个开关
   （做法与验证见 [`docs/THEME.md`](docs/THEME.md)，深色界面图见 [`docs/screenshots/theme/`](docs/screenshots/theme/)）
+
+### 修复
+
+- **勾选框与说明文字不再被压成竖排**：上一版「UI 统一」把 `.checkbox` 类也打在了包住文字的
+  `<label>` 上，15px 的宽高把整行文字挤成一列。复选框样式现在只作用于 `input.checkbox`，
+  「勾选框 + 文字」的一行改用 `.check-row`（横排、垂直居中、文字不换行），
+  用户页的知识库授权行恢复正常横排
+- **下拉框箭头统一并跟随主题**：用户页两处原生 `<select>` 收编到共享组件 `Select`，
+  箭头改由 `.select-wrap` 的伪元素绘制、颜色取 `--c-text-muted` 令牌（悬停转
+  `--c-text-secondary`），不再把灰色写死进 data URI，深色档下自动跟着走
+- **删掉用量页多余说明**：管理员用量页「个人 Agent 按核心」表上方那行灰字口径说明已移除
+  （同一个核心多次执行合成一行、没留 Token 的执行也计入调用），表标题与 `aria-labelledby`
+  关联保留，无障碍语义不变
+
+### 发布
+
+- 版本号递增到 `1.0.22`（`backend/app/main.py` 的 `VERSION`、`frontend/package.json` 的 `version`、
+  `docs/FACTS.md` §1 三处同步）；`README.md`、`docs/HANDOFF.md`、`docs/THESIS.md` 里写当前版本的
+  那几句同步改数字（历史快照、历史证据、历史 CHANGELOG 段落不动）
+- 产出 Windows NSIS 安装包 `wiki-rag-knowledge-1.0.22-x64-setup.exe` 与更新源三件套
+  （`latest.yml` + 安装包 + `.blockmap`）；产物大小、`latest.yml` 原文、安装包 sha512 与五项门禁的
+  实跑输出见 `docs/evidence/release-v1.0.22-build.txt`
+- 交付说明（Release 正文草稿 + 上传与校验命令）见 [`docs/RELEASE_NOTES_v1.0.22.md`](docs/RELEASE_NOTES_v1.0.22.md)：
+  Release 资产在 `master` 合并、tag `v1.0.22` 打上之后再上传，本版不预先建 tag
+- **CHANGELOG 归档位置订正**：`[1.0.21]` 段里原先混进了一节「深色外观与「跟随系统」」，
+  但那一改动是在 `v1.0.21` tag（`d039f35`）之后才合入 `master` 的（`903899e`），属本版内容；
+  本节收下后，`[1.0.21]` 段恢复成只讲已发布的内容
+- 安装包**没有代码签名证书**，Windows 首次安装会弹 SmartScreen「未知发布者」；
+  风险与后续步骤仍是 `docs/UPDATE.md` §6 的书面记录，未变
+
+---
+
+## [1.0.21] - 2026-11-12
+
+> 本版区间是 `v1.0.20` 之后合入 `master` 的部分，用 `git log v1.0.20..HEAD` 可核对；
+> `v1.0.21` tag 由平台在合并落地后打在 `master` 的合并提交上，本节不预设 tag 存在。
+> 测试计数不在本文件复述，见 `docs/FACTS.md` §2。
 
 ### 变更
 
