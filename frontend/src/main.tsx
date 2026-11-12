@@ -5,6 +5,7 @@ import App from './App'
 import { AuthProvider, ToastProvider } from './auth'
 import { initApiBase } from './api'
 import ErrorBoundary from './components/ErrorBoundary'
+import { ThemeProvider } from './theme'
 import './styles.css'
 
 /**
@@ -30,13 +31,17 @@ async function bootstrap(): Promise<void> {
           这里接的是门（BackendGate）/ Provider 等更外层组件抛错的情况，
           目的是任何情况下都不出现白屏。 */}
       <ErrorBoundary title="应用没有正常启动" fullscreen>
-        <Router>
-          <ToastProvider>
-            <AuthProvider>
-              <App />
-            </AuthProvider>
-          </ToastProvider>
-        </Router>
+        {/* 外观 Provider 放在最外层：登录页、初始化页、后端兜底页也要跟着主题走。
+            首屏那一帧由 index.html 里的 theme-boot.js 先落地，这里只接管后续变化。 */}
+        <ThemeProvider>
+          <Router>
+            <ToastProvider>
+              <AuthProvider>
+                <App />
+              </AuthProvider>
+            </ToastProvider>
+          </Router>
+        </ThemeProvider>
       </ErrorBoundary>
     </React.StrictMode>,
   )

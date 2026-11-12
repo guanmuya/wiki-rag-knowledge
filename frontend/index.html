@@ -19,6 +19,14 @@
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f5f7fa" />
+    <!--
+      外观首帧：在样式表与 main.tsx 之前把 data-theme / color-scheme / 底色写到 <html>，
+      深色用户不会先看到一帧白底。CSP 是 script-src 'self'（不允许内联），
+      所以只能是一个外部小脚本；内容见 public/theme-boot.js。
+      引用写绝对路径，构建时会按 vite 的 base: './' 改写成相对路径，
+      打包版用 file:// 打开 dist/index.html 也能正确命中。
+    -->
+    <script src="/theme-boot.js"></script>
     <link
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232458d6'/%3E%3Ctext x='16' y='22' font-size='18' font-family='sans-serif' font-weight='700' fill='%23fff' text-anchor='middle'%3E%E7%9F%A5%3C/text%3E%3C/svg%3E"

@@ -1,0 +1,271 @@
+/* 样式系统分片（体检清单 P2-6）：由 styles.css 按顺序 @import 进来。顺序即级联顺序，不要单独引入，也不要用构建工具重排。 */
+
+/* =========================================================================
+   外观主题：浅色（默认）/ 深色 + 侧栏底部的三档开关
+
+   为什么是「令牌覆盖」而不是第二套样式：
+   全站颜色本来就收敛在 01-tokens-base.css 的 :root 里（其余分片与 UsagePage.css
+   一律引用 var(--c-*)，硬编码色值只有几处 rgba 阴影与半透明白）。所以深色只是
+   在同一批变量名下换一组取值：12 个页面的配色不必逐个改，也不会漏掉某个角落。
+
+   命名约定（不要擅自改动，否则样式会串）：
+   - `:root[data-theme='dark']` 只放令牌，和 01 的 :root 一一对应，顺序对齐便于对照；
+   - 组件级覆盖一律写成 `[data-theme='dark'] .某个组件 { … }`，只处理三类东西：
+     1. 令牌表达不了的地方（rgba 半透明白、滤镜方向、遮罩浓度）；
+     2. 深色下需要「反过来」的地方（分段控件选中块要比凹槽更亮，而不是更白）；
+     3. 白字压在实色上、深色下必须改用更深的实色才够对比度（主按钮 / 危险按钮 / 品牌块）。
+   `frontend/src/styles/03-controls.css` 归并行的控件任务，本分片不改它。
+   下拉框箭头已经由那边的 `.select-wrap::after` 用 `--c-text-muted` 上色，深色下自动跟随，
+   本分片**不许**再为 `.select` 补 `background-image`：那会叠出第二个箭头。
+
+   谁来切 data-theme：
+   - 首帧：index.html 里的 `<script src="theme-boot.js">`（public/theme-boot.js），
+     在样式表与 React 之前落地，深色下不会先闪一帧白底；
+   - 之后：src/theme.tsx 的 ThemeProvider，跟随系统档用 matchMedia 实时重算。
+   CSS 不写 `@media (prefers-color-scheme)` 兜底：data-theme 一定会被写上去，
+   多一份媒体查询只会多一份需要同步维护的取值表。
+   ========================================================================= */
+
+/* ---------------------------------------------------------------- 0 原生控件口径 */
+/* color-scheme 让滚动条、<select> 弹层、日期选择器、复选框这些原生控件跟着主题走。
+   光靠给 body 上色调不出来：那些控件由浏览器按 color-scheme 绘制。
+   浅色显式声明 light，避免系统深色时浏览器给原生弹层上深底、和我们自己的浅色输入框打架。 */
+:root { color-scheme: light; }
+:root[data-theme='dark'] { color-scheme: dark; }
+
+/* ---------------------------------------------------------------- 1 深色令牌 */
+/* 与 01-tokens-base.css 的 :root 逐项对应：画布 / 描边 / 文字 / 主色 / 状态色 /
+   语义补充层 / 提示条三件套 / 深色面 / 品牌页 / 阴影。
+   取值原则：
+   - 层次靠「亮一点」表达：画布 #0f1116 < 卡片 #171a21 < 次级面 #1b202a < 凹槽 #1f242e，
+     与浅色下「白 < 淡蓝灰」的层次方向一致，只是明暗反过来；
+   - 正文 #e8edf6 对卡片底约 13:1，次要 #b6c0d2 约 8:1，弱化 #8b97ab 约 5:1，
+     三档在深色下都还分得清（浅色下三档分别是 13:1 / 8:1 / 5:1，同一套节奏）；
+   - 主色与状态色充当文字时用亮档，充当实色底时另给 *-solid（见第 2 节末尾），
+     否则「蓝底白字」会掉到 2.4:1 以下，按钮文案看起来发虚。 */
+:root[data-theme='dark'] {
+  /* 画布与表面 */
+  --c-bg: #0f1116;
+  --c-bg-elevated: #1b202a;
+  --c-surface: #171a21;
+  --c-surface-alt: #1b202a;
+  --c-surface-sunken: #1f242e;
+  --c-dot: #262c38;
+  /* 「抬起来一层」：深色下比凹槽更亮才像选中，见第 2 节的分段控件 */
+  --c-surface-raised: #2a313f;
+
+  /* 描边 */
+  --c-border: #2a3040;
+  --c-border-strong: #3a4356;
+  --c-hairline: #232936;
+
+  /* 文字 */
+  --c-text: #e8edf6;
+  --c-text-secondary: #b6c0d2;
+  --c-text-muted: #8b97ab;
+
+  /* 主色：作为文字 / 图标 / 填充时的亮档 */
+  --c-primary: #6ea3ff;
+  --c-primary-hover: #93bdff;
+  --c-primary-soft: #1c2a44;
+  --c-primary-soft-strong: #24395c;
+
+  /* 状态色：底色沉下去、前景提上来 */
+  --c-success: #3dcfae;
+  --c-success-soft: #10261f;
+  --c-warn: #e0a34a;
+  --c-warn-soft: #2b2213;
+  --c-danger: #f07a76;
+  --c-danger-soft: #33181a;
+  --c-partial: #9aabc2;
+  --c-partial-soft: #1e2530;
+  --c-info: #6aa9e0;
+  --c-info-soft: #14222f;
+
+  /* 中性交互面 */
+  --c-hover: #222834;
+  --c-hover-soft: #1b202a;
+  --c-placeholder: #6d7a8d;
+  --c-icon-muted: #7d8899;
+  --c-neutral-ink: #a9b3c4;
+  --c-border-hover: #4a556b;
+  --c-track: #39414f;
+  --c-scroll-thumb: #333c4c;
+  --c-scroll-thumb-hover: #49546a;
+  --c-on-accent: #ffffff;
+
+  /* 主色的浅描边与深墨 */
+  --c-primary-line: #33507a;
+  --c-primary-ink: #dbe7ff;
+  --c-primary-tint: #7fa8ee;
+
+  /* 提示条三件套 */
+  --c-info-bg: #14202e;
+  --c-info-line: #24405c;
+  --c-info-ink: #a9c6e6;
+  --c-info-ink-soft: #7f9ab6;
+  --c-info-icon-bg: #1b2f45;
+  --c-warn-bg: #2b2213;
+  --c-warn-line: #5c4a1d;
+  --c-warn-ink: #e8c07a;
+  --c-danger-hover: #ff9a95;
+  --c-danger-line: #56292c;
+  --c-danger-ink: #f0a3a0;
+
+  /* 深色面：代码块比卡片更深一档，Toast 比卡片更亮一档，两者都不和卡片同色 */
+  --c-code-bg: #0b0d12;
+  --c-code-ink: #d7dbe8;
+  --c-toast-bg: #262c3a;
+  --c-toast-ink: #f3f4f8;
+  --c-code-inline-ink: #9fc0e4;
+
+  /* 登录页品牌左栏 */
+  --c-brand-bg: #131a26;
+  --c-brand-ink: #dbe7f6;
+  --c-brand-ink-deep: #f2f7ff;
+  --c-brand-ink-soft: #9db2c9;
+
+  /* 阴影：深色下靠更黑的扩散区分层次，浅色那套 rgba(16,24,40,…) 在这里几乎看不见 */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.7), 0 8px 24px rgba(0, 0, 0, 0.5);
+  --ring: 0 0 0 3px rgba(110, 163, 255, 0.32);
+}
+
+/* ---------------------------------------------------------------- 2 深色下的定点覆盖 */
+/* 2.1 半透明白：浅色下是「在白底上再提亮一点」，深色下必须反过来用低透明白，
+   否则那几个位置会白得刺眼。 */
+[data-theme='dark'] .topbar { background: rgba(15, 17, 22, 0.86); }
+[data-theme='dark'] .view-switch-item:not(.active):hover,
+[data-theme='dark'] .usage-segment button:not(.selected):hover { background: rgba(255, 255, 255, 0.08); }
+[data-theme='dark'] .evidence-quote { background: rgba(255, 255, 255, 0.05); }
+[data-theme='dark'] .kb-pick .lv { background: rgba(255, 255, 255, 0.08); }
+[data-theme='dark'] .conv-actions button:hover,
+[data-theme='dark'] .chat-conv-actions button:hover { background: rgba(110, 163, 255, 0.18); }
+[data-theme='dark'] ::selection { background: rgba(110, 163, 255, 0.28); }
+
+/* 遮罩：浅色下压暗页面即可，深色下页面本来就暗，要压得更实才看得出「背后不可点」 */
+[data-theme='dark'] .modal-mask { background: rgba(3, 5, 9, 0.62); }
+[data-theme='dark'] .sidebar-backdrop { background: rgba(3, 5, 9, 0.55); }
+
+/* 2.2 分段控件：凹槽是 sunken、选中块在浅色下是「更白」。深色下更白会变成「更暗」，
+   看起来像没选中，所以选中块改用比凹槽更亮的 --c-surface-raised。 */
+[data-theme='dark'] .view-switch-item.active,
+[data-theme='dark'] .usage-segment button.selected { background: var(--c-surface-raised); }
+
+/* 2.3 输入框填充：浅色下输入框和卡片同色（都是白，靠描边区分），深色下同色会糊成一块，
+   抬高半档让「这里可以输入」看得出来。
+   两条约束：
+   - 只碰 background-color：控件外观由 03-controls.css 逐条定义（边框、焦点环、箭头），
+     这里只换填充色，免得把别处的规则连带改掉；
+   - 排除 :disabled：禁用态在 03 里已经换成 sunken 底，这里跟着一起抬档会让「不能输入」
+     和「能输入」长得一样。让 03 那条 `:disabled` 原样生效（它的取值已经是令牌）。
+   下拉箭头不归本分片管：`03-controls.css` 的 `.select-wrap::after` 用
+   `background-color: var(--c-text-muted)` 上色，深色下自动变成 #8b97ab；
+   本分片不许再补任何箭头——补出来就是第二个（这正是上一版踩过的坑）。 */
+[data-theme='dark'] .input:not(:disabled),
+[data-theme='dark'] .select:not(:disabled),
+[data-theme='dark'] .textarea:not(:disabled) { background-color: var(--c-bg-elevated); }
+/* 单价面板的悬停是 brightness(0.97)：深色下压暗等于没反应，改成提亮 */
+[data-theme='dark'] .pricing-origin:hover { filter: brightness(1.18); }
+/* 转圈：浅色是淡蓝描边，深色下换成更亮的同色 */
+[data-theme='dark'] .spinner { border-color: rgba(110, 163, 255, 0.22); }
+/* 品牌块的蓝色投影在深色底上是一团发光的糊影，换成普通投影 */
+[data-theme='dark'] .brand-mark { box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45); }
+/* Toast 在浅色下是「深底浅字」，深色下和画布差得不够，补一条描边 */
+[data-theme='dark'] .toast { border: 1px solid var(--c-border); }
+
+/* 2.4 实色底 + 白字：深色下主色/危险色充当文字要够亮，那它做底就不够深了。
+   这两个按钮家族的填充改用 *-solid（只在本分片定义），白字对比度 4.6:1 以上。 */
+:root[data-theme='dark'] {
+  --c-primary-solid: #3f6fd8;
+  --c-primary-solid-hover: #4d7ee8;
+  --c-danger-solid: #c33f3f;
+  --c-danger-solid-hover: #d34c4c;
+}
+[data-theme='dark'] .brand-mark,
+[data-theme='dark'] .login-aside .brand-mark {
+  background: var(--c-primary-solid);
+}
+[data-theme='dark'] .btn-primary {
+  background: var(--c-primary-solid);
+  border-color: var(--c-primary-solid);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+[data-theme='dark'] .btn-primary:hover,
+[data-theme='dark'] .btn-primary:disabled:hover {
+  background: var(--c-primary-solid-hover);
+  border-color: var(--c-primary-solid-hover);
+  color: var(--c-on-accent);
+}
+[data-theme='dark'] .btn-danger {
+  background: var(--c-danger-solid);
+  border-color: var(--c-danger-solid);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+[data-theme='dark'] .btn-danger:hover,
+[data-theme='dark'] .btn-danger:disabled:hover {
+  background: var(--c-danger-solid-hover);
+  border-color: var(--c-danger-solid-hover);
+  color: var(--c-on-accent);
+}
+
+/* ---------------------------------------------------------------- 3 外观三档开关（侧栏底部） */
+/* 外表沿用 .view-switch 的语言（凹槽 + 圆角小块 + 选中块浮起），但它是撑满侧栏宽度的一整条，
+   并且要带一个「外观」小标题——图标表达不了「跟随系统」这一档。 */
+.theme-switch {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 2px 2px;
+}
+.theme-switch-label {
+  padding-left: 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--c-text-muted);
+}
+.theme-switch-track {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-surface-sunken);
+}
+.theme-switch-item {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 24px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--c-text-secondary);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.theme-switch-item:hover { background: var(--c-hover); color: var(--c-text); }
+.theme-switch-item.active {
+  background: var(--c-surface);
+  color: var(--c-text);
+  font-weight: 650;
+  box-shadow: var(--shadow-xs);
+}
+/* 深色下选中块要比凹槽更亮，逻辑同第 2.2 节 */
+[data-theme='dark'] .theme-switch-item.active {
+  background: var(--c-surface-raised);
+  color: var(--c-primary);
+}
+
+/* 窄屏（侧栏变抽屉）时开关同样撑满，不需要额外规则；这里只兜住触摸目标高度。 */
+@media (hover: none) {
+  .theme-switch-item { height: 28px; }
+}
