@@ -12,6 +12,12 @@ contextBridge.exposeInMainWorld('wrkDesktop', {
   /** kind: 'data' | 'logs' | 'install' */
   openPath: (kind) => ipcRenderer.invoke('wrk:openPath', kind),
   restartBackend: () => ipcRenderer.invoke('wrk:restartBackend'),
+  /**
+   * 外观档位同步给主进程：'system' | 'light' | 'dark'。
+   * 主进程据此换窗口底色并落盘，下次启动在创建窗口前就能用对底色（深色不闪白）。
+   * 浏览器模式没有这个桥，渲染进程按可选调用处理。
+   */
+  setThemeMode: (mode) => ipcRenderer.invoke('wrk:theme-set', mode),
   // ---- 自动更新 ----
   updateState: () => ipcRenderer.invoke('wrk:update-state'),
   checkUpdate: () => ipcRenderer.invoke('wrk:update-check'),

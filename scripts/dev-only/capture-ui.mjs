@@ -8,7 +8,11 @@
 //
 // 用法（在 frontend/ 下执行，这样能解析到 playwright）：
 //   UI_PASS=<管理员口令> node ../scripts/dev-only/capture-ui.mjs
-// 可选环境变量：UI_BASE（默认 http://127.0.0.1:5173）、UI_USER（默认 admin）
+// 可选环境变量：
+//   UI_BASE（默认 http://127.0.0.1:5173）、UI_USER（默认 admin）
+//   UI_THEME=dark：让浏览器报「系统是深色」并保留默认的「跟随系统」档，
+//     拍出来的就是深色界面，输出到 docs/screenshots/theme/（默认浅色 → docs/screenshots/current/）
+//   UI_OUT=<子目录名>：覆盖输出目录
 //
 // 注意：本项目用 HashRouter（Electron 用 file:// 加载），所以路由形如 /#/kbs 而不是 /kbs。
 import { createRequire } from 'node:module'
@@ -22,7 +26,11 @@ const ROOT = resolve(HERE, '..', '..')
 // 因此按 frontend/package.json 的位置做 require 解析（仍然是最小依赖，不额外引第三方包）。
 const require = createRequire(resolve(ROOT, 'frontend', 'package.json'))
 const { chromium } = require('playwright')
-const OUT = resolve(ROOT, 'docs', 'screenshots', 'current')
+// 外观：只改浏览器报的系统偏好，不动 localStorage，
+// 因此拍到的正是默认档「跟随系统」在深色系统下的样子（侧栏开关会显示「跟随系统」选中）。
+const THEME = process.env.UI_THEME === 'dark' ? 'dark' : 'light'
+const OUT_NAME = process.env.UI_OUT || (THEME === 'dark' ? 'theme' : 'current')
+const OUT = resolve(ROOT, 'docs', 'screenshots', OUT_NAME)
 mkdirSync(OUT, { recursive: true })
 
 const BASE = process.env.UI_BASE || 'http://127.0.0.1:5173'
@@ -56,7 +64,9 @@ async function shot(page, name, wait = 900) {
 
 const run = async () => {
   const browser = await chromium.launch()
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' })
+  const ctx = await browser.newContext({
+    viewport: { width: 1440, height: 900 }, locale: 'zh-CN', colorScheme: THEME,
+  })
   const page = await ctx.newPage()
   watch(page, 'main')
 
@@ -138,7 +148,7 @@ const run = async () => {
 
   await browser.close()
 
-  console.log(`\n共 ${shots.length} 张 → docs/screenshots/current/`)
+  console.log(`\n共 ${shots.length} 张 → docs/screenshots/${OUT_NAME}/（${THEME}）`)
   if (problems.length) {
     console.log(`发现 ${problems.length} 个问题：`)
     problems.forEach((p) => console.log('  -', p))

@@ -21,7 +21,11 @@
    09-fixes                25 第二轮修正 / 25 后端忙与轮询失败
    10-agent                25 个人 Agent
    11-model-picker         智能问答：模型选择器与末尾媒体查询
+   12-theme                外观主题（新增）：深色令牌 + 深色下的定点覆盖 + 侧栏三档开关
    ========================================================================= */
+
+/* 注：12-theme 放在最后一片，深色令牌与深色下的定点覆盖因此天然覆盖前面各分片
+   （同优先级时后者胜），不必在各分片里加 !important 或提高选择器权重。 */
 
 @import './styles/01-tokens-base.css';
 @import './styles/02-layout.css';
@@ -34,3 +38,4 @@
 @import './styles/09-fixes.css';
 @import './styles/10-agent.css';
 @import './styles/11-model-picker.css';
+@import './styles/12-theme.css';

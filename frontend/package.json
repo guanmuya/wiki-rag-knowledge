@@ -15,7 +15,7 @@
     "start": "electron .",
     "typecheck": "tsc -b --noEmit",
     "check:contract": "node scripts/check-api-contract.mjs",
-    "test": "node --test tests/e2e.test.mjs tests/error-hints.test.mjs tests/agent-no-kb.test.mjs tests/usage-page.test.mjs"
+    "test": "node --test tests/e2e.test.mjs tests/error-hints.test.mjs tests/agent-no-kb.test.mjs tests/usage-page.test.mjs tests/theme.test.mjs"
   },
   "dependencies": {
     "dompurify": "^3.2.4",

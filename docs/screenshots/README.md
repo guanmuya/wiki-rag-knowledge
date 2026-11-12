@@ -2,6 +2,7 @@
 
 本目录只放**当前版本的界面图**，供 `docs/THESIS.md`、`docs/DESIGN.md` 正文引用。
 历史 before/after 对比图与旧版整站截图已移到 [`docs/archive/screenshots/`](../archive/screenshots/README.md)。
+深色版在 [`theme/`](theme/) 子目录（见 §1.1），方向说明见 [`docs/THEME.md`](../THEME.md)。
 
 ## 1. 这批图是怎么来的
 
@@ -30,6 +31,20 @@ $env:UI_PASS='<管理员口令>'; node ../scripts/dev-only/capture-ui.mjs
 
 > 口令请临时设置，不要写进任何文件或提交信息。
 
+### 1.1 深色版（`theme/`）
+
+同一个脚本加 `$env:UI_THEME='dark'` 即可：它让浏览器**报「系统是深色」**，并保留默认的
+「跟随系统」档（不动 localStorage），拍到的就是深色系统下的默认外观，侧栏开关显示「跟随系统」选中。
+
+```powershell
+# 终端 3：拍照（前两个终端与 §1 相同）
+$env:UI_PASS='<管理员口令>'; $env:UI_THEME='dark'; node ../scripts/dev-only/capture-ui.mjs
+```
+
+一次实跑同样 15 张、0 个前端运行时错误，全部落到 `theme/`。仓库里只留 4 张有代表性的
+（登录页 / 知识库列表 / 智能问答 / 用量概览），合计约 380 KB；其余按需现拍，不要往仓库里堆。
+`current/` 那些浅色图**没有重拍**：深色改动没有动浅色取值，浅色观感与这批图一致。
+
 ## 2. 图目录（正文引用用这些路径）
 
 | 文件 | 画面 | 适合放进 |
@@ -50,6 +65,15 @@ $env:UI_PASS='<管理员口令>'; node ../scripts/dev-only/capture-ui.mjs
 | `current/14-about.png` | 关于页：版本、后端诊断、更新卡片 | 交付与运维章节 |
 | `current/15-agent.png` | 个人 Agent：核心与插件、运行环境探测（**旧版界面，v1.0.18 及以前；v1.0.19 已去掉知识库入口，待重拍**） | 个人 Agent 章节 |
 
+深色版（`theme/`，与上面同名编号是同一屏的深色样子），仓库里只留这 4 张：
+
+| 文件 | 画面 | 适合放进 |
+| --- | --- | --- |
+| `theme/01-login.png` | 登录页深色：左侧品牌面板与点阵画布、右侧登录卡 | 外观说明（登录/初始化页也跟随外观） |
+| `theme/02-kb-list.png` | 知识库列表深色 + 侧栏底部的「外观」三档开关 | 外观说明（开关位置、深色下的卡片与状态徽标） |
+| `theme/08-chat-answer.png` | 一轮完整问答深色：思考过程折叠条、引用编号、证据行、贴底输入框 | 外观说明（正文/证据/输入区在深色下的可读性） |
+| `theme/13-usage.png` | 用量概览深色：指标卡、趋势图、表格 | 外观说明（图表与表格在深色下） |
+
 ## 3. 正文引用约定
 
 - 引用写法：`![图 N：一句话说明](screenshots/current/09-search.png)`（`docs/*.md` 里相对 `docs/` 解析）
@@ -60,6 +84,6 @@ $env:UI_PASS='<管理员口令>'; node ../scripts/dev-only/capture-ui.mjs
 
 ## 4. 体量与维护
 
-- 当前 15 张 PNG，合计约 1.2 MB（1440×900，单张 55–122 KB）
+- 当前 `current/` 15 张 PNG，合计约 1.2 MB（1440×900，单张 55–122 KB）；`theme/` 另有 4 张，约 380 KB
 - 换版后**重拍覆盖**同名文件即可，不要靠追加新文件堆积历史；旧图要留就进 `docs/archive/screenshots/history/`
 - 截图前先确认页面上没有真实密钥、真实姓名、私有文档内容；演示数据用 `seed_demo.py` 生成的最安全

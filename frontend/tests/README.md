@@ -15,8 +15,8 @@ cd frontend
 pnpm test
 ```
 
-`pnpm test` 即 `node --test tests/e2e.test.mjs tests/error-hints.test.mjs tests/agent-no-kb.test.mjs tests/usage-page.test.mjs`，
-把四个测试文件都跑一遍（新增测试文件记得同步写进这个脚本）：
+`pnpm test` 即 `node --test tests/e2e.test.mjs tests/error-hints.test.mjs tests/agent-no-kb.test.mjs tests/usage-page.test.mjs tests/theme.test.mjs`，
+把五个测试文件都跑一遍（新增测试文件记得同步写进这个脚本）：
 
 | 文件 | 内容 | 用例数 |
 | --- | --- | --- |
@@ -24,6 +24,7 @@ pnpm test
 | `tests/error-hints.test.mjs` | 纯 Node，不需要浏览器：失败文案单一来源的回归（体检清单 P2-6） | 5 |
 | `tests/agent-no-kb.test.mjs` | 纯 Node 静态扫描：个人 Agent 不再接知识库的回归 | 5 |
 | `tests/usage-page.test.mjs` | 真实 Chromium + Vite：管理员用量页（六张指标卡、趋势图切换、未计价提示、单价面板） | 4 |
+| `tests/theme.test.mjs` | 纯 Node + 真实 Chromium：深色 / 浅色 / 跟随系统外观（令牌、首屏防闪、持久化、实时跟随、主进程偏好） | 11 |
 
 CI（`.github/workflows/ci.yml`）在 `windows-latest` 上跑同一条命令，失败即阻断合并。
 
@@ -34,7 +35,8 @@ CI（`.github/workflows/ci.yml`）在 `windows-latest` 上跑同一条命令，�
 不需要先启动后端，也不需要手工起 Vite：测试进程内用 `vite.createServer`
 在固定端口 `15173`（`strictPort: true`）启动 dev server，测试结束后自动关闭；
 可用环境变量 `E2E_PORT` 改端口。`tests/usage-page.test.mjs` 用另一个端口 `15174`
-（`USAGE_E2E_PORT` 可改）和独立的 Vite 缓存目录，因为 `node --test` 会并行跑这两个文件。
+（`USAGE_E2E_PORT` 可改）、`tests/theme.test.mjs` 用 `15175`（`THEME_E2E_PORT` 可改），
+各自带独立的 Vite 缓存目录，因为 `node --test` 会并行跑这些文件。
 需要本机装有 Playwright 的 Chromium：
 
 ```bash

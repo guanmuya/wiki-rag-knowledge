@@ -174,6 +174,15 @@ export interface DesktopInfo {
 export type OpenPathKind = 'data' | 'logs' | 'install'
 
 /**
+ * 外观档位：跟随系统 / 浅色 / 深色。
+ *
+ * `system` 不是「启动时读一次系统设置」，而是持续跟随（`prefers-color-scheme` 变化即重算），
+ * 见 `src/theme.tsx`。选择存在 localStorage 的 `wrk_appearance`，
+ * 首屏由 `public/theme-boot.js` 抢先落地，避免深色下先闪一下白底。
+ */
+export type ThemeMode = 'system' | 'light' | 'dark'
+
+/**
  * 主进程给的启动失败说明。
  *
  * `electron/main.cjs` 里有一张同样的映射表（退出码 / errno → 人话），
@@ -223,6 +232,11 @@ export interface DesktopBridge {
   installUpdate: () => Promise<DesktopActionResult>
   /** 订阅更新状态推送，返回取消订阅函数 */
   onUpdate: (cb: (state: UpdateState) => void) => () => void
+  /**
+   * 把外观档位告诉主进程：主进程据此决定窗口底色（深色下启动不闪白），
+   * 并落盘到用户数据目录，下次启动在创建窗口前就能读到。
+   */
+  setThemeMode: (mode: ThemeMode) => Promise<{ ok: boolean }>
 }
 
 export interface KbStats {

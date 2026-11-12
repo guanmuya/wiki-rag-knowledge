@@ -5,13 +5,14 @@
 // 2. 渲染进程只加载本地打包的静态资源，不开放远程内容；
 // 3. 数据目录放在用户 AppData，卸载重装不丢数据；
 // 4. 后端异常退出时给出可操作的提示，而不是白屏。
-const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell, Menu } = require('electron')
 const { spawn, spawnSync } = require('node:child_process')
 const { existsSync, mkdirSync, appendFileSync } = require('node:fs')
 const { join, dirname } = require('node:path')
 const updater = require('./updater.cjs')
 const { redactBackendLine } = require('./log-redact.cjs')
 const { matchStartup, STARTUP_FALLBACK } = require('./error-hints.cjs')
+const themePrefs = require('./theme-prefs.cjs')
 
 const HERE = __dirname
 const ROOT = join(HERE, '..')
@@ -531,14 +532,42 @@ function isAppFileUrl(url) {
   }
 }
 
+// ---------------------------------------------------------------- 外观主题
+//
+// 档位的权威来源是渲染进程（localStorage），主进程只保留一份落盘副本：
+// 窗口底色必须在 `new BrowserWindow` 之前就定好，晚一步深色用户启动时就会先看到
+// 一帧白底（用户要的是「整体色调」，一闪白就废了）。
+// 用户切换档位时渲染进程调 `wrk:theme-set`，这里换底色并把档位落盘。
+
+/** 上次落盘的外观档位；没有记录时跟随系统。 */
+function currentThemeMode() {
+  return themePrefs.readMode(userDataPaths().base)
+}
+
+/**
+ * 把档位应用到窗口：先交给 `nativeTheme`（原生右键菜单、滚动条、对话框的明暗），
+ * 再按「档位 + 系统当前明暗」换窗口底色。返回底色，供创建窗口时直接用。
+ */
+function applyThemeMode(mode) {
+  const next = themePrefs.normalizeMode(mode)
+  // themeSource 会同时改写渲染进程里的 prefers-color-scheme，
+  // 因此「浅色档」在深色系统下也不会让原生控件变深（三条档位由此自洽）。
+  nativeTheme.themeSource = next
+  const background = themePrefs.resolveBackground(next, nativeTheme.shouldUseDarkColors)
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(background)
+  return { mode: next, background }
+}
+
 function createWindow() {
+  const theme = applyThemeMode(currentThemeMode())
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
     minWidth: 1100,
     minHeight: 720,
     show: false,
-    backgroundColor: '#f5f7fa',
+    // 深色档下是深底：热启动/重载时不会先闪一帧白。浅色仍是改动前的 #f5f7fa。
+    backgroundColor: theme.background,
     title: '企业知识库 · 文档整理与智能问答',
     webPreferences: {
       preload: join(HERE, 'preload.cjs'),
@@ -678,6 +707,24 @@ ipcMain.handle('wrk:openPath', (_e, kind) => {
       ? (app.isPackaged ? dirname(process.execPath) : app.getAppPath())
       : app.getPath('logs')
   return shell.openPath(p)
+})
+
+/**
+ * 外观档位：渲染进程启动时同步一次、用户每次切换再同步一次（幂等）。
+ * 主进程做两件事：换窗口底色、把档位落盘，好让下次启动在创建窗口前就知道用哪种底色。
+ */
+ipcMain.handle('wrk:theme-set', (_e, mode) => {
+  const applied = applyThemeMode(mode)
+  themePrefs.writeMode(userDataPaths().base, applied.mode)
+  return { ok: true }
+})
+
+// 「跟随系统」档下系统自己换了深浅：窗口底色也要跟着换。
+// 渲染进程的界面由它自己的 matchMedia 负责，这里只管窗口那头（重载、拖拽缩放时的底）。
+nativeTheme.on('updated', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (currentThemeMode() !== 'system') return
+  mainWindow.setBackgroundColor(themePrefs.resolveBackground('system', nativeTheme.shouldUseDarkColors))
 })
 
 ipcMain.handle('wrk:restartBackend', async () => {

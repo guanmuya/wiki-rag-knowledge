@@ -5,6 +5,7 @@ import { isDesktop, metaApi, setupApi } from '../api'
 import OfflineBanner from './OfflineBanner'
 import LockBanner from './LockBanner'
 import ErrorBoundary from './ErrorBoundary'
+import ThemeSwitch from './ThemeSwitch'
 import { IconClose, IconMenu } from './icons'
 
 interface NavItem {
@@ -290,6 +291,9 @@ export default function Layout() {
         </nav>
 
         <div className="sidebar-foot">
+          {/* 外观档位放在这里：与「我是谁 / 数据在哪 / 退出」同属底部个人区，
+              桌面端常驻可见，移动端随抽屉一起出现。 */}
+          <ThemeSwitch />
           <div className="user-chip">
             <div className="avatar">{initials(user?.display_name || user?.username || '?')}</div>
             <div className="user-meta">
