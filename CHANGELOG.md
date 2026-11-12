@@ -10,6 +10,36 @@
 
 ---
 
+## [1.0.21] - 2026-11-12
+
+> 本版区间是 `v1.0.20` 之后合入 `master` 的部分，用 `git log v1.0.20..HEAD` 可核对；
+> `v1.0.21` tag 由平台在合并落地后打在 `master` 的合并提交上，本节不预设 tag 存在。
+> 测试计数不在本文件复述，见 `docs/FACTS.md` §2。
+
+### 变更
+
+- **统一前端整体视觉**：以「点阵画布 + 圆角浮层卡片」这套令牌驱动的克制风格为全站基准，
+  收敛各页面散落的硬编码色值、圆角、间距、卡片 / 表格 / 分段控件 / 提示条，色值收进
+  `01-tokens-base.css` 的统一令牌；移除 `07-chat.css` 里 `:not(.agent-shell)` 造成的
+  「智能问答 / 个人 Agent」两个整屏页一为浮层卡片、一为贴边白板的割裂，侧栏改为纯白贴边导轨，
+  登录页右栏也改成点阵画布。只改 CSS，业务逻辑、接口调用、路由与信息架构未动
+  （方向说明见 [`docs/UI_UNIFICATION.md`](docs/UI_UNIFICATION.md)）
+
+### 发布
+
+- 版本号递增到 `1.0.21`（`backend/app/main.py` 的 `VERSION`、`frontend/package.json` 的 `version`、
+  `docs/FACTS.md` §1 三处同步）；`README.md`、`docs/HANDOFF.md`、`docs/THESIS.md` 里写当前版本的
+  那几句同步改数字（历史快照、历史证据、历史 CHANGELOG 段落不动）
+- 产出 Windows NSIS 安装包 `wiki-rag-knowledge-1.0.21-x64-setup.exe` 与更新源三件套
+  （`latest.yml` + 安装包 + `.blockmap`）；产物大小、`latest.yml` 原文、安装包 sha512 与五项门禁的
+  实跑输出见 `docs/evidence/release-v1.0.21-build.txt`
+- 交付说明（Release 正文草稿 + 上传与校验命令）见 [`docs/RELEASE_NOTES_v1.0.21.md`](docs/RELEASE_NOTES_v1.0.21.md)：
+  Release 资产在 `master` 合并、tag `v1.0.21` 打上之后再上传，本版不预先建 tag
+- 安装包**没有代码签名证书**，Windows 首次安装会弹 SmartScreen「未知发布者」；
+  风险与后续步骤仍是 `docs/UPDATE.md` §6 的书面记录，未变
+
+---
+
 ## [1.0.20] - 2026-11-11
 
 > 本版区间是 `v1.0.19` 之后合入 `master` 的部分，用 `git log v1.0.19..HEAD` 可核对；

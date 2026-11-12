@@ -1,0 +1,253 @@
+# v1.0.21 构建与门禁实跑记录（2026-11-12）
+
+对应任务：**发布 v1.0.21（版本号、交付说明与安装包构建）**。
+本文件记录这一次真实构建的环境、五项门禁输出、产物指标、`latest.yml` 原文、
+安装包 sha512，以及**没做**的两件事（建 tag、上传 Release）和它们的后续执行命令。
+
+> 交付说明与上传步骤在 [`docs/RELEASE_NOTES_v1.0.21.md`](../RELEASE_NOTES_v1.0.21.md)；
+> 发版链路背景见 [`docs/UPDATE.md`](../UPDATE.md)；版本号口径见 [`docs/FACTS.md`](../FACTS.md) §1。
+> 上一版的同类记录是 [`docs/evidence/release-v1.0.20-build.txt`](release-v1.0.20-build.txt)
+> 与 [`release-v1.0.20-publish.txt`](release-v1.0.20-publish.txt)（历史，不复改）。
+
+## 1. 这次构建的是哪棵树
+
+| 项 | 值 |
+| --- | --- |
+| 基线提交 | `0a9e505`（`master` tip：PR #74「style(ui): converge all pages to one token-driven card design」，即 #35 前端视觉统一；已含 `cad36b3` 与 `e902a1f`） |
+| 自 `v1.0.20` 起的改动 | `git log v1.0.20..HEAD` 只有 4 个提交：PR #73（v1.0.20 发布证据）、`cad36b3`（#35 全站 CSS 收敛）、PR #74 合并；`git diff --stat v1.0.20 HEAD` 为 `docs/UI_UNIFICATION.md` + `frontend/src/styles/*.css` + `frontend/src/pages/UsagePage.css` + `docs/evidence/release-v1.0.20-publish.txt`，**后端零改动** |
+| 本轮改动 | 只递增版本号（`backend/app/main.py` 的 `VERSION`、`frontend/package.json` 的 `version`、`docs/FACTS.md` §1 一行及紧随注记）+ 当前版本叙述与文档索引（`README.md`、`docs/HANDOFF.md`、`docs/THESIS.md`）+ `CHANGELOG.md` 的 `[1.0.21]` 节 + 新增本文件与 `docs/RELEASE_NOTES_v1.0.21.md` |
+| 业务代码改动 | **零**：`backend/app/**` 只有 `main.py` 的 `VERSION` 一行；`frontend/src/**`、`frontend/electron/**` 逻辑一行未动。本版唯一的用户可感知改动（#35 前端整体视觉统一）此前已合入 `master`，本轮不碰 |
+| 产物入库 | **不入库**：`frontend/release/`、`frontend/build/backend/`、`frontend/build/pyinstaller/`、`frontend/dist/`、`.venv/`、`.tmp-*` 均被 `.gitignore` 覆盖（`git check-ignore -v` 逐项确认，见 §4.2） |
+
+## 2. 环境（换工作区后从零重建）
+
+本轮开工时是**空工作区**：没有 `.venv`、没有 `frontend/node_modules`、也没有
+`frontend/release/`。按下面两步重建（与 v1.0.20 实测一致）：
+
+```powershell
+# 仓库根目录：后端（本机 pip 默认源是清华镜像，缺本项目锁定的未来版本包，必须显式指定官方源）
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip -i https://pypi.org/simple
+.\.venv\Scripts\python.exe -m pip install -r backend/requirements-dev.txt -r backend/requirements-build.txt `
+  -c backend/constraints.txt -i https://pypi.org/simple
+
+# frontend/ 目录：前端
+pnpm install --frozen-lockfile
+```
+
+> 说明：CI 只用 `requirements-dev.txt`（测试分组），打包要 `requirements-build.txt`（带固定版本 PyInstaller）。
+> 本次把两组装进同一个 `.venv`，`build-backend.mjs` 自校验 `PyInstaller: 6.11.1（与锁文件一致）` 通过。
+> Playwright Chromium、Electron、NSIS / winCodeSign 二进制来自本机既有缓存
+> （`%LOCALAPPDATA%\ms-playwright`、`%LOCALAPPDATA%\electron\Cache`、`%LOCALAPPDATA%\electron-builder\Cache`），
+> 没有重新下载（pnpm：`downloaded 0`，420 个包全部 `reused`）。
+
+| 项 | 值 |
+| --- | --- |
+| 系统 | Windows 11 专业版 10.0.26200 |
+| Python（测试 / 打包） | 3.13.11（仓库根 `.venv`），pip 26.3 |
+| 已装关键依赖 | `fastapi 0.162.0` / `SQLAlchemy 2.1.8` / `pydantic 2.14.1` / `pytest 9.2.0` / `PyInstaller 6.11.1`（与 `backend/constraints.txt`、`requirements-build.txt` 逐项一致） |
+| Node / pnpm | v24.18.0 / 12.3.4（高于 CI 的 22 / 9；五条门禁命令与 CI 完全一致） |
+| Electron / electron-builder | 33.4.11 / 25.1.8 |
+| Vite / Playwright | 6.4.5 / 1.64.1 |
+
+## 3. 五项门禁（全部在本树实跑，一次全绿）
+
+原始输出逐条落在 `.tmp-release-logs/`（不入库），下表是原文转录与退出码：
+
+| # | 命令 | 结果 |
+| --- | --- | --- |
+| 1 | `.\.venv\Scripts\python.exe -m pytest backend/tests -q`（仓库根） | **`784 passed, 1 skipped, 1 warning in 229.20s (0:03:49)`**，退出码 0 |
+| 2 | `pnpm check:contract`（`frontend/`） | 退出码 0：18 组契约、后端 80 条路由、`preload.cjs` 11 个键、`wrk:info` 14 个字段全部对齐 |
+| 3 | `pnpm typecheck`（`frontend/`） | 退出码 0：`tsc -b --noEmit` 无输出（无错误） |
+| 4 | `pnpm build:web`（`frontend/`） | 退出码 0：`vite v6.4.5`，**95 modules**，`dist/index.html 2.09 kB`、`assets/index-DYmEQvIG.css 71.98 kB`、`assets/index-szJGQUd2.js 515.85 kB`（built in 1.28s） |
+| 5 | `pnpm test`（`frontend/`） | 退出码 0：`tests 22 / suites 4 / pass 22 / fail 0 / skipped 0`（`duration_ms 12524.2247`） |
+
+### 3.1 后端测试原文（`pytest -q`，完整 stdout）
+
+```
+........................................................................ [  9%]
+........................................................................ [ 18%]
+........................................................................ [ 27%]
+........................................................................ [ 36%]
+........................................................................ [ 45%]
+........................................................................ [ 55%]
+........................................................................ [ 64%]
+....................................s................................... [ 73%]
+........................................................................ [ 82%]
+........................................................................ [ 91%]
+.................................................................        [100%]
+============================== warnings summary ===============================
+.venv\Lib\site-packages\fastapi\testclient.py:1
+  ...\.venv\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+784 passed, 1 skipped, 1 warning in 229.20s (0:03:49)
+```
+
+- 后端数字与 `docs/FACTS.md` §2 的基线一致（**784 passed, 1 skipped**）；本轮未改测试、未改业务代码，基线无需重算。
+- 唯一的 1 skipped 仍是 `backend/tests/test_tables.py` 的 `pytest.importorskip("reportlab", ...)`（可选依赖未装），不是漏测。
+- 1 条 warning 是 `fastapi.testclient` 提示 `httpx` 弃用（`StarletteDeprecationWarning`），与本次改动无关。
+- 前端测试为 **22 / 22**（v1.0.20 起就是 22 项），与 `docs/FACTS.md` §6.7 一致。
+- 前端构建产物 CSS 从 v1.0.20 的 69.21 kB 增到 **71.98 kB**，正是 #35 新增语义令牌与合并分段控件规则的结果（`docs/UI_UNIFICATION.md` §6 记录的 71.98 kB）。
+- 本机 Node/pnpm 比 CI 高，`pnpm` 走 stderr 回显命令行时 PowerShell 可能显示成红色记录，**不是失败**（第 2–5 条退出码均为 0，逐条用 `=== XXX EXIT=n ===` 标记核对过）。
+- 上一版记录过的慢 DNS 15 秒等待偶发失败、`NSIS Can't open output file` 半截 exe 问题，**本轮都没有复现**。
+
+## 4. 构建安装包
+
+### 4.1 命令与关键输出
+
+命令（`frontend/` 目录，用 `cmd /c "... > log 2>&1"` 包装以避开 PowerShell 把 PyInstaller 的
+`INFO:` stderr 当成终止性错误的坑）：
+
+```powershell
+cmd /c "node scripts/build.mjs > ..\.tmp-release-logs\06-build.txt 2>&1"
+```
+
+关键过程输出（退出码 0，`[build] 完成（用时 294.1s）`）：
+
+```
+[build] 图标: ...\frontend\build\icon.ico（0.0 MB）
+[build] --- TypeScript 编译 --- / --- Vite 构建 --- ✓ 95 modules transformed
+[build-backend] python: 3.13.11 / venv: ...\.venv\Scripts\python.exe
+[build-backend] PyInstaller: 6.11.1（与锁文件一致）
+[build-backend] 产物：...\frontend\build\backend\wrk-backend.exe（53.8 MB，用时 141.3s）
+[build-backend] 后端就绪：pid=11484 http://127.0.0.1:53645 v1.0.21
+[build-backend] /api/health → {"ok":true,"version":"1.0.21"}
+[build-backend] /api/meta → app=企业知识库文档整理与问答系统 v1.0.21 initialized=false
+[build-backend] --- 实测通过（147.0s）---
+[build] 后端产物 OK: ...\frontend\build\backend\wrk-backend.exe（53.8 MB）
+  • packaging       platform=win32 arch=x64 electron=33.4.11 appOutDir=release\win-unpacked
+  • building        target=nsis file=release\wiki-rag-knowledge-1.0.21-x64-setup.exe archs=x64 oneClick=false perMachine=false
+  • building block map  blockMapFile=release\wiki-rag-knowledge-1.0.21-x64-setup.exe.blockmap
+[build] 更新源配置校验通过：交付配置无明文 HTTP 源
+[build] 更新文件已收集：...\frontend\release\updates（3 个）
+[build] 完成（用时 294.1s）
+```
+
+> **打包后自检**：`build-backend.mjs` 会拉起打出来的 `wrk-backend.exe` 并实打 `/api/health`、`/api/meta`，
+> 两条都返回 **`1.0.21`**，说明安装包里的后端版本号已同步。
+> `signing with signtool.exe ... no signing info identified, signing is skipped` 是预期行为
+> （无证书，`forceCodeSigning: false`，见 `docs/UPDATE.md` §6.2）。
+> PyInstaller 的 WARNING（`greenlet` 的 `sqlalchemy.ext.asyncio`、`tzdata` / `pysqlite2` / `MySQLdb`
+> 可选模块缺失）是 SQLite 单机后端的固有提示，不是失败。
+> **NSIS 首次即成功**，一次跑完，未做 `--skip-web --skip-backend` 重跑，也没有出现半截 exe。
+
+### 4.2 产物没有进 git
+
+```
+$ git check-ignore -v frontend/release/updates/latest.yml frontend/release/updates/wiki-rag-knowledge-1.0.21-x64-setup.exe frontend/build/backend/wrk-backend.exe frontend/dist/index.html .venv/Scripts/python.exe .tmp-release-logs/01-pytest.txt
+.gitignore:36:frontend/release/	frontend/release/updates/latest.yml
+.gitignore:36:frontend/release/	frontend/release/updates/wiki-rag-knowledge-1.0.21-x64-setup.exe
+.gitignore:37:frontend/build/backend/	frontend/build/backend/wrk-backend.exe
+frontend/.gitignore:2:dist	frontend/dist/index.html
+.gitignore:11:.venv/	.venv/Scripts/python.exe
+.gitignore:54:.tmp-*	.tmp-release-logs/01-pytest.txt
+```
+
+`git status --short` 只列出改动过的源码与文档，没有 `.exe` / `.blockmap` / `latest.yml` / `.venv` / `node_modules`。
+
+## 5. 产物指标（`frontend/release/updates/`）
+
+产物路径：`C:\Users\Administrator\.tds\workspaces\01a1cd30-ac75-7cc5-bd77-3c13e5208f44\frontend\release\updates\`
+
+| 文件 | 大小 | 说明 |
+| --- | --- | --- |
+| `latest.yml` | 376 B | 更新源元数据 |
+| `wiki-rag-knowledge-1.0.21-x64-setup.exe` | **131,537,754 B（125.4 MB）** | NSIS 安装包，本次要上传的资产 |
+| `wiki-rag-knowledge-1.0.21-x64-setup.exe.blockmap` | 136,535 B（133.3 KB） | 差量下载用 |
+
+`frontend/release/updates/` 里就是上面三件套（`latest.yml` + 安装包 + `.blockmap`），
+与 `docs/UPDATE.md` §2 的「目录里至少要有这三个文件」一致。
+
+另有未打包目录 `frontend/release/win-unpacked/`：23 个文件、305,420,058 B（291.3 MB），
+其中 `resources/app.asar` 9,130,370 B、`resources/backend/wrk-backend.exe` 56,463,254 B（53.8 MB）。
+
+> 与 v1.0.20 的构建记录（131,537,767 B）和发布重建件（131,537,674 B）比，本轮 131,537,754 B，
+> 量级一致、字节不同属正常：换工作区必然重建，内嵌时间戳、PyInstaller 生成的字节码都会变。
+> **判据是 `latest.yml` 与本轮产物逐项一致**（见下方七项断言），不是跟旧记录比。
+
+**安装包 sha512**（base64，与 `latest.yml` 逐字一致；hex 供人工比对；用 `node:crypto` 现场重算）：
+
+```
+size    : 131537754
+base64  : xGi5TYNBFpRiwxyouQN0sTb+b9yKjPOof09U0qcKrafmXYod/WsWIEAkqTH8S+2BwRqN9wXw6ViJYCoSNWu8gQ==
+hex     : c468b94d8341169462c31ca8b90374b136fe6fdc8a8cf3a87f4f54d2a70aada7e65d8a1dfd6b16204024a931fc4bed81c11a8df705f0e95889602a12356bbc81
+复现    : Get-FileHash frontend/release/updates/wiki-rag-knowledge-1.0.21-x64-setup.exe -Algorithm SHA512
+```
+
+三件资产的 SHA-256（上传前本地实测，供服务端 digest 兜底比对）：
+
+```
+latest.yml                                           e606d3c076ec6453e36ad94c77f2119a87d774bad829a2c0f67522caae549414
+wiki-rag-knowledge-1.0.21-x64-setup.exe               760853878f4d7793aabb0cfa47dc30a4c00cfea279b4493bb07c07e64d547abf
+wiki-rag-knowledge-1.0.21-x64-setup.exe.blockmap      fa91c15acdfa2df1b8f60a1b4f5630ebd05a8ef3cd84409164edec1cf78f0b67
+```
+
+上传前用 `node:crypto` 对 7 项逐项断言，**全部 PASS**（`=== ALL_CONSISTENT ===`）：
+
+```
+PASS  version==1.0.21  [1.0.21]
+PASS  files[0].url==exeName  [wiki-rag-knowledge-1.0.21-x64-setup.exe]
+PASS  path==exeName  [wiki-rag-knowledge-1.0.21-x64-setup.exe]
+PASS  files[0].sha512==computed
+PASS  top.sha512==computed
+PASS  top.sha512==files[0].sha512
+PASS  files[0].size==bytes  [131537754 vs 131537754]
+```
+
+**`latest.yml` 原文**（`frontend/release/updates/latest.yml`，未改动）：
+
+```yaml
+version: 1.0.21
+files:
+  - url: wiki-rag-knowledge-1.0.21-x64-setup.exe
+    sha512: xGi5TYNBFpRiwxyouQN0sTb+b9yKjPOof09U0qcKrafmXYod/WsWIEAkqTH8S+2BwRqN9wXw6ViJYCoSNWu8gQ==
+    size: 131537754
+path: wiki-rag-knowledge-1.0.21-x64-setup.exe
+sha512: xGi5TYNBFpRiwxyouQN0sTb+b9yKjPOof09U0qcKrafmXYod/WsWIEAkqTH8S+2BwRqN9wXw6ViJYCoSNWu8gQ==
+releaseDate: '2026-11-12T01:03:06.067Z'
+```
+
+三项一致性自检（本机逐项实读、全部通过，不是推断）：
+
+1. `latest.yml` 的 `version` = `1.0.21`，与 `frontend/package.json` 的 `version`、`backend/app/main.py` 的 `VERSION`、安装包文件名一致；
+2. `files[0].url` 与 `path` = 实际上传的安装包文件名（ASCII，无中文，避免静态源 404）；
+3. 顶层 `sha512` 与 `files[0].sha512` 相等，且都等于对本地安装包重算的 SHA-512（base64）；`files[0].size` = `131537754`，与实际字节数相同。
+
+## 6. 本轮没做的事（如实记录）
+
+| 项 | 状态 | 原因 |
+| --- | --- | --- |
+| 建 `v1.0.21` tag | **没做** | tag 要打在 `master` 的合并提交上，由平台在合并落地后创建；本轮建会指到非合并提交 |
+| 上传 GitHub Release | **没做** | Release 必须挂在 tag 上，tag 还不存在；`gh release create --verify-tag` 的完整命令见 `docs/RELEASE_NOTES_v1.0.21.md` §2 |
+| 代码签名 | **没做** | 属外部凭据，需用户单独授权；现状与风险见 `docs/UPDATE.md` §6.2 |
+| 改业务代码 | **没做** | 发版任务边界；`backend/app/**` 只有 `VERSION` 一行，#35 视觉统一此前已合入 `master` |
+| `--publish always` | **没用** | 它会在 Release 不存在时自己建 Release 并连带打 tag；构建命令是 `node scripts/build.mjs`（`--publish never`） |
+
+## 7. 合并落地后要做什么（命令已写好，照抄即可）
+
+完整步骤与三项校验在 [`docs/RELEASE_NOTES_v1.0.21.md`](../RELEASE_NOTES_v1.0.21.md) §2，摘要：
+
+```powershell
+# 0) 先确认 tag 已在远端（由平台在合并后创建），并确认 Release 正文取 §1 代码块而非整份文件
+git ls-remote --tags origin | Select-String 'v1\.0\.21'
+
+# 1) 把 RELEASE_NOTES_v1.0.21.md §1 的 markdown 代码块另存为无 BOM 的 UTF-8 临时正文文件，
+#    再建 Release 并上传三个资产；--verify-tag 保证 tag 不存在时直接失败，不会顺手建 tag
+gh release create v1.0.21 --verify-tag --title "v1.0.21" --notes-file .tmp-release-body.md `
+  frontend/release/updates/latest.yml `
+  frontend/release/updates/wiki-rag-knowledge-1.0.21-x64-setup.exe `
+  frontend/release/updates/wiki-rag-knowledge-1.0.21-x64-setup.exe.blockmap
+
+# 2) 匿名可下载性（三个都应为 200；刚上传后 1–2 分钟 CDN 延迟属正常）
+$base = 'https://github.com/guanmuya/wiki-rag-knowledge/releases/download/v1.0.21'
+foreach ($f in @('latest.yml','wiki-rag-knowledge-1.0.21-x64-setup.exe','wiki-rag-knowledge-1.0.21-x64-setup.exe.blockmap')) {
+  "$f -> $(curl.exe -sIL -o NUL -w '%{http_code}' "$base/$f")"
+}
+```
+
+> 换机器重建：`cd frontend && node scripts/build.mjs`。前提是 Node 22+ 与 pnpm、能联网下载
+> Electron 二进制与 NSIS 工具链，以及一个装了 `backend/requirements-build.txt` 的 Python 环境
+> （默认取仓库根 `.venv`，可用 `WRK_PYTHON` 覆盖）。构建**不会**改变 `latest.yml` 之外的任何仓库文件；
+> 重建后 sha512 与体积必然变化，上传前请以本文件 §5 或现场重算的值为准，逐项核对 `latest.yml`。
