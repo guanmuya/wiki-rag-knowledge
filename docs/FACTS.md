@@ -27,7 +27,7 @@
 
 | 项 | 当前值 | 代码依据（文件 + 符号名） | 体检前被写成 |
 | --- | --- | --- | --- |
-| 应用版本 | `1.0.21` | `backend/app/main.py` 的 `VERSION`；`frontend/package.json` 的 `version` | THESIS.md `1.0.0`、HANDOFF.md 首屏 `v1.0.10` |
+| 应用版本 | `1.0.22` | `backend/app/main.py` 的 `VERSION`；`frontend/package.json` 的 `version` | THESIS.md `1.0.0`、HANDOFF.md 首屏 `v1.0.10` |
 | 数据表数量 | **24 张**：`models.py` 声明 23 张 + `schema_migrations` 1 张 | `backend/app/models.py` 的 23 个 `__tablename__`；`backend/app/migrations.py` 的 `_CREATE_TABLE`（原始 SQL 建表，**不进** `Base.metadata`，所以 `create_all()` 不建它）。数法与输出见 `docs/evidence/table-count-2026-11-11.txt` | THESIS.md 19 张；本表旧口径 21 张（`models.py` 实际是 22 张，漏算 1 张，见下方注） |
 | Worker 并发 | **1** | `backend/app/config.py` 的 `WORKER_CONCURRENCY`（`WRK_WORKER_CONCURRENCY` 默认 `"1"`） | `2`（5 份文档） |
 | SQLite 写锁等待 | **三档 3s / 30s / 1s**（见 §1.1） | `backend/app/config.py` 的 `BUSY_TIMEOUT_INTERACTIVE` / `BUSY_TIMEOUT_WORKER` / `BUSY_TIMEOUT_PROGRESS` | 一刀切 `busy_timeout=15000`；DESIGN.md §4.5 又写 `3s` |
@@ -38,7 +38,7 @@
 > 表里「当前值」一列在批次三（P1-8）逐条回查代码确认，批次五（文档口径收尾）又按代码重数了
 > 可调项条数；D1–D7 的结论在代码里**仍然成立**（`backend/app/config.py` 的
 > `WORKER_CONCURRENCY` 仍是 `1`、`BUSY_TIMEOUT_*` 仍是三档，`backend/app/main.py` 的
-> `VERSION` 已随发版递增到 `1.0.21`，与 §1 表内「应用版本」一致）。
+> `VERSION` 已随发版递增到 `1.0.22`，与 §1 表内「应用版本」一致）。
 > 两处旧口径按代码订正：`models.py` 实际是 **22** 个 `__tablename__`（旧写 21，少算 1 张），
 > 加上 P1-8 新增的 `schema_migrations` 共 **23** 张；P1-11 又新增 `model_prices` 1 张，
 > 现为 **24 张**（§1 表内已更新，重数命令与输出见
