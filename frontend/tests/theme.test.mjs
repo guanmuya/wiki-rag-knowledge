@@ -7,10 +7,12 @@
  *
  * 覆盖的是这次改动里最容易悄悄退化的四件事：
  *  1. **浅色不回退**：令牌取值逐项钉死（用户给的基准截图就是现状）；
- *  2. **深色真的落地**：data-theme / color-scheme / 令牌 / 实色按钮 / 下拉箭头（含禁用态）；
+ *  2. **深色真的落地**：data-theme / color-scheme / 令牌 / 实色按钮 / 下拉箭头
+ *     （箭头只由 `.select-wrap::after` 画一个，颜色取 `--c-text-muted`，深浅自动跟随）；
  *  3. **跟随系统是实时的**：系统改深浅后不刷新就重算；
  *  4. **首屏不闪白**：不执行 React 时 `public/theme-boot.js` 也能把深色写上去。
- * 另外还有一组纯 Node 断言，锁住「主进程偏好文件」和「三处底色常量必须一致」。
+ * 另外还有一组纯 Node 断言，锁住「主进程偏好文件」「三处底色常量必须一致」，
+ * 以及「主题分片不许给 `.select` 补箭头」这条上一版踩过的坑。
  */
 import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -92,33 +94,40 @@ const themeState = (page) => page.evaluate(() => {
 /**
  * 组件级断言用的最小样本：主题是样式层的东西，断言要落在确定的元素上，
  * 不去依赖某个页面的具体内容（页面文案随时会改）。样本挂在视口外，不影响截图与布局。
+ *
+ * 下拉框按共享组件 `Select` 的真实结构写：`<span class="select-wrap"><select class="input select">`。
+ * 箭头是 `.select-wrap::after` 用 mask 画的形状、`background-color: var(--c-text-muted)` 上的色，
+ * `<select>` 自己身上不再有任何 `background-image`——这一点正是要断言的东西。
  */
 const FIXTURE = `
   <div id="theme-fixture" style="position:fixed;left:-9999px;top:0">
     <button class="btn btn-primary" id="fx-primary">主按钮</button>
     <input class="input" id="fx-input" />
-    <select class="select" id="fx-select"><option>一</option></select>
-    <select class="select" id="fx-select-disabled" disabled><option>一</option></select>
+    <span class="select-wrap" id="fx-select-wrap">
+      <select class="input select" id="fx-select"><option>一</option></select>
+    </span>
+    <span class="select-wrap" id="fx-select-wrap-disabled">
+      <select class="input select" id="fx-select-disabled" disabled><option>一</option></select>
+    </span>
     <span class="badge badge-warn" id="fx-badge">待校对</span>
   </div>`
 
 const fixtureStyles = (page) => page.evaluate((html) => {
   document.getElementById('theme-fixture')?.remove()
   document.body.insertAdjacentHTML('beforeend', html)
-  const read = (id, props) => {
-    const style = getComputedStyle(document.getElementById(id))
+  const read = (id, props, pseudo) => {
+    const style = getComputedStyle(document.getElementById(id), pseudo)
     return Object.fromEntries(props.map((prop) => [prop, style[prop]]))
   }
   const result = {
     primary: read('fx-primary', ['backgroundColor', 'color']),
     input: read('fx-input', ['backgroundColor']),
-    select: read('fx-select', ['backgroundColor', 'backgroundImage']),
-    // 禁用态：03 用 `background` 简写铺 sunken 底，会顺手把箭头清掉。
-    // 深色分片不许把箭头补回来（简写已把 repeat 重置成 repeat，补了就成一排平铺箭头），
-    // 也不许把 sunken 底抬成可编辑的底色。
-    selectDisabled: read('fx-select-disabled', [
-      'backgroundColor', 'backgroundImage', 'backgroundRepeat', 'color',
-    ]),
+    // <select> 自己不许画箭头：画了就会和 .select-wrap::after 叠成两个
+    select: read('fx-select', ['backgroundColor', 'backgroundImage', 'backgroundRepeat']),
+    // 真正的箭头：颜色取 --c-text-muted，深色下自动跟随
+    caret: read('fx-select-wrap', ['backgroundColor'], '::after'),
+    // 禁用态：03 用 `background` 简写铺 sunken 底，深色分片不许把它抬成可编辑的底色
+    selectDisabled: read('fx-select-disabled', ['backgroundColor', 'backgroundImage', 'color']),
     badge: read('fx-badge', ['backgroundColor', 'color']),
   }
   document.getElementById('theme-fixture')?.remove()
@@ -191,6 +200,28 @@ describe('外观：主进程偏好与首屏脚本（纯 Node）', () => {
     assert.match(html, /script-src 'self'/, 'CSP 不能被放宽成允许内联')
     assert.ok(!html.includes('wrk_appearance'), '主题逻辑不能内联进 index.html')
     assert.ok(existsSync(join(ROOT, 'public/theme-boot.js')), 'public/theme-boot.js 存在才会被 vite 拷进 dist')
+  })
+
+  test('主题分片不许给下拉框补箭头（箭头由 .select-wrap::after 令牌驱动）', () => {
+    const themeCss = readFileSync(join(ROOT, 'src/styles/12-theme.css'), 'utf8')
+    const controls = readFileSync(join(ROOT, 'src/styles/03-controls.css'), 'utf8')
+
+    // 真实回归点：上一版在主题分片里给 `.select` 补 background-image（写死 stroke 的 data-URI），
+    // 控件改为 `.select-wrap::after` 之后，那条会叠出第二个箭头、且因 repeat 被重置而平铺。
+    assert.ok(
+      !/\[data-theme[^{]*\.select[^{]*\{[^}]*background-image/s.test(themeCss),
+      '12-theme.css 不许给 .select 补 background-image：箭头只由 .select-wrap::after 画一个',
+    )
+    assert.ok(
+      !themeCss.includes('%238b97ab') && !themeCss.includes('%23878da0'),
+      '主题分片里不许出现写死颜色的箭头 data-URI',
+    )
+    // 箭头必须只有一处实现，且颜色取令牌（空格子让 03 里换令牌自动生效）
+    assert.match(
+      controls,
+      /\.select-wrap::after\s*\{[^}]*background-color:\s*var\(--c-text-muted\)/s,
+      '箭头颜色要走 --c-text-muted，深色换令牌才会自动跟随',
+    )
   })
 })
 
@@ -330,12 +361,14 @@ describe('外观：深色 / 浅色 / 跟随系统（真实浏览器）', () => {
         surfaceAlt: '#f8fafc',
         warn: '#a16207',
       })
-      // 组件级也回到浅色：主按钮原色、输入框纯白、下拉箭头还在
+      // 组件级也回到浅色：主按钮原色、输入框纯白、下拉箭头颜色回到浅色令牌
       const styles = await fixtureStyles(page)
       assert.deepEqual(styles.primary, { backgroundColor: 'rgb(37, 99, 214)', color: 'rgb(255, 255, 255)' })
       assert.equal(styles.input.backgroundColor, 'rgb(255, 255, 255)')
-      assert.match(styles.select.backgroundImage, /svg/, '浅色下拉箭头不能被深色覆盖弄丢')
-      assert.equal(styles.selectDisabled.backgroundImage, 'none', '浅色禁用下拉本来就没有箭头')
+      // <select> 自己不许画箭头：箭头只在 .select-wrap::after 上
+      assert.equal(styles.select.backgroundImage, 'none', '<select> 自己不该有箭头（会叠成两个）')
+      assert.equal(styles.caret.backgroundColor, 'rgb(91, 108, 130)', '浅色箭头取 --c-text-muted')
+      assert.equal(styles.selectDisabled.backgroundImage, 'none', '禁用下拉同样不该有第二个箭头')
       assert.deepEqual(errors, [])
     } finally {
       await context.close()
@@ -405,7 +438,7 @@ describe('外观：深色 / 浅色 / 跟随系统（真实浏览器）', () => {
     }
   })
 
-  test('深色下的关键组件：实色按钮、输入框抬高一档、箭头在而禁用态不跟着抬', { timeout: 60000 }, async () => {
+  test('深色下的关键组件：实色按钮、输入框抬高一档、箭头只有一个且跟着令牌', { timeout: 60000 }, async () => {
     const { context, page, errors } = await openApp({ colorScheme: 'light', saved: 'dark' })
     try {
       await waitFor(async () => (await themeState(page)).attr === 'dark', '深色生效')
@@ -414,12 +447,13 @@ describe('外观：深色 / 浅色 / 跟随系统（真实浏览器）', () => {
       assert.deepEqual(styles.primary, { backgroundColor: 'rgb(63, 111, 216)', color: 'rgb(255, 255, 255)' })
       assert.equal(styles.input.backgroundColor, 'rgb(27, 32, 42)', '输入框比卡片亮半档，看得出来能输入')
       assert.equal(styles.select.backgroundColor, 'rgb(27, 32, 42)')
-      // 这条是真实回归点：用 background 简写会把下拉箭头的 background-image 清掉
-      assert.match(styles.select.backgroundImage, /8b97ab/, '深色下拉箭头必须还在')
-      // 禁用下拉不许被补箭头：03 的 `:disabled` 简写把 repeat 重置成了 repeat，
-      // 补上就是平铺一整排箭头（问答页离线时模型下拉正是这个状态）
-      assert.equal(styles.selectDisabled.backgroundImage, 'none', '禁用下拉不该有箭头')
-      assert.equal(styles.selectDisabled.backgroundRepeat, 'repeat', '（简写留下的 repeat，所以不能补）')
+      // 这条是真实回归点：上一层实现曾在 12-theme.css 里给 .select 补 background-image，
+      // 与 .select-wrap::after 叠成两个箭头；新实现里 <select> 自己必须干净
+      assert.equal(styles.select.backgroundImage, 'none', '深色下 <select> 自己不许画箭头（会叠成两个）')
+      // 真正的箭头：颜色由 --c-text-muted 驱动，深色下自动跟随，不需要任何专用覆盖
+      assert.equal(styles.caret.backgroundColor, 'rgb(139, 151, 171)', '深色箭头取 --c-text-muted')
+      // 禁用下拉同样只有 .select-wrap 那一个箭头，且保持 sunken 底、不跟着抬档
+      assert.equal(styles.selectDisabled.backgroundImage, 'none', '禁用下拉不该有第二个箭头')
       assert.equal(styles.selectDisabled.backgroundColor, 'rgb(31, 36, 46)', '禁用态保持 sunken 底，不跟着抬档')
       assert.equal(styles.selectDisabled.color, 'rgb(139, 151, 171)', '禁用态文字用弱化色')
       assert.deepEqual(styles.badge, { backgroundColor: 'rgb(43, 34, 19)', color: 'rgb(224, 163, 74)' })

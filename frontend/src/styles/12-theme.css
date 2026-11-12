@@ -11,11 +11,12 @@
    命名约定（不要擅自改动，否则样式会串）：
    - `:root[data-theme='dark']` 只放令牌，和 01 的 :root 一一对应，顺序对齐便于对照；
    - 组件级覆盖一律写成 `[data-theme='dark'] .某个组件 { … }`，只处理三类东西：
-     1. 令牌表达不了的地方（rgba 半透明白、data-URI 里的箭头色、滤镜方向）；
+     1. 令牌表达不了的地方（rgba 半透明白、滤镜方向、遮罩浓度）；
      2. 深色下需要「反过来」的地方（分段控件选中块要比凹槽更亮，而不是更白）；
      3. 白字压在实色上、深色下必须改用更深的实色才够对比度（主按钮 / 危险按钮 / 品牌块）。
-   `frontend/src/styles/03-controls.css` 归并行的控件任务，本分片不改它，
-   深色下的下拉箭头等零散色值都在这里覆盖。
+   `frontend/src/styles/03-controls.css` 归并行的控件任务，本分片不改它。
+   下拉框箭头已经由那边的 `.select-wrap::after` 用 `--c-text-muted` 上色，深色下自动跟随，
+   本分片**不许**再为 `.select` 补 `background-image`：那会叠出第二个箭头。
 
    谁来切 data-theme：
    - 首帧：index.html 里的 `<script src="theme-boot.js">`（public/theme-boot.js），
@@ -153,22 +154,16 @@
 [data-theme='dark'] .view-switch-item.active,
 [data-theme='dark'] .usage-segment button.selected { background: var(--c-surface-raised); }
 
-/* 2.3 令牌表达不了的三处 */
-/* 下拉箭头是 03-controls.css 里内联的 data-URI SVG，颜色写死在 stroke 里，只能整条换掉。
-   03 归并行任务，这里按任务约定覆盖，不动原文件。
-   只覆盖「可用」状态：03 的 `.select:disabled` 用 `background` **简写**铺了 sunken 底，
-   顺手把箭头清掉、把 background-repeat 重置成 repeat。问答页离线时模型下拉就是禁用态，
-   若在这里无条件补箭头，禁用态会多出一整排重复的箭头（简写让箭头平铺了）。 */
-[data-theme='dark'] .select:not(:disabled) {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%238b97ab' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-}
-/* 输入框默认和卡片同色（浅色下都是白，靠描边区分）。深色下同色会糊成一块，
+/* 2.3 输入框填充：浅色下输入框和卡片同色（都是白，靠描边区分），深色下同色会糊成一块，
    抬高半档让「这里可以输入」看得出来。
    两条约束：
-   - 只能用 background-color：写 `background` 简写会把上面那条下拉箭头的
-     background-image 一起清掉（深色下下拉框就没有箭头了）；
-   - 排除 :disabled：禁用态在 03 里换成 sunken 底，这里跟着一起抬档会让「不能输入」
-     和「能输入」长得一样。让 03 那条 `:disabled` 原样生效（它的取值已经是令牌）。 */
+   - 只碰 background-color：控件外观由 03-controls.css 逐条定义（边框、焦点环、箭头），
+     这里只换填充色，免得把别处的规则连带改掉；
+   - 排除 :disabled：禁用态在 03 里已经换成 sunken 底，这里跟着一起抬档会让「不能输入」
+     和「能输入」长得一样。让 03 那条 `:disabled` 原样生效（它的取值已经是令牌）。
+   下拉箭头不归本分片管：`03-controls.css` 的 `.select-wrap::after` 用
+   `background-color: var(--c-text-muted)` 上色，深色下自动变成 #8b97ab；
+   本分片不许再补任何箭头——补出来就是第二个（这正是上一版踩过的坑）。 */
 [data-theme='dark'] .input:not(:disabled),
 [data-theme='dark'] .select:not(:disabled),
 [data-theme='dark'] .textarea:not(:disabled) { background-color: var(--c-bg-elevated); }

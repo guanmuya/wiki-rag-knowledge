@@ -17,6 +17,15 @@
   background: var(--c-surface);
 }
 .grant-name { font-size: 12.5px; font-weight: 500; flex: 1; min-width: 0; }
+/* 授权行里的权限下拉是行内控件，跟 .grant-row 的紧凑内边距对齐；其余外观仍走共享
+   .select（外框、聚焦环、箭头），只在高度与右内边距上收一档。 */
+.grant-row .select {
+  height: 30px;
+  padding: 0 26px 0 9px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+}
+.grant-row .select-wrap::after { right: 9px; width: 10px; height: 10px; mask-size: 10px 10px; }
 
 /* 模型按用途分组：每组是一张可折叠的卡片。刻意不用 overflow:hidden 收圆角，
    否则会破坏 .table thead th 相对视口的 sticky 吸顶（见 9 表格的注释）。 */

@@ -15,8 +15,8 @@ cd frontend
 pnpm test
 ```
 
-`pnpm test` 即 `node --test tests/e2e.test.mjs tests/error-hints.test.mjs tests/agent-no-kb.test.mjs tests/usage-page.test.mjs tests/theme.test.mjs`，
-把五个测试文件都跑一遍（新增测试文件记得同步写进这个脚本）：
+`pnpm test` 即 `node --test tests/e2e.test.mjs tests/error-hints.test.mjs tests/agent-no-kb.test.mjs tests/usage-page.test.mjs tests/ui-controls.test.mjs tests/theme.test.mjs`，
+把六个测试文件都跑一遍（新增测试文件记得同步写进这个脚本）：
 
 | 文件 | 内容 | 用例数 |
 | --- | --- | --- |
@@ -24,7 +24,8 @@ pnpm test
 | `tests/error-hints.test.mjs` | 纯 Node，不需要浏览器：失败文案单一来源的回归（体检清单 P2-6） | 5 |
 | `tests/agent-no-kb.test.mjs` | 纯 Node 静态扫描：个人 Agent 不再接知识库的回归 | 5 |
 | `tests/usage-page.test.mjs` | 真实 Chromium + Vite：管理员用量页（六张指标卡、趋势图切换、未计价提示、单价面板） | 4 |
-| `tests/theme.test.mjs` | 纯 Node + 真实 Chromium：深色 / 浅色 / 跟随系统外观（令牌、首屏防闪、持久化、实时跟随、主进程偏好） | 11 |
+| `tests/ui-controls.test.mjs` | 纯 Node 静态扫描：复选框只做本体、下拉框统一走 `Select`、箭头不写死颜色 | 4 |
+| `tests/theme.test.mjs` | 纯 Node + 真实 Chromium：深色 / 浅色 / 跟随系统外观（令牌、首屏防闪、持久化、实时跟随、主进程偏好、箭头只画一个） | 12 |
 
 CI（`.github/workflows/ci.yml`）在 `windows-latest` 上跑同一条命令，失败即阻断合并。
 

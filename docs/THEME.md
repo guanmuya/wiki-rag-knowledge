@@ -28,7 +28,7 @@
 | `frontend/src/styles/12-theme.css`（新增，第 12 片） | `color-scheme` 口径 + 深色令牌表 + 定点覆盖 + 三档开关样式 |
 | `frontend/src/styles.css` | 追加 `@import './styles/12-theme.css';`（排在最后，深色覆盖天然生效，不必 `!important`） |
 | `frontend/src/styles/01-tokens-base.css` | 只加两行注释指向新分片，**令牌取值一个都没改** |
-| `frontend/src/styles/03-controls.css` | **未改**（归并行的控件任务）；深色下的下拉箭头等零散色值在 12 片覆盖 |
+| `frontend/src/styles/03-controls.css` | **未改**：该文件由并行的控件任务（#39）定稿，其中 `.select-wrap::after` 已经用 `background-color: var(--c-text-muted)` 画下拉箭头，深色下换令牌自动跟随，本任务不需要、也不允许再补箭头 |
 
 颜色层次用「亮一点」表达，与浅色下「白 < 淡蓝灰」的方向一致，只是明暗反过来：
 画布 `#0f1116` < 卡片 `#171a21` < 次级面 `#1b202a` < 凹槽 `#1f242e`。
@@ -48,16 +48,24 @@ CSS 里刻意**不写** `@media (prefers-color-scheme: dark)` 兜底：`:root` �
 
 ## 三、令牌表达不了的十几处，逐个定点覆盖
 
-深色不是把白色换成黑色就完事。有四类东西必须单独说明，也是这次改动的全部「例外」：
+深色不是把白色换成黑色就完事。下面这些必须单独说明，也是这次改动的全部「例外」：
 
 | 位置 | 浅色 | 深色 | 为什么 |
 | --- | --- | --- | --- |
 | `.topbar` | `rgba(255,255,255,.82)` | `rgba(15,17,22,.86)` | 顶栏是半透明毛玻璃，令牌管不到；深色下必须换成深底半透明，否则一片白雾 |
 | 分段控件选中块 | 比凹槽「更白」 | `--c-surface-raised`（比凹槽更亮） | 深色下「更白」等于「更暗」，看起来像没选中，方向要反过来 |
-| `.select` 下拉箭头 | 内联 data-URI SVG，stroke `%23878da0` | 同形状、stroke `%238b97ab` | 颜色写死在 data-URI 里，只能整条替换（没动 `03-controls.css`） |
 | 主按钮 / 危险按钮 / 品牌块 | 实色底 + 白字 | 另给 `--c-primary-solid #3f6fd8`、`--c-danger-solid #c33f3f` | 主色在深色下当**文字**要够亮（`#6ea3ff`），当**实色底**就不够深了：白字压上去只有 2.4:1。分开成「文字用亮档、实色底用 solid 档」，两边都过 4.5:1（实测 4.7:1 / 5.1:1） |
 | 输入框 / 下拉 / 多行框 | 与卡片同色（都白） | 抬高一档 `#1b202a` | 深色下同色会糊成一块，「这里能输入」看不出来 |
 | 遮罩、`::selection`、悬停白、证据引用、`kb-pick .lv`、spinner 环、品牌投影、Toast 描边、单价面板 `brightness()` | 各种 `rgba(255,255,255,…)` 与 `brightness(.97)` | 换成低透明白 / 更黑的投影 / `brightness(1.18)` | 都是「在白底上再提亮」的写法，深色下要么刺眼要么完全没反应 |
+
+**下拉框箭头不在上表里**，这是刻意留下的：控件任务（#39）把箭头从「写死颜色的 data-URI」改成了
+`<span class="select-wrap">` + `.select-wrap::after`，形状用 `mask`、颜色用
+`background-color: var(--c-text-muted)`。也就是说箭头颜色**本来就是令牌驱动**的，深色下自动变成
+`#8b97ab`，主题分片里不需要任何覆盖。旧实现在 `12-theme.css` 里为 `.select` 补过一条
+`background-image`，在 #39 之后会与 `.select-wrap::after` 叠成**两个箭头**（而且因为
+`background-repeat: no-repeat` 已随 #39 删除，那条 `background-image` 会平铺成一整排）——
+这一条已经删掉，并在 `tests/theme.test.mjs` 里用两条断言钉住：`<select>` 自身
+`background-image` 必须是 `none`、`.select-wrap::after` 的颜色必须等于当前主题的 `--c-text-muted`。
 
 另外 `color-scheme` 单独给了一档：`:root` 显式 `light`，深色下 `dark`。
 它管的是**原生控件**——滚动条、`<select>` 弹层、复选框、日期选择器，这些由浏览器按 `color-scheme` 绘制，
@@ -107,10 +115,11 @@ CSS 里刻意**不写** `@media (prefers-color-scheme: dark)` 兜底：`:root` �
 - **没改浅色**。浅色令牌取值一个都没动；浅色下唯一可见的变化就是侧栏底部多了这个开关
   （需求要求的入口，无法避免），其余靠下面的样式快照比对证明。
 - **没改业务逻辑**：未动 `frontend/src` 的接口调用、路由、状态机，未动 `backend/**`。
-- **没动 `03-controls.css`**：并行任务拥有该文件，深色下的下拉箭头等在这个新分片里覆盖。
+- **没动 `03-controls.css`**：该文件由并行的控件任务（#39）定稿，下拉箭头已由
+  `.select-wrap::after` 用令牌上色，本分片不碰、也不补任何箭头覆盖（见 §三 末段）。
 - **没出安装包、没打 tag、没发版**：本分支只到「代码 + 文档 + 测试」。
 
-## 七、验证结论（本机实跑）
+## 七、验证结论（本机实跑，均在合入 #39 之后的 `master` 上复跑）
 
 | 检查 | 结果 |
 | --- | --- |
@@ -118,9 +127,10 @@ CSS 里刻意**不写** `@media (prefers-color-scheme: dark)` 兜底：`:root` �
 | `pnpm check:contract` | 通过（`setThemeMode` 已进 `DesktopBridge` 与 `preload.cjs` 两侧） |
 | `pnpm typecheck` | 通过 |
 | `pnpm build:web` | 通过；`dist/theme-boot.js` 存在，`dist/index.html` 里是 `<script src="./theme-boot.js">` 且在入口脚本之前 |
-| `pnpm test` | 通过，33 / 33（原 22 条 + 本次新增 11 条，见 `frontend/tests/theme.test.mjs`） |
-| 浅色「没被改动」 | 改动前后各拍 15 个快照（登录页 + 12 条路由 + 弹窗 + 样式探针），按「元素类 × 样式取值」分组比对 `color / backgroundColor / borderColor / boxShadow / fill / stroke / backgroundImage`：**1209 组全部一致**。唯一对不上的是会话空态 `div.chat-conv-empty`——那只是因为重拍时演示库里已经存了会话、这个空态不再渲染，属数据差异；脉冲动画两个类的 `box-shadow` 采样相位每帧都不同，比对时排除 |
-| 深色人工核对 | 15 个快照 + 组件样式探针，0 个 console / page 错误；覆盖 工作台 / 知识库 / 知识库详情（文档·Wiki·设置）/ 问答 / 个人 Agent / 检索调试 / 任务中心 / 用户管理 / 模型设置 / 用量概览 / 关于 / 登录 / 弹窗 / Toast / 表格 / 状态徽标 / 骨架屏 / Markdown / 代码块 |
+| `pnpm test` | 通过，**38 / 38**（六个测试文件；`tests/theme.test.mjs` 12 条、`tests/ui-controls.test.mjs` 4 条都在这个脚本里） |
+| 浅色「没被改动」 | 合并前后各拍 15 个快照（登录页 + 12 条路由 + 弹窗 + 样式探针），按「元素类 × 样式取值」分组比对 `color / backgroundColor / borderColor / boxShadow / fill / stroke / backgroundImage`：**1215 组里只有 6 处不同，且全部来自 #39 的控件改造**——5 处 `.select` 不再自带 data-URI 箭头（箭头改由 `.select-wrap::after` 画）、模型弹窗里两个复选框从裸 `input` 变成 `input.checkbox`。主题分片自身引入的浅色差异为 0 |
+| 深色下拉箭头（本轮返工点） | 深色下逐个数出来：`.select` 自身 `background-image` 全是 `none`（不会再叠第二个箭头/平铺），箭头只有 `.select-wrap::after` 那一个，颜色 `rgb(139, 151, 171)` = 深色 `--c-text-muted`，mask 12×12。可用态（任务中心两个筛选）与禁用态（问答页模型下拉，离线时 disabled）各留一张放大图：`docs/screenshots/theme/16-select-enabled.png`、`17-select-disabled.png` |
+| 深色人工核对 | 15 个快照 + 组件样式探针，0 个 console / page 错误；覆盖 工作台 / 知识库 / 知识库详情（文档·Wiki·设置）/ 问答 / 个人 Agent / 检索调试 / 任务中心 / 用户管理 / 模型设置 / 用量概览 / 关于 / 登录 / 弹窗 / Toast / 表格 / 状态徽标 / 骨架屏 / Markdown / 代码块。合并后重拍一遍，除下拉箭头本身外无变化 |
 | 打包版首帧 | 把 `dist/` 用 `file://` 直接打开：`theme-boot.js` 正常加载、`data-theme` 与 `color-scheme` 按系统偏好落地、样式表加载成功（除 `/api/*` 无后端，预期内） |
 | 跟随系统实时性 | 浏览器把系统偏好从浅切深、再切回浅，界面不刷新即重算（`theme.test.mjs` 第 9 条） |
 

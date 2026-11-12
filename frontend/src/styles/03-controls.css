@@ -127,18 +127,59 @@
 .select {
   appearance: none;
   padding-right: 30px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%23878da0' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 10px center;
+  cursor: pointer;
 }
+.select:disabled { cursor: not-allowed; }
+
+/* 下拉框箭头：<select> 是替换元素，自身放不了伪元素，所以共享组件 Select 在外面
+   包一层 .select-wrap 专门画箭头。形状用 mask，颜色交给 background-color，
+   跟着 --c-text-muted / --c-text-secondary 走——不再把 #878da0 写死进 data URI，
+   深色主题换令牌即自动跟随。 */
+.select-wrap {
+  --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%23ffffff' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  position: relative;
+  display: inline-grid;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.select-wrap::after {
+  content: "";
+  position: absolute;
+  right: 10px;
+  width: 12px;
+  height: 12px;
+  background-color: var(--c-text-muted);
+  mask: var(--select-caret) center / 12px 12px no-repeat;
+  pointer-events: none;
+  transition: background-color 0.15s ease;
+}
+.select-wrap:hover::after { background-color: var(--c-text-secondary); }
 
 .field-hint { font-size: 11.5px; color: var(--c-text-muted); line-height: 1.5; }
 .field-error { font-size: 11.5px; color: var(--c-danger); }
 
-.checkbox {
+/* 复选框本体。选择器带元素名是有原因的：#35「UI 统一」曾把这个类打在包住文字的
+   <label> 上，15px 的宽高把整行文字压成一列竖排；带上 input 之后，这类误用直接失效。 */
+input.checkbox {
   width: 15px;
   height: 15px;
+  margin: 0;
+  flex: 0 0 auto;
   accent-color: var(--c-primary);
+  cursor: pointer;
+}
+
+/* 复选框 + 说明文字的一行：横排、垂直居中，文字不被挤压也不竖排。 */
+.check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--c-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: nowrap;
   cursor: pointer;
 }
 

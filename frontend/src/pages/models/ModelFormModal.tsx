@@ -314,12 +314,22 @@ export function ModelFormModal({
         ) : null}
       </div>
       <div className="row" style={{ gap: 18, marginTop: 4 }}>
-        <label className="checkbox">
-          <input type="checkbox" checked={mDefault} onChange={(e) => setMDefault(e.target.checked)} />
+        <label className="check-row">
+          <input
+            type="checkbox"
+            className="checkbox"
+            checked={mDefault}
+            onChange={(e) => setMDefault(e.target.checked)}
+          />
           设为该用途默认模型
         </label>
-        <label className="checkbox">
-          <input type="checkbox" checked={mEnabled} onChange={(e) => setMEnabled(e.target.checked)} />
+        <label className="check-row">
+          <input
+            type="checkbox"
+            className="checkbox"
+            checked={mEnabled}
+            onChange={(e) => setMEnabled(e.target.checked)}
+          />
           启用
         </label>
       </div>

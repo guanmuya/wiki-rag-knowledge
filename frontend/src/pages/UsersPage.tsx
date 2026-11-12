@@ -397,21 +397,22 @@ export default function UsersPage() {
                     <div className={`grant-row ${g ? 'on' : ''}`} key={kb.id}>
                       <input
                         type="checkbox"
+                        className="checkbox"
                         checked={Boolean(g)}
                         onChange={() => toggleGrant(kb.id)}
-                        style={{ accentColor: 'var(--c-primary)' }}
                       />
                       <span className="grant-name" title={kb.name}>
                         {kb.name}
                       </span>
                       {g ? (
-                        <select
+                        <Select
                           value={g.level}
                           onChange={(e) => setGrantLevel(kb.id, e.target.value as GrantLevel)}
+                          aria-label={`${kb.name} 的权限级别`}
                         >
                           <option value="read">可读</option>
                           <option value="manage">可管理</option>
-                        </select>
+                        </Select>
                       ) : null}
                     </div>
                   )
@@ -494,6 +495,7 @@ export default function UsersPage() {
                 <div className={`grant-row ${g ? 'on' : ''}`} key={kb.id}>
                   <input
                     type="checkbox"
+                    className="checkbox"
                     checked={Boolean(g)}
                     onChange={() =>
                       setGrantDraft((prev) =>
@@ -503,13 +505,12 @@ export default function UsersPage() {
                       )
                     }
                     aria-label={`授权 ${kb.name}`}
-                    style={{ accentColor: 'var(--c-primary)' }}
                   />
                   <span className="grant-name" title={kb.name}>
                     {kb.name}
                   </span>
                   {g ? (
-                    <select
+                    <Select
                       value={g.level}
                       onChange={(e) =>
                         setGrantDraft((prev) =>
@@ -522,7 +523,7 @@ export default function UsersPage() {
                     >
                       <option value="read">可读</option>
                       <option value="manage">可管理</option>
-                    </select>
+                    </Select>
                   ) : null}
                 </div>
               )

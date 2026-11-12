@@ -56,7 +56,6 @@ export default function UsageBreakdown({ data }: { data: UsageSummary }) {
         <>
           <div className="card-head">
             <h3 id="usage-cores-title">个人 Agent 按核心</h3>
-            <span className="tiny muted">同一个核心的多次执行合成一行；没有留下 Token 的执行也计入调用</span>
           </div>
           <div className="table-wrap table-wrap--scroll">
             <table className="table usage-numeric" aria-labelledby="usage-cores-title">

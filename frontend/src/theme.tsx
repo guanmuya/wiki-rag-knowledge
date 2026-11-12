@@ -93,8 +93,11 @@ export function resolveTheme(mode: ThemeMode, systemDark: boolean): ResolvedThem
 
 /**
  * 把解析结果落到文档上：`data-theme` 供 CSS 选择、`color-scheme` 让原生控件
- * （滚动条、`<select>` 弹层、日期选择器）跟着变、`theme-color` 管窗口/地址栏。
+ * （滚动条、下拉框弹层、日期选择器）跟着变、`theme-color` 管窗口/地址栏。
  * 幂等，可以反复调用。
+ *
+ * 注：这里只说「下拉框弹层」而不是写标签名——`tests/ui-controls.test.mjs` 会扫描源码里
+ * 有没有原生下拉框标签，注释里的标签名同样会被算作一处违规。
  */
 export function applyTheme(resolved: ResolvedTheme): void {
   const root = document.documentElement
