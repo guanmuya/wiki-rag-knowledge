@@ -26,14 +26,9 @@
 
 **仓库必须公开**。私有仓库的 Release 资产需要鉴权，终端用户拿不到，更新检查会返回 404。
 
-发布：
-
-```bash
-cd frontend
-GH_TOKEN=$(gh auth token) node scripts/build.mjs --publish
-```
-
-`--publish` 会把安装包、`latest.yml`、`.blockmap` 传到当前版本对应的 GitHub Release。
+正式版本使用下方 [发版流程](#3-发版流程)：推送版本标签后，GitHub Actions 自动测试、
+打包、验证并发布三个资产。旧的 `node scripts/build.mjs --publish` 是直接发布入口，
+不会执行完整的自动发布门禁，不作为日常发版方式。
 
 ### B. 自建静态源（generic）
 
@@ -152,16 +147,44 @@ rclone copy frontend/release/updates/ oss:wrk-updates/ --progress
 
 ## 3. 发版流程
 
-1. 改 `frontend/package.json` 的 `version`（例如 `1.0.1`），**必须比线上大**。
-2. 构建：
+1. 在 PR 中将 `frontend/package.json` 的 `version` 和 `backend/app/main.py` 的 `VERSION`
+   同步改为比所有已发布正式版本都大的三段版本号，例如 `1.0.23`。更新 `CHANGELOG.md`，
+   并添加 `docs/RELEASE_NOTES_v1.0.23.md`：第 1 节标题使用
+   `## 1. Release 正文草稿`，该节内放一个非空且正确闭合的 `markdown` 围栏代码块作为公开正文；
+   随后保留 `## 2. 发布步骤` 等第 2 节标题。公开正文中请勿使用 `## 2. ...` 这类带数字的二级标题，
+   以便校验器识别章节边界。工作流只提取该代码块，不会把内部发布步骤作为正文。
+2. 等 PR 的 CI 通过并合并到 `master`。仓库管理员应在 GitHub Settings → Branches 或
+   Rulesets 设置必需状态检查；这项保护是 GitHub 仓库设置，并非 YAML 自动生效。
+3. 在与远端 `master` 同步的本地仓库中，为准备发布的提交创建并推送一个标签：
+
    ```bash
-   cd frontend
-   node scripts/build.mjs            # 安装包 + release/updates/
-   # 或 GitHub：GH_TOKEN=$(gh auth token) node scripts/build.mjs --publish
+   git switch master
+   git pull --ff-only origin master
+   git tag -a v1.0.23 -m "v1.0.23"
+   git push origin v1.0.23
    ```
-3. 上传 `release/updates/` 到更新源（GitHub 方式已自动完成）。
-4. 客户端行为：启动 8 秒后检查一次，之后每 4 小时一次；也可以在「关于 → 软件更新 → 检查更新」手动触发。
-5. 下载完成后弹窗「立即重启安装 / 稍后」。选稍后，退出应用时也会自动安装（`autoInstallOnAppQuit`）。
+
+   标签只是例子，请换成第 1 步准备好的新版本。推送标签会触发自动正式发布；不要为了
+   演练而推送正式标签。由其他 workflow 使用默认 `GITHUB_TOKEN` 推送的标签通常不会触发
+   新的 push workflow。
+4. 在 GitHub 的 **Actions → CI** 打开该标签对应的运行。CI、版本校验、打包、实际安装
+   冒烟测试和资产复核全部通过后，工作流会自动发布正式 Release；不需要再手动点击发布。
+   已安装用户可能随后检查并下载更新。
+5. 演练：在 **Actions → CI → Run workflow** 选择要验证的分支并手动运行。手动运行会
+   执行 CI 和安装包检查，生成临时 artifact，但不会发布正式版本。首次部署新 workflow 前，
+   可对其分支执行此演练。
+6. 失败时，打开红色步骤查看日志。若仅发布任务失败，优先选择 **Re-run failed jobs**，
+   以复用本次已检查的安装包；重新运行全部任务可能重建出不同的安装包，若存在旧草稿，
+   工作流会停止以避免混用。已有正式 Release 或不属于本次运行的草稿不会被自动覆盖。
+   排查后再决定如何处理草稿；不要覆盖已发布版本。
+7. 客户端启动后及每 4 小时检查更新，也可以在「关于 → 软件更新 → 检查更新」手动触发。
+   下载后选「稍后」时，退出应用也可能自动安装。当前更新器不允许降级：已发布版本出现
+   问题时应修复并发布更高版本，不能依赖将旧版本重新设为 Latest 来回退已升级客户端。
+
+> 打包依赖维护：`frontend/patches/app-builder-lib@25.1.8.patch` 将
+> [electron-builder 上游修复 #9769](https://github.com/electron-userland/electron-builder/pull/9769)
+> 回移到当前锁定的安装器模板，避免首次安装时读取路径越界。升级 `electron-builder` 时应确认
+> 新版本已包含修复，再移除该补丁并重新验证首次安装、已有安装目录与自动更新。
 
 ## 4. 配置项
 

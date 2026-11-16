@@ -164,7 +164,7 @@ node scripts/build.mjs --pack     # 只出 release/win-unpacked/，不生成安�
 - 默认更新源：GitHub Releases（`electron/update-config.json`，**仓库必须公开**）
 - 自建源：`node scripts/build.mjs` 会把 `latest.yml` + 安装包 + `.blockmap` 收集到 `release/updates/`，传到任意 HTTPS 静态目录，配置 `provider: generic` + `url`
 - 本地联调：`WRK_UPDATE_URL=http://127.0.0.1:8899 ./release/win-unpacked/企业知识库.exe`
-- 发版：改 `frontend/package.json` 的 `version` → `node scripts/build.mjs --publish`（GitHub）或手动上传 `release/updates/`
+- GitHub 正式发版：同步前后端版本与版本说明，合并到 `master` 后推送 `vMAJOR.MINOR.PATCH` 标签；CI 通过并验证安装包后会自动发布。详见 [发版流程](docs/UPDATE.md#3-发版流程)。
 
 ---
 
@@ -418,12 +418,14 @@ cd frontend && pnpm test
 `frontend/scripts/verify-*` 是一次性人工验收辅助脚本，不是测试，也不进 CI。
 
 > **CI（`.github/workflows/ci.yml`）**：push 到 `master` 或开 PR 时，在 `windows-latest`
-> 上依次运行 `python -m pytest backend/tests -q`、`pnpm typecheck`、`pnpm build:web`、
-> `pnpm test` 四项检查（跑 E2E 前单独安装 Playwright Chromium）；
+> 上依次运行后端测试、`pnpm check:contract`、`pnpm typecheck`、`pnpm build:web`、
+> `pnpm test`，并测试发布校验逻辑（跑 E2E 前单独安装 Playwright Chromium）；
 > 后端 Python 固定 3.13、依赖取自 `backend/requirements-dev.txt` +
 > `backend/constraints.txt`，前端用 `pnpm install --frozen-lockfile`。任意一步失败即
 > CI 失败。要让「CI 全绿」成为合并前置条件，需在 GitHub 仓库
-> Settings → Branches 里把 `CI` 加为 `master` 的必需状态检查（这属于仓库设置，无法写进文件）。
+> Settings → Branches 里把 `后端测试 + 前端类型检查、构建与自动化测试` 加为 `master`
+> 的必需状态检查（这属于仓库设置，无法写进文件）。手动运行 workflow 会额外构建并检查
+> 安装包，供演练使用，不会发布；推送正式版本标签才会触发自动发布。
 
 实验数据采集（后端需已启动）：
 
