@@ -12,6 +12,7 @@ name: CI
 on:
   push:
     branches: [master]
+    tags: ['v*']
   pull_request:
     branches: [master]
   workflow_dispatch:
@@ -21,7 +22,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   ci:
@@ -111,3 +112,145 @@ jobs:
       - name: 检查 5/5｜前端自动化测试
         working-directory: frontend
         run: pnpm test
+
+      - name: 安装发布校验依赖
+        run: python -m pip install -r backend/requirements-release.txt -c backend/constraints.txt
+
+      - name: 测试发布校验逻辑
+        run: python -m unittest discover -s .github/scripts/tests -p "test_*.py" -v
+
+      - name: 测试安装包冒烟检查逻辑
+        run: node --test frontend/tests/smoke-release.test.mjs
+
+  release-check:
+    name: 核对发布版本
+    needs: ci
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: 检出本次提交和历史
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: 安装发布校验依赖
+        run: python -m pip install -r backend/requirements-release.txt -c backend/constraints.txt
+
+      - name: 核对版本、标签和发布说明
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            python .github/scripts/release_publish.py preview
+          else
+            python .github/scripts/release_publish.py preflight
+          fi
+
+  package:
+    name: 构建并验证 Windows 安装包
+    needs: release-check
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+      RELEASE_VERSION: ${{ needs.release-check.outputs.version }}
+    steps:
+      - name: 检出本次提交
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: 准备后端打包依赖
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install -r backend/requirements-build.txt -r backend/requirements-release.txt -c backend/constraints.txt
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: 安装前端依赖
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: pnpm install --frozen-lockfile
+
+      - name: 构建安装包和更新文件
+        working-directory: frontend
+        run: node scripts/build.mjs
+
+      - name: 核对安装包及更新文件
+        run: .\.venv\Scripts\python.exe .github/scripts/release_publish.py verify-assets
+
+      - name: 实际安装并检查应用
+        run: node frontend/scripts/smoke-release.mjs
+
+      - name: 保存经过检查的发布文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ github.run_id }}
+          path: frontend/release/updates/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: 自动发布正式版本
+    needs: package
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    concurrency:
+      group: wiki-rag-production-release
+      queue: max
+    steps:
+      - name: 检出本次标签和历史
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: 安装发布校验依赖
+        run: python -m pip install -r backend/requirements-release.txt -c backend/constraints.txt
+
+      - name: 下载同一次运行的发布文件
+        uses: actions/download-artifact@v4
+        with:
+          name: release-${{ github.run_id }}
+          path: release-assets
+
+      - name: 上传、复核并正式发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/release_publish.py publish --assets-dir release-assets
