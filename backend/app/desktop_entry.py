@@ -173,7 +173,10 @@ def main() -> int:
             "host": host, "port": port, "version": VERSION, "app": APP_NAME,
             "pid": os.getpid(),
         }
-        print(f"WRK_READY {json.dumps(payload, ensure_ascii=False)}", flush=True)
+        # The packaged Windows process may use a non-UTF-8 code page for a
+        # redirected stdout pipe. ASCII JSON escapes preserve the app name
+        # after JSON.parse without relying on that code page.
+        print(f"WRK_READY {json.dumps(payload, ensure_ascii=True)}", flush=True)
 
     threading.Thread(target=announce, daemon=True).start()
 
