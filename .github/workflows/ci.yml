@@ -200,6 +200,15 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
         run: pnpm install --frozen-lockfile
 
+      - name: 检查 NSIS 模板路径长度
+        working-directory: frontend
+        shell: pwsh
+        run: |
+          $nsisPath = node -p "require('module').createRequire(require.resolve('electron-builder/package.json')).resolve('app-builder-lib/templates/nsis/include/allowOnlyOneInstallerInstance.nsh')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "NSIS template path length: $($nsisPath.Length)"
+          if ($nsisPath.Length -ge 260) { throw 'NSIS template path exceeds the Windows build tool limit' }
+
       - name: 构建安装包和更新文件
         working-directory: frontend
         run: node scripts/build.mjs
