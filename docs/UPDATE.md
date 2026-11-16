@@ -181,6 +181,11 @@ rclone copy frontend/release/updates/ oss:wrk-updates/ --progress
    下载后选「稍后」时，退出应用也可能自动安装。当前更新器不允许降级：已发布版本出现
    问题时应修复并发布更高版本，不能依赖将旧版本重新设为 Latest 来回退已升级客户端。
 
+> 打包依赖维护：`frontend/patches/app-builder-lib@25.1.8.patch` 将
+> [electron-builder 上游修复 #9769](https://github.com/electron-userland/electron-builder/pull/9769)
+> 回移到当前锁定的安装器模板，避免首次安装时读取路径越界。升级 `electron-builder` 时应确认
+> 新版本已包含修复，再移除该补丁并重新验证首次安装、已有安装目录与自动更新。
+
 ## 4. 配置项
 
 `frontend/electron/update-config.json`：
