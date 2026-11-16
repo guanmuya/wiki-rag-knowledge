@@ -263,3 +263,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python .github/scripts/release_publish.py publish --assets-dir release-assets
+
+  start-temporary-preview:
+    name: 启动一次不发布的演练
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 81 && github.head_ref == 'codex/ci-cd-automation'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: 启动本分支的手动演练
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_HEAD_REF"
