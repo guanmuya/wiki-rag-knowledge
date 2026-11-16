@@ -1,0 +1,43 @@
+name: 安装器崩溃临时排查
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  investigate:
+    if: github.event.pull_request.number == 81 && github.head_ref == 'codex/ci-cd-automation'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        trial: [1, 2, 3, 4]
+    steps:
+      - name: 下载之前验证过的安装包
+        uses: actions/download-artifact@v4
+        with:
+          name: diagnostic-release-43798911939
+          path: release-assets
+          run-id: 43798911939
+          github-token: ${{ github.token }}
+      - name: 在全新 Windows 机器上静默安装
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD 'release-assets/wiki-rag-knowledge-1.0.22-x64-setup.exe'
+          $installDir = Join-Path $env:RUNNER_TEMP 'wrk-repro-install'
+          $process = Start-Process -FilePath $exe -ArgumentList '/S', "/D=$installDir" -PassThru -Wait -WindowStyle Hidden
+          Write-Host "Installer exit code: $($process.ExitCode)"
+          if ($process.ExitCode -ne 0) { exit 1 }
+          if (-not (Test-Path (Join-Path $installDir '企业知识库.exe'))) { throw 'Installed application is missing' }
+      - name: 读取安装器崩溃事件
+        if: failure()
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 5
+          $events = Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000; StartTime=(Get-Date).AddMinutes(-5)} -ErrorAction SilentlyContinue
+          $events | Where-Object { $_.Message -match 'wiki-rag-knowledge|System\.dll' } | Select-Object -First 3 | Format-List TimeCreated,Message
