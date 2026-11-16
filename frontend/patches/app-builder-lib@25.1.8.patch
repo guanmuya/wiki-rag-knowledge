@@ -2,7 +2,7 @@ diff --git a/templates/nsis/multiUser.nsh b/templates/nsis/multiUser.nsh
 index 3de631bf0ce5095d03062ba98a68c5249904911e..0a8085d7c90e9d1efd655b388bfc28078b93f165 100644
 --- a/templates/nsis/multiUser.nsh
 +++ b/templates/nsis/multiUser.nsh
-@@ -28,15 +28,20 @@ Var installMode
+@@ -28,14 +28,19 @@ Var installMode
        StrCpy $INSTDIR $perUserInstallationFolder
      ${else}
        StrCpy $0 "$LocalAppData\Programs"
@@ -27,4 +27,3 @@ index 3de631bf0ce5095d03062ba98a68c5249904911e..0a8085d7c90e9d1efd655b388bfc2807
 +      Pop $1
        StrCpy $INSTDIR "$0\${APP_FILENAME}"
      ${endif}
- 
